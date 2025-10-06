@@ -1,0 +1,145 @@
+/* styles.css — farger + layout */
+
+:root{
+  --bg:#f1f0f0;           /* bakgrunn */
+  --text:#f1f0f0;         /* tekst */
+  --muted:#9fb0c6;        /* hjelpetekst */
+
+  --card:#08172e;         /* kortbakgrunn */
+  --card-border:#435A7F;  /* kantlinjer */
+
+  --input:#2B3A58;        /* inputbakgrunn */
+  --input-border:#435A7F; /* inputkant */
+
+  --accent:#2B3A58;       /* primæraksent (knapp/fokus) */
+  --accent-weak:#435A7F;  /* lys aksent (header, logo-bakgrunn) */
+
+  --warning:#febe10;      /* status/varsel */
+}
+
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0; padding:24px;
+  font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
+  background:var(--bg); color:var(--text);
+}
+
+header h1{margin:0 0 6px 0; color:var(--muted)}
+header p{margin:0 0 16px 0;color:var(--muted)}
+.card-header h2{margin:0; color:var(--text)}
+
+.card{
+  background:var(--card);
+  border:1px solid var(--card-border);
+  border-radius:14px;
+  padding:16px;
+  margin-bottom:16px;
+}
+
+/* Logo + tittel inne i parametre-boksen */
+.card-header{
+  display:flex;
+  flex-direction:column;
+  align-items:flex-start;
+  gap:8px;
+  margin-bottom:8px;
+  padding-bottom:8px;
+  border-bottom:1px solid var(--card-border);
+}
+.logo{
+  display:block;
+  width:180px;            /* tilpasset, ikke bredere enn boksen */
+  max-width:100%;
+  height:auto;
+  background:var(--card);
+  border-radius:8px;
+  padding:6px;
+}
+
+.grid{
+  display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(180px,1fr));
+  gap:12px;
+  margin:12px 0;
+}
+
+label{display:block;color:var(--text)}
+
+input,select,button{
+  width:100%;
+  padding:10px;
+  border-radius:10px;
+  border:1px solid var(--input-border);
+  background:var(--input);
+  color:var(--text);
+  outline:none;
+}
+input::placeholder{color:#6b7280}
+
+input:focus,select:focus{
+  border-color:var(--accent);
+  box-shadow:0 0 0 3px rgba(59,130,246,0.25); /* diskret fokus */
+}
+
+button{
+  width:auto;
+  padding:10px 14px;
+  cursor:pointer;
+  background:var(--accent);
+  border:1px solid var(--accent);
+  color:white;
+  border-radius:10px;
+}
+button:hover{filter:brightness(1.05)}
+
+.status{margin-left:12px;color:var(--warning)}
+
+table{width:100%;border-collapse:collapse;margin-top:10px}
+th,td{border-bottom:1px solid var(--card-border);padding:8px;text-align:left}
+thead th{background:var(--accent-weak)}
+tbody tr:hover{background:rgba(255,255,255,0.03)}
+
+.totals{
+  display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(220px,1fr));
+  gap:8px;
+  margin:10px 0;
+}
+.total{font-size:1.2rem}
+
+footer{margin-top:20px;color:var(--muted)}
+
+.logo-mask{
+  width:200px; height:60px;           /* juster til logoens format */
+  background:var(--bg);               /* fargen inni logoen */
+  /* bruk alfa-kanalen fra PNG som maske */
+  -webkit-mask-image:url("assets/logo.png");
+  mask-image:url("assets/logo.png");
+  -webkit-mask-repeat:no-repeat;
+  mask-repeat:no-repeat;
+  -webkit-mask-size:contain;
+  mask-size:contain;
+  -webkit-mask-position:left center;
+  mask-position:left center;
+}
+
+:root{ --form-gap:16px; }
+
+.rows{ display:flex; flex-direction:column; gap:var(--form-gap); }
+
+.row{
+  display:grid;
+  grid-template-columns:repeat(5, minmax(180px, 1fr));
+  gap:var(--form-gap);
+  align-items:end;
+}
+
+.row label{ width:100%; }
+.row input, .row select{ width:100%; }
+
+.row-actions{ grid-template-columns:1fr; margin-top:var(--form-gap); padding-top:var(--form-gap); }
+.row-actions > div{ display:flex; gap:var(--form-gap); justify-content:flex-start; align-items:center; width:100%; }
+
+/* samme headerbredde som i index.html */
+.card-header{ align-items:stretch; width:100%; }

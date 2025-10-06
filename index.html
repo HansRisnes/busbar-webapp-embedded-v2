@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="no">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Busbar Priskalkulator</title>
+  <link rel="stylesheet" href="styles.css">
+  <style>
+    :root{
+      --bg:#f1f0f0; --text:#f1f0f0; --muted:#9fb0c6;
+      --card:#08172e; --card-border:#435A7F;
+      --input:#2B3A58; --input-border:#435A7F;
+      --accent:#2B3A58; --accent-weak:#435A7F;
+      --warning:#febe10; --placeholder:#6b7280;
+    }
+    header h1{margin:0 0 6px 0; color:var(--muted)}
+    
+    .logo{display:block;width:180px;max-width:100%;height:auto;background:transparent;padding:0}
+    /* Ens bredde og spacing for alle felter, venstre→høyre */
+
+/* Skjul nettleserens små spinnere på number-felt */
+input[type="number"]{
+  appearance: textfield;      /* standard */
+  -moz-appearance: textfield; /* Firefox */
+}
+
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button{
+  -webkit-appearance: none;   /* Chrome / Edge / Safari */
+  margin: 0;
+}
+
+/* Stepper-wrapper */
+.stepper{ display:flex; align-items:center; gap:8px; }
+.stepper input[type="number"]{ flex:1 1 auto; }
+
+/* Store, runde knapper i samme stil som select-pila */
+.btn-step{
+  min-width:44px; height:40px;
+  border:1px solid var(--input-border);
+  background:var(--input);
+  color:var(--text);
+  border-radius:10px;
+  font-size:18px; line-height:1; cursor:pointer;
+  display:flex; align-items:center; justify-content:center;
+  transition:transform .06s ease, background .15s ease, border-color .15s ease;
+}
+.btn-step:active{ transform:translateY(1px); }
+.btn-step:hover{ border-color:var(--accent-weak); }
+
+    /* modal */
+    .modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,0.6);display:none;align-items:center;justify-content:center;z-index:50}
+    .modal{background:var(--card);border:1px solid var(--card-border);border-radius:12px;padding:16px;min-width:320px;max-width:90vw}
+    .modal h3{margin:0 0 8px 0}
+    .modal p{margin:0 0 12px 0;color:var(--muted)}
+    .actions{display:flex;gap:8px;justify-content:flex-end}
+    .btn{padding:10px 14px;background:var(--accent);border:1px solid var(--accent);border-radius:10px;color:#fff;cursor:pointer}
+    .btn.alt{background:var(--input);border-color:var(--input-border)}
+
+/* Rette opp vertikal plassering i totals-listen */
+.totals > div{ display:flex; align-items:center; gap:8px; flex-wrap:wrap }
+#freightRate{ line-height:1; }
+
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Busbar Priskalkulator</h1>
+    <p>Leser rå CSV fra <code>data/busbar-webapp-embedded-v2.csv</code> og <code>data/busbar-webapp-embedded-v2.1.csv</code>.</p>
+  </header>
+
+  <section class="card">
+      <div class="card-header">
+  <div class="logo-mask" role="img" aria-label="Logo"></div>
+  <h2>Dette er en testversjon, kun til internbruk</h2>
+    </div>
+
+    <div class="rows">
+      <!-- Rad 1 -->
+      <div class="row">
+        <label>System<br>
+          <select id="series">
+            <option value="">Velg…</option>
+              <option value="XCM">XCM (160-1000A)</option>
+            <option value="XCP-S">XCP-S (1250-5000A)</option>
+          </select>
+        </label>
+
+        <label>Meter<br>
+          <input id="meter" type="number" step="1" inputmode="numeric" placeholder="0">
+        </label>
+
+        <label>90° horisontal vinkel<br>
+          <input id="v90h" type="number" step="1" inputmode="numeric" placeholder="0">
+        </label>
+
+        <label>90° vertikal vinkel<br>
+          <input id="v90v" type="number" step="1" inputmode="numeric" placeholder="0">
+        </label>
+      </div>
+
+      <!-- Rad 2 -->
+      <div class="row">
+        <label>Ampere<br>
+          <select id="ampSelect"></select>
+        </label>
+
+        <label>Ledere<br>
+          <select id="ledere">
+            <option value="">Velg…</option>
+            <option>3F+N+PE</option>
+            <option>3F+PE</option>
+          </select>
+        </label>
+
+        <label>Startelement<br>
+          <select id="startEl">
+            <option value="">Velg…</option>
+            <option value="board_feed">Tavleelement</option>
+            <option value="end_feed_unit">Endetilførselsboks</option>
+            <option value="none">Ingen</option>
+          </select>
+        </label>
+
+        <label>Sluttelement<br>
+          <select id="sluttEl">
+            <option value="">Velg…</option>
+            <option value="board_feed">Tavleelement</option>
+            <option value="crt_board_feed" data-series="XCP-S">Trafoelement</option>
+            <option value="end_cover">Endelokk</option>
+            <option value="none">Ingen</option>
+          </select>
+        </label>
+      </div>
+
+      <!-- Rad 3 -->
+      <div class="row">
+        <label>Med avtappingspunkter<br>
+          <select id="dist">
+            <option value="">Velg…</option>
+            <option>Ja</option>
+            <option>Nei</option>
+          </select>
+        </label>
+
+        <label>Brannelement (antall)<br>
+          <input id="fbQty" type="number" step="1" inputmode="numeric" placeholder="0">
+        </label>
+
+        <label>Avtappingsbokser (antall)<br>
+          <input id="boxQty" type="number" step="1" inputmode="numeric" placeholder="0">
+        </label>
+
+        <label>Type boks<br>
+          <select id="boxSel">
+            <option value="">Auto</option>
+          </select>
+        </label>
+      </div>
+    </div>
+
+    <div class="row row-actions">
+  <div>
+    <button id="calcBtn">Beregn</button>
+    <button id="resetBtn" class="btn alt">Nullstill</button>
+    <span id="status" class="status"></span>
+  </div>
+</div>
+
+  </section>
+
+  <section id="results" class="card" hidden>
+    <h2>Resultat</h2>
+    <div class="totals">
+      <div><strong>Material:</strong> <span id="mat"></span></div>
+      <div><strong>Margin 20%:</strong> <span id="margin"></span></div>
+      <div><strong>Subtotal:</strong> <span id="subtotal"></span></div>
+      <div>
+  <strong>Frakt:</strong>
+  <select id="freightRate" style="width:auto;margin-left:6px">
+    <option value="0.10" selected>10 % (Standard)</option>
+    <option value="0.15">15 % (Nord-Norge)</option>
+  </select>
+  <span id="freight" style="margin-left:8px"></span>
+</div>
+      <div class="total"><strong>Total:</strong> <span id="total"></span> NOK eks. mva</div>
+    </div>
+    <h3>BOM</h3>
+    <table id="bomTbl">
+      <thead>
+        <tr>
+          <th>Code</th><th>Type</th><th>Serie</th><th>Ampere</th><th>Ledere</th><th>Antall</th><th>Enhet</th><th>Sum</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+    <button id="exportCsv">Eksporter BOM som CSV</button>
+  </section>
+
+  <!-- Modal for ekspansjon -->
+  <div id="expModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="expTitle">
+    <div class="modal">
+      <h3 id="expTitle">Er det sammenhengende 30 meter rett skinne?</h3>
+      <p>Velg Ja for å legge til ekspansjonsledd.</p>
+      <div class="actions">
+        <button id="expNo" class="btn alt">Nei</button>
+        <button id="expYes" class="btn">Ja</button>
+      </div>
+    </div>
+  </div>
+
+  <footer>
+    <small>Lengderegler: 3 m for rester &gt; 2,00 m. 1501–2000 (eller 1500–2999 for XCM) for rester &gt; 1,00 m. 500–1000 (600–1500 for XCM feeder) for rester &gt; 0,00 m.</small>
+  </footer>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
