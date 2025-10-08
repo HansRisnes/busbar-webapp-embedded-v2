@@ -36,6 +36,7 @@ function parseCSVAuto(text){
 const $ = id=>document.getElementById(id);
 const round2 = n=>Math.round(n*100)/100;
 const fmtNO = new Intl.NumberFormat('no-NO', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const fmtIntNO = new Intl.NumberFormat('no-NO', { maximumFractionDigits: 0 });
 const toNum = x => {
   if (x===undefined || x===null) return NaN;
   const v = Number(String(x).replace(/\s/g,'').replace(',','.'));
@@ -50,6 +51,134 @@ const H = {
   amp:   ['ampere','Ampere','amp','Amp'],
   et2:   ['element_type_2','Element type 2','element type 2','H']
 };
+
+const DEFAULT_HOURLY_RATE = 700;
+const MONTASJE_TIME_TABLE = Object.freeze([
+  { maxAmp: 250,   hoursPerMeter: 1.5, hoursPerAngle: 0.5,  label: '160–250A' },
+  { maxAmp: 630,   hoursPerMeter: 2,   hoursPerAngle: 0.5,  label: '400–630A' },
+  { maxAmp: 1600,  hoursPerMeter: 3,   hoursPerAngle: 0.75, label: '800–1600A' },
+  { maxAmp: 2500,  hoursPerMeter: 4,   hoursPerAngle: 1,    label: '2000–2500A' },
+  { maxAmp: Infinity, hoursPerMeter: 5, hoursPerAngle: 1.5, label: '3200–5000A' }
+]);
+
+function sanitizeHourlyRate(value){
+  const raw = value ?? '';
+  if (String(raw).trim()==='') return DEFAULT_HOURLY_RATE;
+  const n = toNum(raw);
+  if (!Number.isFinite(n)) return DEFAULT_HOURLY_RATE;
+  return Math.max(0, n);
+}
+
+function getMontasjeProfileForAmp(amp){
+  const a = Number(amp);
+  if (!Number.isFinite(a) || a <= 0) return null;
+  for (const row of MONTASJE_TIME_TABLE){
+    if (a <= row.maxAmp) return row;
+  }
+  return MONTASJE_TIME_TABLE[MONTASJE_TIME_TABLE.length - 1];
+}
+
+function calculateMontasje({ meter, angles, amp, hourlyRate }){
+  const totalMeters = Math.max(0, Math.ceil(Number(meter) || 0));
+  const totalAngles = Math.max(0, Math.round(Number(angles) || 0));
+  const rate = sanitizeHourlyRate(hourlyRate);
+  const ampValue = Number(amp);
+  const profile = getMontasjeProfileForAmp(ampValue);
+  if (!profile){
+    return {
+      cost: 0,
+      meters: totalMeters,
+      angles: totalAngles,
+      hourlyRate: rate,
+      totalHours: 0,
+      profile: null,
+      amp: Number.isFinite(ampValue) ? ampValue : null
+    };
+  }
+  const hours = round2(totalMeters * profile.hoursPerMeter + totalAngles * profile.hoursPerAngle);
+  const cost = round2(hours * rate);
+  return {
+    cost,
+    meters: totalMeters,
+    angles: totalAngles,
+    hourlyRate: rate,
+    totalHours: hours,
+    profile,
+    hoursPerMeter: profile.hoursPerMeter,
+    hoursPerAngle: profile.hoursPerAngle,
+    amp: Number.isFinite(ampValue) ? ampValue : null
+  };
+}
+
+function readMontasjeSettingsFromUI(){
+  const input = document.getElementById('montasjeHourlyRate');
+  const hourlyRate = sanitizeHourlyRate(input ? input.value : DEFAULT_HOURLY_RATE);
+  if (input){
+    input.value = String(hourlyRate);
+  }
+  return { hourlyRate };
+}
+
+function formatMontasjeDetail(m){
+  if (!m || !m.profile){
+    return 'Montasje kalkuleres automatisk når ampere er valgt.';
+  }
+  const parts = [];
+  parts.push(`${fmtIntNO.format(m.meters)} m × ${fmtNO.format(m.profile.hoursPerMeter)} t/m`);
+  if (m.angles){
+    parts.push(`${fmtIntNO.format(m.angles)} × ${fmtNO.format(m.profile.hoursPerAngle)} t`);
+  }
+  const basis = parts.join(' + ');
+  const hoursTxt = fmtNO.format(m.totalHours);
+  const rateTxt = fmtNO.format(m.hourlyRate);
+  const ampTxt = Number.isFinite(m.amp) ? `${fmtIntNO.format(m.amp)}A` : '';
+  const labelTxt = ampTxt ? `${ampTxt} (${m.profile.label})` : m.profile.label;
+  return `Montasjegrunnlag (${labelTxt}): ${basis} = ${hoursTxt} t × ${rateTxt} kr/t`;
+}
+
+function updateMontasjePreview(){
+  const meterEl = $('meter');
+  const v90hEl = $('v90h');
+  const v90vEl = $('v90v');
+  const ampEl = $('ampSelect');
+  const rateEl = $('montasjeHourlyRate');
+
+  const meter = meterEl ? Number(meterEl.value || 0) : 0;
+  const angles = (v90hEl ? Number(v90hEl.value || 0) : 0) + (v90vEl ? Number(v90vEl.value || 0) : 0);
+  const amp = ampEl ? Number(ampEl.value || 0) : NaN;
+  const hourlyRate = rateEl ? rateEl.value : DEFAULT_HOURLY_RATE;
+
+  const preview = calculateMontasje({ meter, angles, amp, hourlyRate });
+
+  const labelEl = $('montasjeProfileLabel');
+  const perMeterEl = $('montasjeHoursPerMeter');
+  const perAngleEl = $('montasjeHoursPerAngle');
+  const totalHoursEl = $('montasjeTotalHours');
+  const costEl = $('montasjePreviewCost');
+
+  const hasProfile = Boolean(preview.profile);
+
+  if (labelEl){
+    if (hasProfile){
+      const ampTxt = Number.isFinite(preview.amp) ? `${fmtIntNO.format(preview.amp)}A` : '';
+      labelEl.textContent = ampTxt ? `Strømskinne ${ampTxt} (${preview.profile.label})` : `Strømskinne ${preview.profile.label}`;
+    }else{
+      labelEl.textContent = 'Velg ampere for å hente montasjetider.';
+    }
+  }
+  if (perMeterEl){
+    perMeterEl.textContent = hasProfile ? `${fmtNO.format(preview.profile.hoursPerMeter)} t/m` : '–';
+  }
+  if (perAngleEl){
+    perAngleEl.textContent = hasProfile ? `${fmtNO.format(preview.profile.hoursPerAngle)} t/vinkel` : '–';
+  }
+  if (totalHoursEl){
+    totalHoursEl.textContent = hasProfile ? `${fmtNO.format(preview.totalHours)} t` : '–';
+  }
+  if (costEl){
+    costEl.textContent = hasProfile ? `${fmtNO.format(preview.cost)} kr` : '–';
+  }
+}
 
 // --- detect ---
 function detectSeries(row){
@@ -392,8 +521,15 @@ if (pf.n1){
   const subtotal = round2(material+margin);
   const rate     = Number(input.freightRate ?? 0.10);
   const freight  = round2(subtotal * rate);
-  const total    = round2(subtotal + freight);
-  return { bom, material, margin, subtotal, freight, total };
+  const montasje = calculateMontasje({
+    meter: input.meter,
+    angles: (input.v90_h || 0) + (input.v90_v || 0),
+    amp: input.ampere,
+    hourlyRate: input.montasjeSettings?.hourlyRate
+  });
+  const totalExMontasje = round2(subtotal + freight);
+  const total    = round2(totalExMontasje + montasje.cost);
+  return { bom, material, margin, subtotal, freight, montasje, totalExMontasje, total };
 }
 
 // --- app ---
@@ -415,6 +551,25 @@ window.addEventListener('DOMContentLoaded', async ()=>{
     $('series').addEventListener('change', refreshUIBySeries);
     $('meter').addEventListener('change', ()=>Math.ceil(Number($('meter').value||0)));
     $('meter').addEventListener('blur',  ()=>Math.ceil(Number($('meter').value||0)));
+
+    const rateInput = $('montasjeHourlyRate');
+    if (rateInput){
+      if (!rateInput.value) rateInput.value = String(DEFAULT_HOURLY_RATE);
+      const syncRate = ()=>{ rateInput.value = String(sanitizeHourlyRate(rateInput.value)); updateMontasjePreview(); };
+      rateInput.addEventListener('input', updateMontasjePreview);
+      rateInput.addEventListener('change', syncRate);
+      rateInput.addEventListener('blur', syncRate);
+    }
+    ['meter','v90h','v90v'].forEach(id=>{
+      const el = $(id);
+      if (!el) return;
+      el.addEventListener('input', updateMontasjePreview);
+      el.addEventListener('change', updateMontasjePreview);
+    });
+    const ampSelEl = $('ampSelect');
+    if (ampSelEl){
+      ampSelEl.addEventListener('change', updateMontasjePreview);
+    }
     refreshUIBySeries();
 
   function enhanceNumberSteppers() {
@@ -478,17 +633,25 @@ function refreshUIBySeries(){
   const series = $('series').value;
 
   // oppdater totaler når frakt endres
-const frSel = document.getElementById('freightRate');
-if (frSel){
-  frSel.addEventListener('change', ()=>{
-    if (!lastCalc) return;
-    const rate = Number(frSel.value || 0.10);
-    const freight = round2(lastCalc.subtotal * rate);
-    const total   = round2(lastCalc.subtotal + freight);
-    document.getElementById('freight').textContent = fmtNO.format(freight);
-    document.getElementById('total').textContent   = fmtNO.format(total);
-  });
-}
+  const frSel = document.getElementById('freightRate');
+  if (frSel && !frSel.dataset.bound){
+    frSel.addEventListener('change', ()=>{
+      if (!lastCalc) return;
+      const rate = Number(frSel.value || 0.10);
+      const freight = round2(lastCalc.subtotal * rate);
+      const totalExMontasje = round2(lastCalc.subtotal + freight);
+      const total   = round2(totalExMontasje + (lastCalc.montasje?.cost || 0));
+      document.getElementById('freight').textContent = fmtNO.format(freight);
+      const totalExEl = document.getElementById('totalExMontasje');
+      if (totalExEl) totalExEl.textContent = fmtNO.format(totalExMontasje);
+      document.getElementById('total').textContent   = fmtNO.format(total);
+      const montasjeEl = document.getElementById('montasje');
+      if (montasjeEl && lastCalc.montasje) montasjeEl.textContent = fmtNO.format(lastCalc.montasje.cost);
+      const detailEl = document.getElementById('montasjeDetail');
+      if (detailEl) detailEl.textContent = lastCalc.montasjeDetail || '';
+    });
+    frSel.dataset.bound = '1';
+  }
 
   // XCM låser ledere
   if (series==='XCM'){ $('ledere').value='3F+N+PE'; $('ledere').disabled=true; }
@@ -518,6 +681,8 @@ if (frSel){
   });
   opts.sort((a,b)=>String(a.t).localeCompare(b.t,'no'));
   $('boxSel').innerHTML = '<option value="">Auto</option>'+opts.map(o=>`<option value="${o.v}">${o.t}</option>`).join('');
+
+  updateMontasjePreview();
 }
 
 // ekspansjons-modal
@@ -561,21 +726,35 @@ $('calcBtn').addEventListener('click', async ()=>{
     const amp = Number(ampSel);
     const rows = catalog.filter(r=>r.series===series);
     const freightRate = Number((document.getElementById('freightRate')?.value) || 0.10);
+    const montasjeSettings = readMontasjeSettingsFromUI();
 
     const cat = { rows, catalog };
     const out = price(cat, {
       series, dist, meter, v90_h, v90_v, ampere: amp, ledere,
       startEl, sluttEl,
       fbQty, boxQty, boxSel,
-      expansionYes, freightRate
+      expansionYes, freightRate, montasjeSettings
     });
 
     $('mat').textContent      = fmtNO.format(out.material);
     $('margin').textContent   = fmtNO.format(out.margin);
     $('subtotal').textContent = fmtNO.format(out.subtotal);
     $('freight').textContent  = fmtNO.format(out.freight);
+    const montasjeEl = document.getElementById('montasje');
+    if (montasjeEl) montasjeEl.textContent = fmtNO.format(out.montasje.cost);
+    const montasjeDetailText = formatMontasjeDetail(out.montasje);
+    const montasjeDetailEl = document.getElementById('montasjeDetail');
+    if (montasjeDetailEl) montasjeDetailEl.textContent = montasjeDetailText;
+    const totalExEl = document.getElementById('totalExMontasje');
+    if (totalExEl) totalExEl.textContent = fmtNO.format(out.totalExMontasje);
     $('total').textContent    = fmtNO.format(out.total);
-    lastCalc = { material: out.material, margin: out.margin, subtotal: out.subtotal };
+    lastCalc = {
+      material: out.material,
+      margin: out.margin,
+      subtotal: out.subtotal,
+      montasje: out.montasje,
+      montasjeDetail: montasjeDetailText
+    };
     $('status').textContent = 'OK';
 
     const tbody = document.querySelector('#bomTbl tbody');
@@ -612,7 +791,11 @@ document.getElementById('resetBtn').addEventListener('click', ()=>{
   if (st) st.textContent = '';
 
   // bygg UI på nytt
+  const rateInput = $('montasjeHourlyRate');
+  if (rateInput) rateInput.value = String(DEFAULT_HOURLY_RATE);
   refreshUIBySeries();
+  updateMontasjePreview();
+  lastCalc = null;
 });
 
 });

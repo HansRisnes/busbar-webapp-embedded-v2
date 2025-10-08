@@ -101,11 +101,26 @@ thead th{background:var(--accent-weak)}
 tbody tr:hover{background:rgba(255,255,255,0.03)}
 
 .totals{
+  display:flex;
+  flex-direction:column;
+  gap:16px;
+  margin:10px 0;
+}
+.totals-main{
   display:grid;
   grid-template-columns:repeat(auto-fit,minmax(220px,1fr));
   gap:8px;
-  margin:10px 0;
 }
+.totals-montasje{
+  display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(220px,1fr));
+  gap:8px;
+  padding:12px;
+  border:1px solid var(--card-border);
+  border-radius:10px;
+  background:rgba(43,58,88,0.25);
+}
+.totals-montasje .total{margin:0;}
 .total{font-size:1.2rem}
 
 footer{margin-top:20px;color:var(--muted)}
@@ -141,5 +156,70 @@ footer{margin-top:20px;color:var(--muted)}
 .row-actions{ grid-template-columns:1fr; margin-top:var(--form-gap); padding-top:var(--form-gap); }
 .row-actions > div{ display:flex; gap:var(--form-gap); justify-content:flex-start; align-items:center; width:100%; }
 
+.full-width{ grid-column:1 / -1; }
+.montasje-row{ align-items:flex-start; }
+.montasje-box{
+  margin:0;
+  border:1px solid var(--card-border);
+  border-radius:12px;
+  padding:12px;
+}
+.montasje-box legend{
+  padding:0 6px;
+  color:var(--muted);
+  font-size:0.95rem;
+}
+.montasje-grid{
+  display:grid;
+  grid-template-columns:repeat(auto-fit, minmax(180px, 1fr));
+  gap:12px;
+  margin-top:4px;
+  align-items:start;
+}
+.montasje-rate{
+  grid-column:span 1;
+  width:100%;
+}
+.montasje-box label{ font-size:0.95rem; }
+.montasje-box input{ margin-top:4px; }
+.montasje-stats{
+  grid-column:1 / -1;
+  padding:8px 12px;
+  border:1px solid var(--card-border);
+  border-radius:10px;
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+  background:rgba(43,58,88,0.25);
+}
+.montasje-stats p{ margin:0; }
+.montasje-breakdown{
+  margin:0;
+  display:grid;
+  gap:6px;
+}
+.montasje-breakdown div{
+  display:flex;
+  justify-content:space-between;
+  gap:8px;
+}
+.montasje-breakdown dt{
+  margin:0;
+  font-weight:600;
+}
+.montasje-breakdown dd{
+  margin:0;
+  font-weight:600;
+  text-align:right;
+}
+.montasje-breakdown span{ white-space:nowrap; }
+.muted-text{ color:var(--muted); font-size:0.85rem; margin-top:8px; }
+
 /* samme headerbredde som i index.html */
 .card-header{ align-items:stretch; width:100%; }
+
+@media (max-width:720px){
+  .totals-montasje{
+    grid-template-columns:1fr;
+  }
+}
