@@ -157,6 +157,29 @@ input[type="number"]::-webkit-inner-spin-button{
           </select>
         </label>
       </div>
+
+      <div class="row montasje-row">
+        <div class="full-width">
+          <fieldset class="montasje-box">
+            <legend>Montasje</legend>
+            <div class="montasje-grid">
+              <label class="montasje-rate">Timessats (NOK)<br>
+                <input id="montasjeHourlyRate" type="number" inputmode="decimal" step="1" min="0" value="700">
+              </label>
+              <div class="montasje-stats">
+                <p id="montasjeProfileLabel" class="muted-text">Velg ampere for å hente montasjetider.</p>
+                <dl class="montasje-breakdown">
+                  <div><dt>Timer pr. meter</dt><dd><span id="montasjeHoursPerMeter">–</span></dd></div>
+                  <div><dt>Timer pr. 90°-vinkel</dt><dd><span id="montasjeHoursPerAngle">–</span></dd></div>
+                  <div><dt>Timer totalt</dt><dd><span id="montasjeTotalHours">–</span></dd></div>
+                  <div><dt>Estimert montasje</dt><dd><span id="montasjePreviewCost">–</span></dd></div>
+                </dl>
+              </div>
+            </div>
+            <p class="muted-text">Beregningen bruker meter og vinkler fra skjemaet. Avtappingsbokser og brannelementer har ingen montasjekost.</p>
+          </fieldset>
+        </div>
+      </div>
     </div>
 
     <div class="row row-actions">
@@ -172,10 +195,11 @@ input[type="number"]::-webkit-inner-spin-button{
   <section id="results" class="card" hidden>
     <h2>Resultat</h2>
     <div class="totals">
-      <div><strong>Material:</strong> <span id="mat"></span></div>
-      <div><strong>Margin 20%:</strong> <span id="margin"></span></div>
-      <div><strong>Subtotal:</strong> <span id="subtotal"></span></div>
-      <div>
+      <div class="totals-main">
+        <div><strong>Material:</strong> <span id="mat"></span></div>
+        <div><strong>Margin 20%:</strong> <span id="margin"></span></div>
+        <div><strong>Subtotal:</strong> <span id="subtotal"></span></div>
+        <div>
   <strong>Frakt:</strong>
   <select id="freightRate" style="width:auto;margin-left:6px">
     <option value="0.10" selected>10 % (Standard)</option>
@@ -183,7 +207,12 @@ input[type="number"]::-webkit-inner-spin-button{
   </select>
   <span id="freight" style="margin-left:8px"></span>
 </div>
-      <div class="total"><strong>Total:</strong> <span id="total"></span> NOK eks. mva</div>
+        <div><strong>Total eks. montasje:</strong> <span id="totalExMontasje"></span></div>
+      </div>
+      <div class="totals-montasje">
+        <div><strong>Montasje:</strong> <span id="montasje"></span><div id="montasjeDetail" class="muted-text"></div></div>
+        <div class="total"><strong>Total inkl. montasje:</strong> <span id="total"></span> NOK eks. mva</div>
+      </div>
     </div>
     <h3>BOM</h3>
     <table id="bomTbl">
