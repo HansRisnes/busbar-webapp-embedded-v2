@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="no">
 <head>
   <meta charset="utf-8" />
@@ -57,15 +57,20 @@ input[type="number"]::-webkit-inner-spin-button{
     .btn{padding:10px 14px;background:var(--accent);border:1px solid var(--accent);border-radius:10px;color:#fff;cursor:pointer}
     .btn.alt{background:var(--input);border-color:var(--input-border)}
 
-/* Rette opp vertikal plassering i totals-listen */
-.totals > div{ display:flex; align-items:center; gap:8px; flex-wrap:wrap }
-#freightRate{ line-height:1; }
+/* Totals styling centralized in styles.css */
 
   </style>
 </head>
 <body>
   <header>
-    <h1>Busbar Priskalkulator</h1>
+    <div class="header-top">
+      <h1>Busbar Priskalkulator</h1>
+      <div id="authControls" class="auth-controls">
+        <button id="loginBtn" class="btn">Logg på</button>
+        <span id="authUser" class="auth-user muted-text" hidden></span>
+        <button id="logoutBtn" class="btn alt" hidden>Logg av</button>
+      </div>
+    </div>
     <p>Leser rå CSV fra <code>data/busbar-webapp-embedded-v2.csv</code> og <code>data/busbar-webapp-embedded-v2.1.csv</code>.</p>
   </header>
 
@@ -78,15 +83,16 @@ input[type="number"]::-webkit-inner-spin-button{
     <div class="rows">
       <!-- Rad 1 -->
       <div class="row">
-        <label>System<br>
+        <label>System*<br>
           <select id="series">
             <option value="">Velg…</option>
               <option value="XCM">XCM (160-1000A)</option>
             <option value="XCP-S">XCP-S (1250-5000A)</option>
+            
           </select>
         </label>
 
-        <label>Meter<br>
+        <label>Meter*<br>
           <input id="meter" type="number" step="1" inputmode="numeric" placeholder="0">
         </label>
 
@@ -101,11 +107,11 @@ input[type="number"]::-webkit-inner-spin-button{
 
       <!-- Rad 2 -->
       <div class="row">
-        <label>Ampere<br>
+        <label>Ampere*<br>
           <select id="ampSelect"></select>
         </label>
 
-        <label>Ledere<br>
+        <label>Ledere*<br>
           <select id="ledere">
             <option value="">Velg…</option>
             <option>3F+N+PE</option>
@@ -113,7 +119,7 @@ input[type="number"]::-webkit-inner-spin-button{
           </select>
         </label>
 
-        <label>Startelement<br>
+        <label>Startelement*<br>
           <select id="startEl">
             <option value="">Velg…</option>
             <option value="board_feed">Tavleelement</option>
@@ -122,7 +128,7 @@ input[type="number"]::-webkit-inner-spin-button{
           </select>
         </label>
 
-        <label>Sluttelement<br>
+        <label>Sluttelement*<br>
           <select id="sluttEl">
             <option value="">Velg…</option>
             <option value="board_feed">Tavleelement</option>
@@ -143,19 +149,21 @@ input[type="number"]::-webkit-inner-spin-button{
           </select>
         </label>
 
-        <label>Brannelement (antall)<br>
-          <input id="fbQty" type="number" step="1" inputmode="numeric" placeholder="0">
-        </label>
-
         <label>Avtappingsbokser (antall)<br>
           <input id="boxQty" type="number" step="1" inputmode="numeric" placeholder="0">
         </label>
 
         <label>Type boks<br>
           <select id="boxSel">
-            <option value="">Auto</option>
+            <option value="">Velg...</option>
           </select>
         </label>
+
+        <label>Brannelement (antall)<br>
+          <input id="fbQty" type="number" step="1" inputmode="numeric" placeholder="0">
+            </label>
+          </div>
+        <p class="muted-text">* er obligatoriske felt.</p>
       </div>
 
       <div class="row montasje-row">
@@ -163,17 +171,30 @@ input[type="number"]::-webkit-inner-spin-button{
           <fieldset class="montasje-box">
             <legend>Montasje</legend>
             <div class="montasje-grid">
-              <label class="montasje-rate">Timessats (NOK)<br>
-                <input id="montasjeHourlyRate" type="number" inputmode="decimal" step="1" min="0" value="700">
-              </label>
+              <div class="montasje-rates">
+                <label class="montasje-rate">Timessats (NOK)<br>
+                  <input id="montasjeHourlyRate" type="number" inputmode="decimal" step="1" min="0" value="700">
+                </label>
+                <label class="oppheng-rate">Opphengsmateriell (NOK/m)<br>
+                  <input id="opphengRate" type="number" inputmode="decimal" step="1" min="0" placeholder="0">
+                </label>
+                <label class="rate-toggle">
+                  <input id="rateToggle" type="checkbox">
+                  Juster fra standard
+                </label>
+              </div>
               <div class="montasje-stats">
                 <p id="montasjeProfileLabel" class="muted-text">Velg ampere for å hente montasjetider.</p>
                 <dl class="montasje-breakdown">
-                  <div><dt>Timer pr. meter</dt><dd><span id="montasjeHoursPerMeter">–</span></dd></div>
-                  <div><dt>Timer pr. 90°-vinkel</dt><dd><span id="montasjeHoursPerAngle">–</span></dd></div>
-                  <div><dt>Timer totalt</dt><dd><span id="montasjeTotalHours">–</span></dd></div>
-                  <div><dt>Estimert montasje</dt><dd><span id="montasjePreviewCost">–</span></dd></div>
+                  <div><dt>Timer pr. meter</dt><dd><span id="montasjeHoursPerMeter">-</span></dd></div>
+                  <div><dt>Timer pr. 90°-vinkel</dt><dd><span id="montasjeHoursPerAngle">-</span></dd></div>
+                  <div><dt>Timer totalt</dt><dd><span id="montasjeTotalHours">-</span></dd></div>
+                  <div><dt>Estimert montasje</dt><dd><span id="montasjePreviewCost">-</span></dd></div>
+                  <div><dt>Oppheng kr/m</dt><dd><span id="opphengPreviewRate">-</span></dd></div>
+                  <div><dt>Oppheng sum</dt><dd><span id="opphengPreviewCost">-</span></dd></div>
                 </dl>
+                <div id="montasjeDetail" class="muted-text"></div>
+                <div id="opphengDetail" class="muted-text"></div>
               </div>
             </div>
             <p class="muted-text">Beregningen bruker meter og vinkler fra skjemaet. Avtappingsbokser og brannelementer har ingen montasjekost.</p>
@@ -184,7 +205,7 @@ input[type="number"]::-webkit-inner-spin-button{
 
     <div class="row row-actions">
   <div>
-    <button id="calcBtn">Beregn</button>
+    <button id="calcBtn" class="btn alt" disabled>Beregn</button>
     <button id="resetBtn" class="btn alt">Nullstill</button>
     <span id="status" class="status"></span>
   </div>
@@ -193,25 +214,46 @@ input[type="number"]::-webkit-inner-spin-button{
   </section>
 
   <section id="results" class="card" hidden>
-    <h2>Resultat</h2>
-    <div class="totals">
-      <div class="totals-main">
-        <div><strong>Material:</strong> <span id="mat"></span></div>
-        <div><strong>Margin 20%:</strong> <span id="margin"></span></div>
-        <div><strong>Subtotal:</strong> <span id="subtotal"></span></div>
-        <div>
-  <strong>Frakt:</strong>
-  <select id="freightRate" style="width:auto;margin-left:6px">
-    <option value="0.10" selected>10 % (Standard)</option>
-    <option value="0.15">15 % (Nord-Norge)</option>
-  </select>
-  <span id="freight" style="margin-left:8px"></span>
-</div>
-        <div><strong>Total eks. montasje:</strong> <span id="totalExMontasje"></span></div>
+    <div class="results-heading">
+      <h2>Resultat</h2>
+      <div id="projectMeta" class="project-meta" hidden>
+        <span class="project-field"><strong>Prosjekt:</strong> <span id="projectNameDisplay"></span></span>
+        <span class="project-field"><strong>Kunde:</strong> <span id="customerNameDisplay"></span></span>
+        <button id="editProjectBtn" type="button" class="btn alt btn-inline">Endre</button>
       </div>
+    </div>
+    <div class="totals">
+      <!-- Rad 1: material, margin, subtotal -->
+      <div class="totals-line">
+        <div class="total-item"><strong>Material:</strong> <span id="mat"></span></div>
+        <div class="total-item"><strong>Margin 20%:</strong> <span id="margin"></span></div>
+        <div class="total-item"><strong>Subtotal:</strong> <span id="subtotal"></span></div>
+      </div>
+      <!-- Rad 2: frakt (1), tom (2), total eks. montasje (3) -->
+      <div class="totals-line">
+        <div class="total-item freight-item">
+          <strong>Frakt:</strong>
+          <span id="freight" class="freight-value"></span>
+          <select id="freightRate">
+            <option value="0.10" selected>10 % (Standard)</option>
+            <option value="0.15">15 % (Nord-Norge)</option>
+          </select>
+        </div>
+        <div class="total-item placeholder"></div>
+        <div class="total-item"><strong>Total eks. montasje:</strong> <span id="totalExMontasje"></span> NOK eks.mva</div>
+      </div>
+      <!-- Rad 3: montasje i egen firkant (full bredde) -->
       <div class="totals-montasje">
-        <div><strong>Montasje:</strong> <span id="montasje"></span><div id="montasjeDetail" class="muted-text"></div></div>
-        <div class="total"><strong>Total inkl. montasje:</strong> <span id="total"></span> NOK eks. mva</div>
+        <div class="totals-line">
+          <div class="total-item"><strong>Montasje:</strong> <span id="montasje"></span></div>
+          <div class="total-item"><strong>Margin 20%:</strong> <span id="montasjeMargin"></span></div>
+          <div class="total-item"><strong>Total inkl. montasje:</strong> <span id="totalInclMontasje"></span> NOK eks. mva</div>
+        </div>
+        <div class="totals-line totals-oppheng">
+          <div class="total-item"><strong>Opphengsmateriell:</strong> <span id="oppheng"></span></div>
+          <div class="total-item placeholder"></div>
+          <div class="total-item"><strong>Total inkl. montasje og oppheng:</strong> <span id="total"></span> NOK eks. mva</div>
+        </div>
       </div>
     </div>
     <h3>BOM</h3>
@@ -238,8 +280,54 @@ input[type="number"]::-webkit-inner-spin-button{
     </div>
   </div>
 
+  <!-- Modal for innlogging -->
+  <div id="loginModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="loginTitle">
+    <div class="modal">
+      <h3 id="loginTitle">Logg på</h3>
+      <form class="login-form" onsubmit="return false;" autocomplete="off">
+        <label for="loginUsername">Brukernavn (valgfritt)
+          <input id="loginUsername" type="text" inputmode="text" autocomplete="username">
+        </label>
+        <label for="loginPassword">Passord
+          <input id="loginPassword" type="password" autocomplete="current-password" required>
+        </label>
+        <p id="loginError" class="login-error" role="alert"></p>
+        <div class="actions">
+          <button id="loginCancel" type="button" class="btn alt">Avbryt</button>
+          <button id="loginSubmit" type="button" class="btn">Logg på</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Modal for prosjektinformasjon -->
+  <div id="projectModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="projectTitle">
+    <div class="modal">
+      <h3 id="projectTitle">Prosjektinformasjon</h3>
+      <form class="project-form" onsubmit="return false;" autocomplete="off">
+        <label>Prosjektnavn
+          <div class="suggest-wrapper">
+            <input id="projectNameInput" type="text" autocomplete="off" required>
+            <ul id="projectSuggestions" class="suggestions" hidden></ul>
+          </div>
+        </label>
+        <label>Kunde
+          <div class="suggest-wrapper">
+            <input id="customerNameInput" type="text" autocomplete="off" required>
+            <ul id="customerSuggestions" class="suggestions" hidden></ul>
+          </div>
+        </label>
+        <p id="projectError" class="login-error project-error" role="alert"></p>
+        <div class="actions">
+          <button id="projectCancel" type="button" class="btn alt">Avbryt</button>
+          <button id="projectSubmit" type="button" class="btn" disabled>Fortsett</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <footer>
-    <small>Lengderegler: 3 m for rester &gt; 2,00 m. 1501–2000 (eller 1500–2999 for XCM) for rester &gt; 1,00 m. 500–1000 (600–1500 for XCM feeder) for rester &gt; 0,00 m.</small>
+    <small>Lengderegler: 3 m for rester &gt; 2,00 m. 1501-2000 (eller 1500-2999 for XCM) for rester &gt; 1,00 m. 500-1000 (600-1500 for XCM feeder) for rester &gt; 0,00 m.</small>
   </footer>
 
   <script type="module" src="app.js"></script>

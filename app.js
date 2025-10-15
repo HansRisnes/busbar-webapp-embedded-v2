@@ -4,7 +4,16 @@ const RAW_CSV_PATHS = [
   'data/busbar-webapp-embedded-v2.csv',
   'data/busbar-webapp-embedded-v2.1.csv'
 ];
-let lastCalc = null;
+let lastCalc = null; // delsummer for live frakt-oppdatering
+const AUTH_PASSWORD = 'busbar';
+let authState = { loggedIn: false, username: '' };
+const projectState = {
+  currentProject: '',
+  currentCustomer: '',
+  projectHistory: [],
+  customerHistory: []
+};
+let projectModalResolve = null;
 
 // --- CSV ---
 function parseCSVAuto(text){
@@ -44,6 +53,383 @@ const toNum = x => {
 };
 function pick(row, names){ for (const n of names){ if (n in row && row[n]!=='' && row[n]!==undefined) return row[n]; } return ''; }
 
+function updateAuthUI(){
+  const calcBtn = $('calcBtn');
+  if (calcBtn) calcBtn.disabled = !authState.loggedIn;
+
+  const loginBtn = $('loginBtn');
+  const logoutBtn = $('logoutBtn');
+  const userLabel = $('authUser');
+
+  if (loginBtn) loginBtn.hidden = authState.loggedIn;
+  if (logoutBtn) logoutBtn.hidden = !authState.loggedIn;
+  if (userLabel){
+    if (authState.loggedIn){
+      userLabel.textContent = authState.username || 'Innlogget';
+      userLabel.hidden = false;
+    } else {
+      userLabel.textContent = '';
+      userLabel.hidden = true;
+    }
+  }
+
+  const statusEl = $('status');
+  if (statusEl){
+    if (!authState.loggedIn){
+      if (!statusEl.textContent){
+        statusEl.textContent = 'Logg inn for \u00E5 beregne.';
+      }
+    } else if (statusEl.textContent === 'Logg inn for \u00E5 beregne.'){
+      statusEl.textContent = '';
+    }
+  }
+}
+
+function showLoginModal(){
+  const modal = $('loginModal');
+  if (!modal) return;
+  modal.style.display = 'flex';
+  const usernameInput = $('loginUsername');
+  const passwordInput = $('loginPassword');
+  const errorEl = $('loginError');
+  if (errorEl) errorEl.textContent = '';
+  if (usernameInput){
+    usernameInput.value = authState.username || '';
+    try{
+      const len = usernameInput.value.length;
+      usernameInput.focus();
+      usernameInput.setSelectionRange(len, len);
+    }catch(_err){
+      usernameInput.focus();
+    }
+  }
+  if (passwordInput){
+    passwordInput.value = '';
+  }
+}
+
+function hideLoginModal(){
+  const modal = $('loginModal');
+  if (!modal) return;
+  modal.style.display = 'none';
+  const errorEl = $('loginError');
+  if (errorEl) errorEl.textContent = '';
+}
+
+function handleLoginSubmit(){
+  const passwordInput = $('loginPassword');
+  const usernameInput = $('loginUsername');
+  const errorEl = $('loginError');
+  const password = passwordInput ? passwordInput.value : '';
+  if (password !== AUTH_PASSWORD){
+    if (errorEl) errorEl.textContent = 'Feil passord.';
+    if (passwordInput) passwordInput.focus();
+    return;
+  }
+  const username = usernameInput ? usernameInput.value.trim() : '';
+  if (!username || !username.includes('@')){
+    if (errorEl) errorEl.textContent = 'Brukernavn må være en e-postadresse.';
+    if (usernameInput){
+      usernameInput.focus();
+      try{
+        const len = usernameInput.value.length;
+        usernameInput.setSelectionRange(len, len);
+      }catch(_err){}
+    }
+    return;
+  }
+  authState = { loggedIn: true, username };
+  hideLoginModal();
+  updateAuthUI();
+  const statusEl = $('status');
+  if (statusEl) statusEl.textContent = '';
+}
+
+const loginBtn = $('loginBtn');
+if (loginBtn){
+  loginBtn.addEventListener('click', showLoginModal);
+}
+const logoutBtn = $('logoutBtn');
+if (logoutBtn){
+  logoutBtn.addEventListener('click', ()=>{
+    authState = { loggedIn: false, username: '' };
+    hideLoginModal();
+   updateAuthUI();
+    const statusEl = $('status');
+    if (statusEl) statusEl.textContent = 'Logg inn for \u00E5 beregne.';
+  });
+}
+const loginCancel = $('loginCancel');
+if (loginCancel){
+  loginCancel.addEventListener('click', hideLoginModal);
+}
+const loginSubmit = $('loginSubmit');
+if (loginSubmit){
+  loginSubmit.addEventListener('click', handleLoginSubmit);
+}
+['loginUsername','loginPassword'].forEach(id=>{
+  const input = $(id);
+  if (input){
+    input.addEventListener('keydown', evt=>{
+      if (evt.key === 'Enter'){
+        evt.preventDefault();
+        handleLoginSubmit();
+      } else if (evt.key === 'Escape'){
+        evt.preventDefault();
+        hideLoginModal();
+      }
+    });
+  }
+});
+const loginModal = $('loginModal');
+if (loginModal){
+  loginModal.addEventListener('click', evt=>{
+    if (evt.target === loginModal){
+      hideLoginModal();
+    }
+  });
+}
+function addToHistory(list, value){
+  const trimmed = String(value||'').trim();
+  if (!trimmed) return;
+  const lower = trimmed.toLowerCase();
+  const existingIdx = list.findIndex(entry=>entry.toLowerCase() === lower);
+  if (existingIdx !== -1){
+    list.splice(existingIdx,1);
+  }
+  list.push(trimmed);
+  if (list.length > 20){
+    list.splice(0, list.length - 20);
+  }
+}
+
+function updateProjectMetaDisplay(){
+  const meta = $('projectMeta');
+  const nameEl = $('projectNameDisplay');
+  const customerEl = $('customerNameDisplay');
+  const editBtn = $('editProjectBtn');
+  const hasData = Boolean(projectState.currentProject && projectState.currentCustomer);
+  if (nameEl) nameEl.textContent = projectState.currentProject;
+  if (customerEl) customerEl.textContent = projectState.currentCustomer;
+  if (meta) meta.hidden = !hasData;
+  if (editBtn){
+    editBtn.hidden = !hasData;
+    editBtn.disabled = !hasData;
+  }
+}
+
+function hideSuggestions(listEl){
+  if (listEl){
+    listEl.hidden = true;
+    listEl.innerHTML = '';
+  }
+}
+
+function showSuggestions(listEl, items){
+  if (!listEl) return;
+  const entries = items.filter(Boolean);
+  if (!entries.length){
+    hideSuggestions(listEl);
+    return;
+  }
+  const frag = document.createDocumentFragment();
+  [...entries].reverse().forEach(value=>{
+    const li = document.createElement('li');
+    li.textContent = value;
+    li.dataset.value = value;
+    frag.appendChild(li);
+  });
+  listEl.innerHTML = '';
+  listEl.appendChild(frag);
+  listEl.hidden = false;
+}
+
+function updateProjectSubmitState(){
+  const submit = $('projectSubmit');
+  if (!submit) return;
+  const projectVal = (($('projectNameInput')?.value) || '').trim();
+  const customerVal = (($('customerNameInput')?.value) || '').trim();
+  submit.disabled = !(projectVal && customerVal);
+}
+
+function openProjectModal(){
+  const modal = $('projectModal');
+  if (!modal) return;
+  modal.style.display = 'flex';
+  const errorEl = $('projectError');
+  if (errorEl) errorEl.textContent = '';
+  const projectInput = $('projectNameInput');
+  const customerInput = $('customerNameInput');
+  if (projectInput){
+    projectInput.value = projectState.currentProject || '';
+    projectInput.focus();
+    const len = projectInput.value.length;
+    try{
+      projectInput.setSelectionRange(len, len);
+    }catch(_err){
+      /* ignore selection errors */
+    }
+  }
+  if (customerInput){
+    customerInput.value = projectState.currentCustomer || '';
+  }
+  updateProjectSubmitState();
+}
+
+function closeProjectModal(){
+  const modal = $('projectModal');
+  if (!modal) return;
+  modal.style.display = 'none';
+  const errorEl = $('projectError');
+  if (errorEl) errorEl.textContent = '';
+  hideSuggestions($('projectSuggestions'));
+  hideSuggestions($('customerSuggestions'));
+}
+
+function persistProjectInfo(projectName, customerName){
+  projectState.currentProject = projectName;
+  projectState.currentCustomer = customerName;
+  addToHistory(projectState.projectHistory, projectName);
+  addToHistory(projectState.customerHistory, customerName);
+  updateProjectMetaDisplay();
+  const statusEl = $('status');
+  if (statusEl && statusEl.textContent === 'Oppgi prosjektnavn og kunde.'){
+    statusEl.textContent = '';
+  }
+}
+
+function resolveProjectModal(result){
+  if (projectModalResolve){
+    const resolve = projectModalResolve;
+    projectModalResolve = null;
+    resolve(result);
+  }
+}
+
+function submitProjectModal(){
+  const projectInput = $('projectNameInput');
+  const customerInput = $('customerNameInput');
+  const errorEl = $('projectError');
+  const projectName = projectInput ? projectInput.value.trim() : '';
+  const customerName = customerInput ? customerInput.value.trim() : '';
+  if (!projectName || !customerName){
+    if (errorEl) errorEl.textContent = 'Fyll ut begge feltene.';
+    updateProjectSubmitState();
+    return;
+  }
+  persistProjectInfo(projectName, customerName);
+  closeProjectModal();
+  resolveProjectModal({ projectName, customerName });
+}
+
+function cancelProjectModal(){
+  closeProjectModal();
+  if (!projectState.currentProject || !projectState.currentCustomer){
+    const statusEl = $('status');
+    if (statusEl) statusEl.textContent = 'Oppgi prosjektnavn og kunde.';
+  }
+  resolveProjectModal(null);
+}
+
+function ensureProjectInfo(){
+  if (projectState.currentProject && projectState.currentCustomer){
+    return Promise.resolve({
+      projectName: projectState.currentProject,
+      customerName: projectState.currentCustomer
+    });
+  }
+  const statusEl = $('status');
+  if (statusEl) statusEl.textContent = 'Oppgi prosjektnavn og kunde.';
+  return new Promise(resolve=>{
+    projectModalResolve = resolve;
+    openProjectModal();
+  });
+}
+
+const projectSubmit = $('projectSubmit');
+if (projectSubmit){
+  projectSubmit.addEventListener('click', submitProjectModal);
+}
+const projectCancel = $('projectCancel');
+if (projectCancel){
+  projectCancel.addEventListener('click', cancelProjectModal);
+}
+const projectModal = $('projectModal');
+if (projectModal){
+  projectModal.addEventListener('click', evt=>{
+    if (evt.target === projectModal){
+      cancelProjectModal();
+    }
+  });
+}
+
+function bindSuggestionBehaviour(inputId, listId, source){
+  const input = $(inputId);
+  const listEl = $(listId);
+  if (!input || !listEl) return;
+  input.addEventListener('focus', ()=>{
+    showSuggestions(listEl, source);
+  });
+  input.addEventListener('input', ()=>{
+    hideSuggestions(listEl);
+    updateProjectSubmitState();
+    const errorEl = $('projectError');
+    if (errorEl) errorEl.textContent = '';
+  });
+  input.addEventListener('blur', ()=>{
+    setTimeout(()=>hideSuggestions(listEl), 80);
+  });
+  input.addEventListener('keydown', evt=>{
+    if (evt.key === 'Enter'){
+      evt.preventDefault();
+      const submitBtn = $('projectSubmit');
+      if (submitBtn && !submitBtn.disabled){
+        submitProjectModal();
+      }
+    } else if (evt.key === 'Escape'){
+      evt.preventDefault();
+      cancelProjectModal();
+    }
+  });
+  listEl.addEventListener('mousedown', evt=>{
+    if (evt.target && evt.target.matches('li[data-value]')){
+      evt.preventDefault();
+      const value = evt.target.dataset.value || evt.target.textContent || '';
+      input.value = value;
+      hideSuggestions(listEl);
+      updateProjectSubmitState();
+    }
+  });
+}
+
+bindSuggestionBehaviour('projectNameInput', 'projectSuggestions', projectState.projectHistory);
+bindSuggestionBehaviour('customerNameInput', 'customerSuggestions', projectState.customerHistory);
+
+const editProjectBtn = $('editProjectBtn');
+if (editProjectBtn){
+  editProjectBtn.addEventListener('click', ()=>{
+    projectModalResolve = null;
+    openProjectModal();
+  });
+}
+
+document.addEventListener('keydown', evt=>{
+  if (evt.key === 'Escape'){
+    const loginModalEl = $('loginModal');
+    if (loginModalEl && loginModalEl.style.display === 'flex'){
+      hideLoginModal();
+      return;
+    }
+    const projectModalEl = $('projectModal');
+    if (projectModalEl && projectModalEl.style.display === 'flex'){
+      cancelProjectModal();
+    }
+  }
+});
+
+updateProjectMetaDisplay();
+updateAuthUI();
+
 const H = {
   code: ['code','Code','SKU','sku','produkt','Produkt'],
   price: ['price','Price','unit price','unit_price','Unit Price','UnitPrice','pris','Pris'],
@@ -53,6 +439,11 @@ const H = {
 };
 
 const DEFAULT_HOURLY_RATE = 700;
+const OPPHENG_RATE_TABLE = Object.freeze([
+  { maxAmp: 1600, rate: 400, label: '160–1600A' },
+  { maxAmp: 2500, rate: 500, label: '2000–2500A' },
+  { maxAmp: Infinity, rate: 800, label: '3200–5000A' }
+]);
 const MONTASJE_TIME_TABLE = Object.freeze([
   { maxAmp: 250,   hoursPerMeter: 1.5, hoursPerAngle: 0.5,  label: '160–250A' },
   { maxAmp: 630,   hoursPerMeter: 2,   hoursPerAngle: 0.5,  label: '400–630A' },
@@ -67,6 +458,42 @@ function sanitizeHourlyRate(value){
   const n = toNum(raw);
   if (!Number.isFinite(n)) return DEFAULT_HOURLY_RATE;
   return Math.max(0, n);
+}
+
+function getOpphengRateRowForAmp(amp){
+  const a = Number(amp);
+  if (!Number.isFinite(a) || a <= 0) return null;
+  for (const row of OPPHENG_RATE_TABLE){
+    if (a <= row.maxAmp) return row;
+  }
+  return OPPHENG_RATE_TABLE[OPPHENG_RATE_TABLE.length - 1];
+}
+
+function sanitizeOpphengRate(value, fallback){
+  const raw = value ?? '';
+  const fallbackRate = Number.isFinite(fallback) ? fallback : 0;
+  if (String(raw).trim()==='') return fallbackRate;
+  const n = toNum(raw);
+  if (!Number.isFinite(n)) return fallbackRate;
+  return Math.max(0, n);
+}
+
+function calculateOpphengsmateriell({ meter, amp, ratePerMeter }){
+  const totalMeters = Math.max(0, Math.ceil(Number(meter) || 0));
+  const ampValue = Number(amp);
+  const profile = getOpphengRateRowForAmp(ampValue);
+  const defaultRate = profile ? profile.rate : 0;
+  const rate = sanitizeOpphengRate(ratePerMeter, defaultRate);
+  const cost = round2(totalMeters * rate);
+  return {
+    cost,
+    meters: totalMeters,
+    ratePerMeter: rate,
+    defaultRate,
+    profile,
+    isDefaultRate: rate === defaultRate,
+    amp: Number.isFinite(ampValue) ? ampValue : null
+  };
 }
 
 function getMontasjeProfileForAmp(amp){
@@ -111,12 +538,29 @@ function calculateMontasje({ meter, angles, amp, hourlyRate }){
 }
 
 function readMontasjeSettingsFromUI(){
-  const input = document.getElementById('montasjeHourlyRate');
-  const hourlyRate = sanitizeHourlyRate(input ? input.value : DEFAULT_HOURLY_RATE);
-  if (input){
-    input.value = String(hourlyRate);
+  const hourlyRateInput = document.getElementById('montasjeHourlyRate');
+  const hourlyRate = sanitizeHourlyRate(hourlyRateInput ? hourlyRateInput.value : DEFAULT_HOURLY_RATE);
+  if (hourlyRateInput){
+    hourlyRateInput.value = String(hourlyRate);
   }
-  return { hourlyRate };
+  const opphengRateInput = document.getElementById('opphengRate');
+  let opphengRate = '';
+  if (opphengRateInput){
+    const defaultRate = toNum(opphengRateInput.dataset.defaultRate);
+    const fallbackRate = Number.isFinite(defaultRate) ? defaultRate : 0;
+    const raw = opphengRateInput.value;
+    const sanitized = sanitizeOpphengRate(raw, fallbackRate);
+    const isOverride = sanitized !== fallbackRate;
+    opphengRateInput.dataset.appliedValue = String(sanitized);
+    opphengRateInput.dataset.userOverride = isOverride ? 'true' : 'false';
+    if (fallbackRate === 0 && !isOverride && raw.trim()===''){
+      opphengRateInput.value = '';
+    }else{
+      opphengRateInput.value = (sanitized || sanitized === 0) ? String(sanitized) : '';
+    }
+    opphengRate = sanitized;
+  }
+  return { hourlyRate, opphengRate };
 }
 
 function formatMontasjeDetail(m){
@@ -136,47 +580,158 @@ function formatMontasjeDetail(m){
   return `Montasjegrunnlag (${labelTxt}): ${basis} = ${hoursTxt} t × ${rateTxt} kr/t`;
 }
 
+function formatOpphengDetail(o){
+  if (!o){
+    return 'Opphengsmateriell kalkuleres automatisk når ampere er valgt.';
+  }
+  if (!Number.isFinite(o.amp) || o.amp <= 0){
+    return 'Opphengsmateriell kalkuleres automatisk når ampere er valgt.';
+  }
+  if (!o.meters){
+    return 'Opphengsmateriell beregnes når meter er angitt.';
+  }
+  const metersTxt = fmtIntNO.format(o.meters);
+  const rateTxt = fmtNO.format(o.ratePerMeter);
+  const costTxt = fmtNO.format(o.cost);
+  const labelTxt = o.profile ? ` (${o.profile.label})` : '';
+  return `Opphengsmateriell${labelTxt}: ${metersTxt} m × ${rateTxt} kr/m = ${costTxt} kr`;
+}
+
+function setInputLocked(input, locked){
+  if (!input) return;
+  input.readOnly = locked;
+  input.classList.toggle('locked', locked);
+  input.setAttribute('aria-readonly', locked ? 'true' : 'false');
+  input.dataset.locked = locked ? 'true' : 'false';
+}
+
 function updateMontasjePreview(){
   const meterEl = $('meter');
   const v90hEl = $('v90h');
   const v90vEl = $('v90v');
   const ampEl = $('ampSelect');
   const rateEl = $('montasjeHourlyRate');
+  const opphengRateEl = $('opphengRate');
+  const rateToggle = $('rateToggle');
 
   const meter = meterEl ? Number(meterEl.value || 0) : 0;
   const angles = (v90hEl ? Number(v90hEl.value || 0) : 0) + (v90vEl ? Number(v90vEl.value || 0) : 0);
   const amp = ampEl ? Number(ampEl.value || 0) : NaN;
+  const ratesUnlocked = rateToggle ? rateToggle.checked : true;
+  const montasjeLocked = !ratesUnlocked;
+  if (rateEl){
+    setInputLocked(rateEl, montasjeLocked);
+    if (montasjeLocked){
+      rateEl.value = String(DEFAULT_HOURLY_RATE);
+    }
+  }
   const hourlyRate = rateEl ? rateEl.value : DEFAULT_HOURLY_RATE;
 
-  const preview = calculateMontasje({ meter, angles, amp, hourlyRate });
+  const montasjePreview = calculateMontasje({ meter, angles, amp, hourlyRate });
+
+  let opphengRateForCalc = 0;
+  if (opphengRateEl){
+    const opphengLocked = !ratesUnlocked;
+    setInputLocked(opphengRateEl, opphengLocked);
+    if (!opphengRateEl.dataset.userOverride){
+      opphengRateEl.dataset.userOverride = 'false';
+    }
+    const hasAmp = Number.isFinite(amp) && amp > 0;
+    const opphengProfile = getOpphengRateRowForAmp(amp);
+    const defaultOpphengRate = hasAmp && opphengProfile ? opphengProfile.rate : 0;
+    const ampKey = hasAmp ? String(amp) : '';
+    const prevAmp = opphengRateEl.dataset.appliedAmp ?? '';
+    const ampChanged = ampKey !== prevAmp;
+
+    if (opphengLocked){
+      opphengRateEl.dataset.userOverride = 'false';
+    }
+
+    if (ampChanged){
+      opphengRateEl.dataset.appliedAmp = ampKey;
+      if (opphengLocked || opphengRateEl.dataset.userOverride !== 'true'){
+        if (hasAmp){
+          opphengRateEl.value = defaultOpphengRate ? String(defaultOpphengRate) : '';
+        }else{
+          opphengRateEl.value = '';
+        }
+      }
+    }
+
+    if (opphengLocked){
+      if (hasAmp){
+        opphengRateEl.value = defaultOpphengRate ? String(defaultOpphengRate) : '';
+      }else{
+        opphengRateEl.value = '';
+      }
+    }
+
+    opphengRateEl.placeholder = hasAmp ? (defaultOpphengRate ? String(defaultOpphengRate) : '') : '';
+
+    const rawValue = opphengRateEl.value;
+    const fallbackRate = hasAmp ? defaultOpphengRate : 0;
+    const sanitizedRate = sanitizeOpphengRate(rawValue, fallbackRate);
+
+    opphengRateEl.dataset.defaultRate = hasAmp ? String(defaultOpphengRate) : '';
+    opphengRateEl.dataset.appliedValue = String(sanitizedRate);
+    opphengRateEl.dataset.appliedAmp = ampKey;
+
+    if (!hasAmp && opphengRateEl.dataset.userOverride !== 'true'){
+      opphengRateEl.value = '';
+    }
+    if (!opphengLocked && ampChanged && opphengRateEl.dataset.userOverride !== 'true' && hasAmp){
+      opphengRateEl.value = sanitizedRate || sanitizedRate === 0 ? String(sanitizedRate) : '';
+    }
+
+    opphengRateForCalc = sanitizedRate;
+  }
+
+  const opphengPreview = calculateOpphengsmateriell({ meter, amp, ratePerMeter: opphengRateForCalc });
 
   const labelEl = $('montasjeProfileLabel');
   const perMeterEl = $('montasjeHoursPerMeter');
   const perAngleEl = $('montasjeHoursPerAngle');
   const totalHoursEl = $('montasjeTotalHours');
   const costEl = $('montasjePreviewCost');
+  const opphengRatePreviewEl = $('opphengPreviewRate');
+  const opphengCostPreviewEl = $('opphengPreviewCost');
+  const montasjeDetailEl = $('montasjeDetail');
+  const opphengDetailEl = $('opphengDetail');
 
-  const hasProfile = Boolean(preview.profile);
+  const hasProfile = Boolean(montasjePreview.profile);
 
   if (labelEl){
     if (hasProfile){
-      const ampTxt = Number.isFinite(preview.amp) ? `${fmtIntNO.format(preview.amp)}A` : '';
-      labelEl.textContent = ampTxt ? `Strømskinne ${ampTxt} (${preview.profile.label})` : `Strømskinne ${preview.profile.label}`;
+      const ampTxt = Number.isFinite(montasjePreview.amp) ? `${fmtIntNO.format(montasjePreview.amp)}A` : '';
+      labelEl.textContent = ampTxt ? `Strømskinne ${ampTxt} (${montasjePreview.profile.label})` : `Strømskinne ${montasjePreview.profile.label}`;
     }else{
       labelEl.textContent = 'Velg ampere for å hente montasjetider.';
     }
   }
   if (perMeterEl){
-    perMeterEl.textContent = hasProfile ? `${fmtNO.format(preview.profile.hoursPerMeter)} t/m` : '–';
+    perMeterEl.textContent = hasProfile ? `${fmtNO.format(montasjePreview.profile.hoursPerMeter)} t/m` : '–';
   }
   if (perAngleEl){
-    perAngleEl.textContent = hasProfile ? `${fmtNO.format(preview.profile.hoursPerAngle)} t/vinkel` : '–';
+    perAngleEl.textContent = hasProfile ? `${fmtNO.format(montasjePreview.profile.hoursPerAngle)} t/vinkel` : '–';
   }
   if (totalHoursEl){
-    totalHoursEl.textContent = hasProfile ? `${fmtNO.format(preview.totalHours)} t` : '–';
+    totalHoursEl.textContent = hasProfile ? `${fmtNO.format(montasjePreview.totalHours)} t` : '–';
   }
   if (costEl){
-    costEl.textContent = hasProfile ? `${fmtNO.format(preview.cost)} kr` : '–';
+    costEl.textContent = hasProfile ? `${fmtNO.format(montasjePreview.cost)} kr` : '–';
+  }
+  const hasOpphengAmp = Number.isFinite(opphengPreview.amp) && opphengPreview.amp > 0;
+  if (opphengRatePreviewEl){
+    opphengRatePreviewEl.textContent = hasOpphengAmp ? `${fmtNO.format(opphengPreview.ratePerMeter)} kr/m` : '–';
+  }
+  if (opphengCostPreviewEl){
+    opphengCostPreviewEl.textContent = hasOpphengAmp ? `${fmtNO.format(opphengPreview.cost)} kr` : '–';
+  }
+  if (montasjeDetailEl){
+    montasjeDetailEl.textContent = formatMontasjeDetail(montasjePreview);
+  }
+  if (opphengDetailEl){
+    opphengDetailEl.textContent = formatOpphengDetail(opphengPreview);
   }
 }
 
@@ -527,13 +1082,31 @@ if (pf.n1){
     amp: input.ampere,
     hourlyRate: input.montasjeSettings?.hourlyRate
   });
+  const oppheng = calculateOpphengsmateriell({
+    meter: input.meter,
+    amp: input.ampere,
+    ratePerMeter: input.montasjeSettings?.opphengRate
+  });
   const totalExMontasje = round2(subtotal + freight);
-  const total    = round2(totalExMontasje + montasje.cost);
-  return { bom, material, margin, subtotal, freight, montasje, totalExMontasje, total };
+  const total    = round2(totalExMontasje + montasje.cost + oppheng.cost);
+  return { bom, material, margin, subtotal, freight, montasje, oppheng, totalExMontasje, total };
 }
 
 // --- app ---
 let catalog=[];
+let isDirty = false;
+
+function markDirty(){
+  isDirty = true;
+  const st = $('status');
+  if (st) st.textContent = 'Beregn for å få inkludere endringer';
+}
+
+function markClean(){
+  isDirty = false;
+  const st = $('status');
+  if (st) st.textContent = 'OK';
+}
 window.addEventListener('DOMContentLoaded', async ()=>{
   try{
     ['meter','v90h','v90v','fbQty','boxQty'].forEach(id => $(id).value = '');
@@ -553,24 +1126,131 @@ window.addEventListener('DOMContentLoaded', async ()=>{
     $('meter').addEventListener('blur',  ()=>Math.ceil(Number($('meter').value||0)));
 
     const rateInput = $('montasjeHourlyRate');
+    const opphengInput = $('opphengRate');
+    const rateToggle = $('rateToggle');
     if (rateInput){
       if (!rateInput.value) rateInput.value = String(DEFAULT_HOURLY_RATE);
-      const syncRate = ()=>{ rateInput.value = String(sanitizeHourlyRate(rateInput.value)); updateMontasjePreview(); };
-      rateInput.addEventListener('input', updateMontasjePreview);
+      const syncRate = ()=>{
+        rateInput.value = String(sanitizeHourlyRate(rateInput.value));
+        updateMontasjePreview();
+        markDirty();
+      };
+      rateInput.addEventListener('input', ()=>{
+        if (rateToggle && !rateToggle.checked) return;
+        updateMontasjePreview();
+        markDirty();
+      });
       rateInput.addEventListener('change', syncRate);
       rateInput.addEventListener('blur', syncRate);
+    }
+    if (opphengInput){
+      const sanitizeOpphengInput = (markDirtyAfter)=>{
+        if (rateToggle && !rateToggle.checked) return;
+        const raw = opphengInput.value;
+        const defaultRate = toNum(opphengInput.dataset.defaultRate);
+        const fallbackRate = Number.isFinite(defaultRate) ? defaultRate : 0;
+        const sanitized = sanitizeOpphengRate(raw, fallbackRate);
+        if (!(sanitized === fallbackRate && fallbackRate === 0 && raw.trim()==='')){
+          opphengInput.value = (sanitized || sanitized === 0) ? String(sanitized) : '';
+        }else{
+          opphengInput.value = '';
+        }
+        opphengInput.dataset.appliedValue = String(sanitized);
+        opphengInput.dataset.userOverride = sanitized !== fallbackRate ? 'true' : 'false';
+        updateMontasjePreview();
+        if (markDirtyAfter) markDirty();
+      };
+      opphengInput.addEventListener('input', ()=>{
+        if (rateToggle && !rateToggle.checked) return;
+        opphengInput.dataset.userOverride = 'true';
+        updateMontasjePreview();
+        markDirty();
+      });
+      opphengInput.addEventListener('change', ()=>sanitizeOpphengInput(true));
+      opphengInput.addEventListener('blur', ()=>sanitizeOpphengInput(false));
+    }
+    if (rateToggle){
+      rateToggle.checked = false;
+      const applyRateLock = (markDirtyAfter)=>{
+        const locked = !rateToggle.checked;
+        setInputLocked(rateInput, locked);
+        if (locked && rateInput){
+          rateInput.value = String(DEFAULT_HOURLY_RATE);
+        }
+        if (opphengInput){
+          setInputLocked(opphengInput, locked);
+          if (locked){
+            opphengInput.dataset.userOverride = 'false';
+            opphengInput.value = '';
+          }
+        }
+        updateMontasjePreview();
+        if (markDirtyAfter) markDirty();
+      };
+      rateToggle.addEventListener('change', ()=>applyRateLock(true));
+      applyRateLock(false);
+    }else{
+      setInputLocked(rateInput, false);
+      if (opphengInput) setInputLocked(opphengInput, false);
     }
     ['meter','v90h','v90v'].forEach(id=>{
       const el = $(id);
       if (!el) return;
-      el.addEventListener('input', updateMontasjePreview);
-      el.addEventListener('change', updateMontasjePreview);
+      el.addEventListener('input', ()=>{ updateMontasjePreview(); markDirty(); });
+      el.addEventListener('change', ()=>{ updateMontasjePreview(); markDirty(); });
     });
     const ampSelEl = $('ampSelect');
     if (ampSelEl){
       ampSelEl.addEventListener('change', updateMontasjePreview);
     }
+    // Sett dist til 'Nei' hvis tom, både ved last og når feltet forlates
+    const distEl = $('dist');
+    if (distEl){
+      const ensureDist = ()=>{ if (!distEl.value) distEl.value = 'Nei'; };
+      ensureDist();
+      distEl.addEventListener('blur', ensureDist);
+    }
     refreshUIBySeries();
+
+    const frSel = document.getElementById('freightRate');
+    if (frSel){
+      frSel.addEventListener('change', ()=>{
+        if (!lastCalc) return;
+        const rate = Number(frSel.value || 0.10);
+        const freight = round2((lastCalc.subtotal || 0) * rate);
+        const totalEx = round2((lastCalc.subtotal || 0) + freight);
+        const montasjeCost = round2(lastCalc.montasje?.cost || 0);
+        const opphengCost = round2(lastCalc.oppheng?.cost || 0);
+        const totalInclMontasje = round2(totalEx + montasjeCost);
+        const total = round2(totalInclMontasje + opphengCost);
+        const freightEl = $('freight');
+        if (freightEl) freightEl.textContent = fmtNO.format(freight);
+        const totalExEl = $('totalExMontasje');
+        if (totalExEl) totalExEl.textContent = fmtNO.format(totalEx);
+        const totalInclEl = document.getElementById('totalInclMontasje');
+        if (totalInclEl) totalInclEl.textContent = fmtNO.format(totalInclMontasje);
+        const totalEl = $('total');
+        if (totalEl) totalEl.textContent = fmtNO.format(total);
+        lastCalc.freight = freight;
+        lastCalc.totalExMontasje = totalEx;
+        lastCalc.totalInclMontasje = totalInclMontasje;
+        lastCalc.total = total;
+      });
+    }
+
+    // Markér status som "Oppdater..." ved endringer i parametere
+    const dirtySelectors = [
+      '#series','#dist','#meter','#v90h','#v90v','#ampSelect','#ledere',
+      '#startEl','#sluttEl','#fbQty','#boxQty','#boxSel'
+    ];
+    dirtySelectors.forEach(sel=>{
+      const el = document.querySelector(sel);
+      if (!el) return;
+      if (el.dataset.markDirtyBound) return;
+      el.addEventListener('input', markDirty);
+      el.addEventListener('change', markDirty);
+      el.dataset.markDirtyBound = '1';
+    });
 
   function enhanceNumberSteppers() {
   // Finn alle number-felt vi bruker
@@ -632,27 +1312,6 @@ enhanceNumberSteppers();
 function refreshUIBySeries(){
   const series = $('series').value;
 
-  // oppdater totaler når frakt endres
-  const frSel = document.getElementById('freightRate');
-  if (frSel && !frSel.dataset.bound){
-    frSel.addEventListener('change', ()=>{
-      if (!lastCalc) return;
-      const rate = Number(frSel.value || 0.10);
-      const freight = round2(lastCalc.subtotal * rate);
-      const totalExMontasje = round2(lastCalc.subtotal + freight);
-      const total   = round2(totalExMontasje + (lastCalc.montasje?.cost || 0));
-      document.getElementById('freight').textContent = fmtNO.format(freight);
-      const totalExEl = document.getElementById('totalExMontasje');
-      if (totalExEl) totalExEl.textContent = fmtNO.format(totalExMontasje);
-      document.getElementById('total').textContent   = fmtNO.format(total);
-      const montasjeEl = document.getElementById('montasje');
-      if (montasjeEl && lastCalc.montasje) montasjeEl.textContent = fmtNO.format(lastCalc.montasje.cost);
-      const detailEl = document.getElementById('montasjeDetail');
-      if (detailEl) detailEl.textContent = lastCalc.montasjeDetail || '';
-    });
-    frSel.dataset.bound = '1';
-  }
-
   // XCM låser ledere
   if (series==='XCM'){ $('ledere').value='3F+N+PE'; $('ledere').disabled=true; }
   else { $('ledere').disabled=false; if(!$('ledere').value) $('ledere').value=''; }
@@ -670,7 +1329,7 @@ function refreshUIBySeries(){
 
   // Bokser
   const boxes = catalog.filter(r=>['plug_in_box','tap_off_box','bolt_on_box'].includes(r.type));
-  const labelOf = t => t==='plug_in_box'?'Plug-in box':t==='tap_off_box'?'Tap-off box':'B160 bolt-on box';
+  const labelOf = t => t==='plug_in_box'?'Plug-in box (plast)':t==='tap_off_box'?'Tap-off box (metall)':'Bolt-on box (metall)';
   const seen = new Set(); const opts = [];
   [...boxes.filter(b=>b.series===series), ...boxes.filter(b=>b.series!==series)].forEach(b=>{
     if (b.type==='bolt_on_box' && series==='XCM') return;
@@ -679,8 +1338,8 @@ function refreshUIBySeries(){
     const txt = `${deriveAmp(b)||''}A · ${labelOf(b.type)}`.replace(/^A · /,'');
     opts.push({v:`${b.type}|${deriveAmp(b)||''}`,t:txt});
   });
-  opts.sort((a,b)=>String(a.t).localeCompare(b.t,'no'));
-  $('boxSel').innerHTML = '<option value="">Auto</option>'+opts.map(o=>`<option value="${o.v}">${o.t}</option>`).join('');
+  opts.sort((a,b)=> (parseInt(a.t) || 1e9) - (parseInt(b.t) || 1e9) || String(a.t).localeCompare(b.t,'no'));
+  $('boxSel').innerHTML = '<option value="">Velg...</option>'+opts.map(o=>`<option value="${o.v}">${o.t}</option>`).join('');
 
   updateMontasjePreview();
 }
@@ -699,10 +1358,16 @@ function askExpansionIfNeeded(meter){
 
 // beregn
 $('calcBtn').addEventListener('click', async ()=>{
+  if (!authState.loggedIn){
+    const statusEl = $('status');
+    if (statusEl) statusEl.textContent = 'Logg inn for \u00E5 beregne.';
+    return;
+  }
   try{
     if (!catalog.length) throw new Error('Ingen varer i katalog.');
 
     const series = $('series').value;
+    if (!$('dist').value) { $('dist').value = 'Nei'; }
     const dist   = ($('dist').value==='Ja');
     const meter  = Math.ceil(Number($('meter').value || 0));
     const v90_h  = Number($('v90h').value || 0);
@@ -722,6 +1387,11 @@ $('calcBtn').addEventListener('click', async ()=>{
     if (!startEl) throw new Error('Velg startelement.');
     if (!sluttEl) throw new Error('Velg sluttelement.');
 
+    if (!projectState.currentProject || !projectState.currentCustomer){
+      const info = await ensureProjectInfo();
+      if (!info) return;
+    }
+
     const expansionYes = await askExpansionIfNeeded(meter);
     const amp = Number(ampSel);
     const rows = catalog.filter(r=>r.series===series);
@@ -735,27 +1405,43 @@ $('calcBtn').addEventListener('click', async ()=>{
       fbQty, boxQty, boxSel,
       expansionYes, freightRate, montasjeSettings
     });
-
     $('mat').textContent      = fmtNO.format(out.material);
     $('margin').textContent   = fmtNO.format(out.margin);
     $('subtotal').textContent = fmtNO.format(out.subtotal);
     $('freight').textContent  = fmtNO.format(out.freight);
     const montasjeEl = document.getElementById('montasje');
     if (montasjeEl) montasjeEl.textContent = fmtNO.format(out.montasje.cost);
+    const montasjeMarginVal = round2(out.montasje.cost * 0.20);
+    const montasjeMarginEl = document.getElementById('montasjeMargin');
+    if (montasjeMarginEl) montasjeMarginEl.textContent = fmtNO.format(montasjeMarginVal);
     const montasjeDetailText = formatMontasjeDetail(out.montasje);
     const montasjeDetailEl = document.getElementById('montasjeDetail');
     if (montasjeDetailEl) montasjeDetailEl.textContent = montasjeDetailText;
+    const opphengEl = document.getElementById('oppheng');
+    if (opphengEl) opphengEl.textContent = fmtNO.format(out.oppheng.cost);
+    const opphengDetailText = formatOpphengDetail(out.oppheng);
+    const opphengDetailEl = document.getElementById('opphengDetail');
+    if (opphengDetailEl) opphengDetailEl.textContent = opphengDetailText;
     const totalExEl = document.getElementById('totalExMontasje');
     if (totalExEl) totalExEl.textContent = fmtNO.format(out.totalExMontasje);
+    const totalInclMontasjeVal = round2(out.totalExMontasje + out.montasje.cost);
+    const totalInclMontasjeEl = document.getElementById('totalInclMontasje');
+    if (totalInclMontasjeEl) totalInclMontasjeEl.textContent = fmtNO.format(totalInclMontasjeVal);
     $('total').textContent    = fmtNO.format(out.total);
     lastCalc = {
       material: out.material,
       margin: out.margin,
       subtotal: out.subtotal,
+      freight: out.freight,
+      totalExMontasje: out.totalExMontasje,
+      totalInclMontasje: totalInclMontasjeVal,
       montasje: out.montasje,
-      montasjeDetail: montasjeDetailText
+      oppheng: out.oppheng,
+      montasjeDetail: montasjeDetailText,
+      opphengDetail: opphengDetailText,
+      total: out.total
     };
-    $('status').textContent = 'OK';
+    markClean();
 
     const tbody = document.querySelector('#bomTbl tbody');
     tbody.innerHTML = '';
@@ -765,6 +1451,7 @@ $('calcBtn').addEventListener('click', async ()=>{
       tbody.appendChild(tr);
     });
     document.getElementById('results').hidden = false;
+    updateProjectMetaDisplay();
 
     document.getElementById('exportCsv').onclick = ()=>{
       const header = ['code','type','series','ampere','ledere','antall','enhet','sum'];
@@ -792,10 +1479,30 @@ document.getElementById('resetBtn').addEventListener('click', ()=>{
 
   // bygg UI på nytt
   const rateInput = $('montasjeHourlyRate');
-  if (rateInput) rateInput.value = String(DEFAULT_HOURLY_RATE);
+  const rateToggle = $('rateToggle');
+  if (rateToggle) rateToggle.checked = false;
+  if (rateInput){
+    rateInput.value = String(DEFAULT_HOURLY_RATE);
+    setInputLocked(rateInput, true);
+  }
+  const opphengInput = $('opphengRate');
+  if (opphengInput){
+    opphengInput.value = '';
+    opphengInput.dataset.appliedValue = '';
+    opphengInput.dataset.userOverride = 'false';
+    opphengInput.dataset.defaultRate = '';
+    opphengInput.dataset.appliedAmp = '';
+    setInputLocked(opphengInput, true);
+  }
   refreshUIBySeries();
   updateMontasjePreview();
+  projectState.currentProject = '';
+  projectState.currentCustomer = '';
+  updateProjectMetaDisplay();
+  updateAuthUI();
   lastCalc = null;
+  isDirty = false;
 });
 
 });
+
