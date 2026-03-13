@@ -354,9 +354,9 @@ input[type="number"]::-webkit-inner-spin-button{
         <div class="addon-selectors" role="group" aria-label="Velg tillegg i totalsum">
           <label><input id="includeMontasje" type="checkbox" checked> Montasje</label>
           <label><input id="includeEngineering" type="checkbox" checked> Ingeniør</label>
-          <label><input id="includeOppheng" type="checkbox" checked> Opphengsmateriell + DG</label>
+          <label><input id="includeOppheng" type="checkbox" checked> Opphengsmateriell</label>
         </div>
-        <div class="total-item addon-total aligned-total-right"><strong>Totalsum valgte:</strong> <span id="selectedAddonTotal">0,00</span> NOK eks. mva</div>
+        <div class="total-item addon-total aligned-total-right"><strong>Total valgte:</strong> <span id="selectedAddonTotal">0,00</span> NOK eks. mva</div>
       </div>
     </div>
     <h3>BOM</h3>

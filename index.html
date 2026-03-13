@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="no">
 <head>
   <meta charset="utf-8" />
@@ -14,42 +14,8 @@
       --warning:#febe10; --placeholder:#6b7280;
     }
     header h1{margin:0 0 6px 0; color:var(--muted)}
-    
+
     .logo{display:block;width:180px;max-width:100%;height:auto;background:transparent;padding:0}
-    /* Ens bredde og spacing for alle felter, venstre→høyre */
-
-/* Skjul nettleserens små spinnere på number-felt */
-input[type="number"]{
-  appearance: textfield;      /* standard */
-  -moz-appearance: textfield; /* Firefox */
-}
-
-input[type="number"]::-webkit-outer-spin-button,
-input[type="number"]::-webkit-inner-spin-button{
-  -webkit-appearance: none;   /* Chrome / Edge / Safari */
-  margin: 0;
-}
-
-/* Stepper-wrapper */
-.stepper{ display:flex; align-items:stretch; gap:8px; }
-.stepper input[type="number"]{ flex:1 1 auto; height:44px; }
-.stepper .btn-step{ min-width:44px; width:44px; height:44px; padding:0; }
-
-/* Store, runde knapper i samme stil som select-pila */
-.btn-step{
-  min-width:44px; height:40px;
-  border:1px solid var(--input-border);
-  background:var(--input);
-  color:var(--text);
-  border-radius:10px;
-  font-size:18px; line-height:1; cursor:pointer;
-  display:flex; align-items:center; justify-content:center;
-  transition:transform .06s ease, background .15s ease, border-color .15s ease;
-}
-.btn-step:active{ transform:translateY(1px); }
-.btn-step:hover{ border-color:var(--accent-weak); }
-
-    /* modal */
     .modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,0.6);display:none;align-items:center;justify-content:center;z-index:50}
     .modal{background:var(--card);border:1px solid var(--card-border);border-radius:12px;padding:16px;min-width:320px;max-width:90vw}
     .modal h3{margin:0 0 8px 0}
@@ -57,9 +23,6 @@ input[type="number"]::-webkit-inner-spin-button{
     .actions{display:flex;gap:8px;justify-content:flex-end}
     .btn{padding:10px 14px;background:var(--accent);border:1px solid var(--accent);border-radius:10px;color:#fff;cursor:pointer}
     .btn.alt{background:var(--input);border-color:var(--input-border)}
-
-/* Totals styling centralized in styles.css */
-
   </style>
 </head>
 <body>
@@ -99,7 +62,7 @@ input[type="number"]::-webkit-inner-spin-button{
 
   <main class="app-views">
     <div class="view-toolbar">
-      <a href="calculator.html" class="btn alt nav-page-btn">Åpne kalkulator</a>
+      <a href="calculator.html" class="btn alt nav-page-btn">Åpne prisverktøy</a>
     </div>
 
     <section id="dashboardView" class="card dashboard-card">
@@ -122,7 +85,6 @@ input[type="number"]::-webkit-inner-spin-button{
     </section>
   </main>
 
-  <!-- Modal for ekspansjon -->
   <div id="expModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="expTitle">
     <div class="modal">
       <h3 id="expTitle">Er det sammenhengende 30 meter rett skinne?</h3>
@@ -134,7 +96,6 @@ input[type="number"]::-webkit-inner-spin-button{
     </div>
   </div>
 
-  <!-- Modal for innlogging -->
   <div id="loginModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="loginTitle">
     <div class="modal">
       <h3 id="loginTitle">Logg på</h3>
@@ -154,7 +115,6 @@ input[type="number"]::-webkit-inner-spin-button{
     </div>
   </div>
 
-  <!-- Modal for prosjektinformasjon -->
   <div id="projectModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="projectTitle">
     <div class="modal">
       <h3 id="projectTitle">Prosjektinformasjon</h3>
