@@ -1,19 +1,48 @@
-// v2 + v2.1, XCP-S/XCM, distribusjon/feeder, avtappingsbokser, ekspansjon-modal >30 m
+﻿// v2 + v2.1, XCP-S/XCM, distribusjon/feeder, avtappingsbokser, ekspansjon-modal >30 m
 
 const RAW_CSV_PATHS = [
   'data/busbar-webapp-embedded-v2.csv',
-  'data/busbar-webapp-embedded-v2.1.csv'
+  'data/busbar-webapp-embedded-v2.1.csv',
+  'data/XAP_busbar_prisliste_ekstrakt_5W_clean.csv'
 ];
+const XAP_SERIES = 'XAP-B';
+const COMPARISON_ELIGIBLE_SERIES = Object.freeze(['XCM','XCP-S']);
+const ENABLE_XAP_COMPARISON = false; // Pauset inntil videre
+const LEDERE_LOCKED_SERIES = Object.freeze(['XCM', XAP_SERIES]);
+const CRT_FEED_ALLOWED_SERIES = Object.freeze(['XCP-S', XAP_SERIES]);
+const seriesLocksLedere = series => LEDERE_LOCKED_SERIES.includes(series);
+const seriesSupportsCrtFeed = series => CRT_FEED_ALLOWED_SERIES.includes(series);
+const shouldCompareXap = series => ENABLE_XAP_COMPARISON && COMPARISON_ELIGIBLE_SERIES.includes(series);
+const USD_TO_NOK_RATE = 10.95; // Dagens USD→NOK-kurs (2025-10-27)
+let usdToNokRate = USD_TO_NOK_RATE;
+const marketDataState = { snapshot: null };
+const MARKET_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
+const MARKET_STATUS_DEFAULT = 'Oppdateres hvert 5. minutt';
+const MARKET_STATUS_MANUAL = 'Oppdateres manuelt';
+const marketTickerState = { timerId: null };
+const DEFAULT_MARGIN_RATE = 0.20;
+const MAX_MARGIN_RATE = 0.95;
 let lastCalc = null; // delsummer for live frakt-oppdatering
+let lastCalcInput = null;
 const AUTH_PASSWORD = 'busbar';
+const AUTH_SESSION_KEY = 'busbar.auth.session.v1';
 let authState = { loggedIn: false, username: '' };
+const PROJECTS_STORAGE_KEY = 'busbar.projects.v1';
 const projectState = {
+  currentProjectId: null,
   currentProject: '',
   currentCustomer: '',
+  currentLineNumber: '',
   projectHistory: [],
-  customerHistory: []
+  customerHistory: [],
+  projects: [],
+  expandedProjectId: null
 };
-let projectModalResolve = null;
+const projectModalState = {
+  mode: 'create',
+  projectId: null
+};
+let lastEmailPayload = null;
 
 // --- CSV ---
 function parseCSVAuto(text){
@@ -43,15 +72,502 @@ function parseCSVAuto(text){
 
 // --- utils ---
 const $ = id=>document.getElementById(id);
+const hasDashboardUI = ()=>Boolean($('dashboardView') && $('projectList'));
+const hasCalculatorUI = ()=>Boolean($('calcBtn') && $('series'));
+
+function buildAppUrl(fileName, params = {}){
+  const url = new URL(fileName, window.location.href);
+  Object.entries(params).forEach(([key, value])=>{
+    if (value === undefined || value === null || value === ''){
+      return;
+    }
+    url.searchParams.set(key, String(value));
+  });
+  return url;
+}
+
+function goToDashboard(params = {}){
+  window.location.href = buildAppUrl('index.html', params).toString();
+}
+
+function goToCalculator(params = {}){
+  window.location.href = buildAppUrl('calculator.html', params).toString();
+}
 const round2 = n=>Math.round(n*100)/100;
 const fmtNO = new Intl.NumberFormat('no-NO', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fmtIntNO = new Intl.NumberFormat('no-NO', { maximumFractionDigits: 0 });
+const fmtFxNO = new Intl.NumberFormat('no-NO', { minimumFractionDigits: 4, maximumFractionDigits: 4 });
+const fmtTimestampNO = new Intl.DateTimeFormat('no-NO', { dateStyle: 'short', timeStyle: 'short' });
+const fmtPercentNO = new Intl.NumberFormat('no-NO', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+let currentMarginRate = DEFAULT_MARGIN_RATE;
+let currentMontasjeMarginRate = DEFAULT_MARGIN_RATE;
+let currentEngineeringMarginRate = DEFAULT_MARGIN_RATE;
+let currentDgModalTarget = 'material';
 const toNum = x => {
   if (x===undefined || x===null) return NaN;
   const v = Number(String(x).replace(/\s/g,'').replace(',','.'));
   return Number.isFinite(v) ? v : NaN;
 };
 function pick(row, names){ for (const n of names){ if (n in row && row[n]!=='' && row[n]!==undefined) return row[n]; } return ''; }
+
+function convertUsdToNok(value){
+  if (!Number.isFinite(value)) return 0;
+  return round2(value * usdToNokRate);
+}
+
+function deepClone(value){
+  if (value === null || value === undefined) return value;
+  if (typeof structuredClone === 'function'){
+    try{
+      return structuredClone(value);
+    }catch(_err){
+      /* fallback below */
+    }
+  }
+  try{
+    return JSON.parse(JSON.stringify(value));
+  }catch(_err){
+    return value;
+  }
+}
+
+function normalizeMarginRate(value, fallback = DEFAULT_MARGIN_RATE){
+  const raw = Number(value);
+  if (!Number.isFinite(raw)) return fallback;
+  const asRate = raw > 1 ? raw / 100 : raw;
+  if (!Number.isFinite(asRate)) return fallback;
+  if (asRate < 0) return 0;
+  if (asRate >= 1) return MAX_MARGIN_RATE;
+  return Math.min(MAX_MARGIN_RATE, asRate);
+}
+
+function marginFactorFromRate(rate){
+  return 1 - normalizeMarginRate(rate);
+}
+
+function resolveMarginRateFromData({ totals, input } = {}){
+  const fromInput = normalizeMarginRate(input?.marginRate, NaN);
+  if (Number.isFinite(fromInput)) return fromInput;
+  const fromTotals = normalizeMarginRate(totals?.marginRate, NaN);
+  if (Number.isFinite(fromTotals)) return fromTotals;
+  const material = Number(totals?.material);
+  const subtotal = Number(totals?.subtotal);
+  if (Number.isFinite(material) && Number.isFinite(subtotal) && subtotal > 0){
+    return normalizeMarginRate(1 - material / subtotal, DEFAULT_MARGIN_RATE);
+  }
+  return DEFAULT_MARGIN_RATE;
+}
+
+function resolveDgRate(fromInput, fromTotals, fallback = DEFAULT_MARGIN_RATE){
+  const inputRate = normalizeMarginRate(fromInput, NaN);
+  if (Number.isFinite(inputRate)) return inputRate;
+  const totalsRate = normalizeMarginRate(fromTotals, NaN);
+  if (Number.isFinite(totalsRate)) return totalsRate;
+  return fallback;
+}
+
+function updateDgLabel(labelId, rate){
+  const normalizedRate = normalizeMarginRate(rate, DEFAULT_MARGIN_RATE);
+  const percentTxt = fmtPercentNO.format(normalizedRate * 100);
+  const labelEl = $(labelId);
+  if (labelEl){
+    labelEl.textContent = `DG ${percentTxt} %:`;
+  }
+}
+
+function updateMarginUI(){
+  updateDgLabel('marginLabel', currentMarginRate);
+  updateDgLabel('montasjeDgLabel', currentMontasjeMarginRate);
+  updateDgLabel('engineeringDgLabel', currentEngineeringMarginRate);
+  const marginBtn = $('marginConfigBtn');
+  if (marginBtn){
+    marginBtn.textContent = 'Endre';
+  }
+  const montasjeBtn = $('montasjeDgConfigBtn');
+  if (montasjeBtn){
+    montasjeBtn.textContent = 'Endre';
+  }
+  const engineeringBtn = $('engineeringDgConfigBtn');
+  if (engineeringBtn){
+    engineeringBtn.textContent = 'Endre';
+  }
+}
+
+function setCurrentMarginRate(rate){
+  currentMarginRate = normalizeMarginRate(rate, DEFAULT_MARGIN_RATE);
+  updateMarginUI();
+  return currentMarginRate;
+}
+
+function setCurrentMontasjeMarginRate(rate){
+  currentMontasjeMarginRate = normalizeMarginRate(rate, DEFAULT_MARGIN_RATE);
+  updateMarginUI();
+  return currentMontasjeMarginRate;
+}
+
+function setCurrentEngineeringMarginRate(rate){
+  currentEngineeringMarginRate = normalizeMarginRate(rate, DEFAULT_MARGIN_RATE);
+  updateMarginUI();
+  return currentEngineeringMarginRate;
+}
+
+function calculateSelectedAddonTotal(calc){
+  if (!calc) return { base: 0, total: 0 };
+  const baseTotal = round2(Number(calc.totalExMontasje) || 0);
+  const includeMontasje = Boolean($('includeMontasje')?.checked);
+  const includeEngineering = Boolean($('includeEngineering')?.checked);
+  const includeOppheng = Boolean($('includeOppheng')?.checked);
+  const montasjeTotal = Number(calc.totalInclMontasje);
+  const engineeringTotal = Number(calc.totalInclEngineering);
+  const opphengTotal = Number(calc.total);
+  let sum = baseTotal;
+  if (includeMontasje && Number.isFinite(montasjeTotal)) sum += montasjeTotal;
+  if (includeEngineering && Number.isFinite(engineeringTotal)) sum += engineeringTotal;
+  if (includeOppheng && Number.isFinite(opphengTotal)) sum += opphengTotal;
+  return { base: baseTotal, total: round2(sum) };
+}
+
+function updateSelectedAddonTotalUI(){
+  const totalEl = $('selectedAddonTotal');
+  if (!totalEl) return;
+  const sum = calculateSelectedAddonTotal(lastCalc);
+  totalEl.textContent = fmtNO.format(Number.isFinite(sum.total) ? sum.total : 0);
+}
+
+function calculateDgPricing(baseCost, dgRate){
+  const base = round2(Number(baseCost) || 0);
+  const normalizedRate = normalizeMarginRate(dgRate, DEFAULT_MARGIN_RATE);
+  const factor = marginFactorFromRate(normalizedRate);
+  if (!(factor > 0)){
+    throw new Error('DG-faktor må være større enn 0.');
+  }
+  const totalWithDg = round2(base / factor);
+  const dg = round2(totalWithDg - base);
+  return { base, dgRate: normalizedRate, dg, totalWithDg };
+}
+
+function calculateTotalsFromMaterial({
+  material,
+  marginRate,
+  freightRate,
+  montasjeCost = 0,
+  montasjeMarginRate = DEFAULT_MARGIN_RATE,
+  engineeringCost = 0,
+  engineeringMarginRate = DEFAULT_MARGIN_RATE,
+  opphengCost = 0
+}){
+  const normalizedMarginRate = normalizeMarginRate(marginRate, DEFAULT_MARGIN_RATE);
+  const factor = marginFactorFromRate(normalizedMarginRate);
+  if (!(factor > 0)){
+    throw new Error('DG-faktor må være større enn 0.');
+  }
+  const safeMaterial = round2(Number(material) || 0);
+  const safeFreightRate = Number(freightRate);
+  const appliedFreightRate = Number.isFinite(safeFreightRate) ? safeFreightRate : 0;
+  const subtotal = round2(safeMaterial / factor);
+  const margin = round2(subtotal - safeMaterial);
+  const freight = round2(safeMaterial * appliedFreightRate);
+  const totalExMontasje = round2(subtotal + freight);
+  const montasjePricing = calculateDgPricing(montasjeCost, montasjeMarginRate);
+  const engineeringPricing = calculateDgPricing(engineeringCost, engineeringMarginRate);
+  const totalInclMontasje = round2(montasjePricing.totalWithDg);
+  const totalInclEngineering = round2(engineeringPricing.totalWithDg);
+  const total = round2(Number(opphengCost) || 0);
+  return {
+    material: safeMaterial,
+    marginRate: normalizedMarginRate,
+    marginFactor: factor,
+    freightRate: appliedFreightRate,
+    margin,
+    montasjeMarginRate: montasjePricing.dgRate,
+    montasjeMargin: montasjePricing.dg,
+    montasjeTotalWithDg: montasjePricing.totalWithDg,
+    engineeringMarginRate: engineeringPricing.dgRate,
+    engineeringMargin: engineeringPricing.dg,
+    engineeringTotalWithDg: engineeringPricing.totalWithDg,
+    subtotal,
+    freight,
+    totalExMontasje,
+    totalInclMontasje,
+    totalInclEngineering,
+    total
+  };
+}
+
+function recalcLastTotalsFromCurrentRates(){
+  if (!lastCalc) return;
+  const rate = Number(document.getElementById('freightRate')?.value ?? lastCalcInput?.freightRate ?? 0.10);
+  const recalculated = calculateTotalsFromMaterial({
+    material: Number(lastCalc.material) || 0,
+    marginRate: currentMarginRate,
+    freightRate: rate,
+    montasjeCost: Number(lastCalc.montasje?.cost) || 0,
+    montasjeMarginRate: currentMontasjeMarginRate,
+    engineeringCost: Number(lastCalc.engineering?.cost) || 0,
+    engineeringMarginRate: currentEngineeringMarginRate,
+    opphengCost: Number(lastCalc.oppheng?.cost) || 0
+  });
+  const setText = (id, value)=>{
+    const el = $(id);
+    if (!el) return;
+    el.textContent = fmtNO.format(Number(value) || 0);
+  };
+  setText('margin', recalculated.margin);
+  setText('subtotal', recalculated.subtotal);
+  setText('freight', recalculated.freight);
+  setText('totalExMontasje', recalculated.totalExMontasje);
+  setText('montasjeMargin', recalculated.montasjeMargin);
+  setText('engineeringMargin', recalculated.engineeringMargin);
+  setText('totalInclMontasje', recalculated.totalInclMontasje);
+  setText('totalInclEngineering', recalculated.totalInclEngineering);
+  setText('total', recalculated.total);
+  Object.assign(lastCalc, {
+    marginRate: recalculated.marginRate,
+    marginFactor: recalculated.marginFactor,
+    margin: recalculated.margin,
+    montasjeMarginRate: recalculated.montasjeMarginRate,
+    montasjeMargin: recalculated.montasjeMargin,
+    engineeringMarginRate: recalculated.engineeringMarginRate,
+    engineeringMargin: recalculated.engineeringMargin,
+    subtotal: recalculated.subtotal,
+    freight: recalculated.freight,
+    totalExMontasje: recalculated.totalExMontasje,
+    totalInclMontasje: recalculated.totalInclMontasje,
+    totalInclEngineering: recalculated.totalInclEngineering,
+    total: recalculated.total
+  });
+  if (lastCalcInput){
+    lastCalcInput.marginRate = recalculated.marginRate;
+    lastCalcInput.freightRate = recalculated.freightRate;
+    lastCalcInput.montasjeMarginRate = recalculated.montasjeMarginRate;
+    lastCalcInput.engineeringMarginRate = recalculated.engineeringMarginRate;
+  }
+  if (lastEmailPayload?.inputs){
+    lastEmailPayload.inputs.marginRate = recalculated.marginRate;
+    lastEmailPayload.inputs.freightRate = recalculated.freightRate;
+    lastEmailPayload.inputs.montasjeMarginRate = recalculated.montasjeMarginRate;
+    lastEmailPayload.inputs.engineeringMarginRate = recalculated.engineeringMarginRate;
+  }
+  if (lastEmailPayload?.totals){
+    lastEmailPayload.totals.marginRate = recalculated.marginRate;
+    lastEmailPayload.totals.margin = recalculated.margin;
+    lastEmailPayload.totals.montasjeMarginRate = recalculated.montasjeMarginRate;
+    lastEmailPayload.totals.montasjeMargin = recalculated.montasjeMargin;
+    lastEmailPayload.totals.engineeringMarginRate = recalculated.engineeringMarginRate;
+    lastEmailPayload.totals.engineeringMargin = recalculated.engineeringMargin;
+    lastEmailPayload.totals.subtotal = recalculated.subtotal;
+    lastEmailPayload.totals.freight = recalculated.freight;
+    lastEmailPayload.totals.totalExMontasje = recalculated.totalExMontasje;
+    lastEmailPayload.totals.totalInclMontasje = recalculated.totalInclMontasje;
+    lastEmailPayload.totals.totalInclEngineering = recalculated.totalInclEngineering;
+    lastEmailPayload.totals.total = recalculated.total;
+  }
+  updateSelectedAddonTotalUI();
+}
+
+function getDgModalTitleByTarget(target){
+  if (target === 'montasje') return 'Endre DG for montasje';
+  if (target === 'engineering') return 'Endre DG for ingeniør';
+  return 'Endre DG for material';
+}
+
+function getCurrentDgRateByTarget(target){
+  if (target === 'montasje') return currentMontasjeMarginRate;
+  if (target === 'engineering') return currentEngineeringMarginRate;
+  return currentMarginRate;
+}
+
+function setCurrentDgRateByTarget(target, rate){
+  if (target === 'montasje'){
+    return setCurrentMontasjeMarginRate(rate);
+  }
+  if (target === 'engineering'){
+    return setCurrentEngineeringMarginRate(rate);
+  }
+  return setCurrentMarginRate(rate);
+}
+
+function openMarginModal(target = 'material'){
+  currentDgModalTarget = target;
+  const modal = $('marginModal');
+  if (!modal) return;
+  const inputEl = $('marginPercentInput');
+  const errorEl = $('marginError');
+  const titleEl = $('marginTitle');
+  if (errorEl) errorEl.textContent = '';
+  if (titleEl){
+    titleEl.textContent = getDgModalTitleByTarget(currentDgModalTarget);
+  }
+  if (inputEl){
+    inputEl.value = String(round2(getCurrentDgRateByTarget(currentDgModalTarget) * 100));
+    inputEl.focus();
+    const len = inputEl.value.length;
+    try{
+      inputEl.setSelectionRange(0, len);
+    }catch(_err){}
+  }
+  modal.style.display = 'flex';
+}
+
+function closeMarginModal(){
+  const modal = $('marginModal');
+  if (!modal) return;
+  modal.style.display = 'none';
+  const errorEl = $('marginError');
+  if (errorEl) errorEl.textContent = '';
+}
+
+function submitMarginModal(){
+  const inputEl = $('marginPercentInput');
+  const errorEl = $('marginError');
+  const parsed = Number(String(inputEl?.value ?? '').trim().replace(',','.'));
+  if (!Number.isFinite(parsed)){
+    if (errorEl) errorEl.textContent = 'Oppgi en gyldig DG i prosent.';
+    if (inputEl) inputEl.focus();
+    return;
+  }
+  const nextRate = parsed / 100;
+  if (!Number.isFinite(nextRate) || nextRate < 0 || nextRate > MAX_MARGIN_RATE){
+    if (errorEl) errorEl.textContent = 'DG må være mellom 0 og 95 %.';
+    if (inputEl) inputEl.focus();
+    return;
+  }
+  setCurrentDgRateByTarget(currentDgModalTarget, nextRate);
+  if (lastCalc){
+    recalcLastTotalsFromCurrentRates();
+  }
+  closeMarginModal();
+}
+
+// --- market data ---
+function setMarketStatus(message, isError){
+  const statusEl = $('marketStatus');
+  if (!statusEl) return;
+  statusEl.textContent = message || '';
+  statusEl.classList.toggle('error', Boolean(isError && message));
+}
+
+function formatMarketTimestamp(value){
+  if (!value) return '--';
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return '--';
+  try{
+    return fmtTimestampNO.format(date);
+  }catch(_err){
+    return date.toLocaleString('no-NO');
+  }
+}
+
+function applyMarketSnapshot(snapshot){
+  if (!snapshot) return;
+  marketDataState.snapshot = snapshot;
+  const aluminium = snapshot.aluminium || {};
+  const fx = snapshot.fx || {};
+
+  const alEl = $('marketAlPrice');
+  const alPrice = Number(aluminium.price);
+  if (alEl){
+    alEl.textContent = Number.isFinite(alPrice) ? fmtNO.format(alPrice) : '--';
+  }
+  const alMetaEl = $('marketAlMeta');
+  if (alMetaEl){
+    const pieces = [];
+    if (aluminium.notation){
+      pieces.push(aluminium.notation);
+    } else {
+      const currency = aluminium.currency || 'USD';
+      const unit = aluminium.unit || 't';
+      pieces.push(`${currency}/${unit}`);
+    }
+    if (aluminium.symbol){
+      pieces.push(aluminium.symbol);
+    } else if (aluminium.source){
+      pieces.push(aluminium.source);
+    }
+    alMetaEl.textContent = pieces.filter(Boolean).join(' · ');
+  }
+
+  const usdRate = Number(fx.usdNok);
+  const usdEl = $('marketUsdNok');
+  if (usdEl){
+    usdEl.textContent = Number.isFinite(usdRate) ? fmtFxNO.format(usdRate) : '--';
+  }
+  const usdMetaEl = $('marketUsdMeta');
+  if (usdMetaEl){
+    usdMetaEl.textContent = fx.source ? `Kilde: ${fx.source}` : '';
+  }
+
+  const eurRate = Number(fx.eurNok);
+  const eurEl = $('marketEurNok');
+  if (eurEl){
+    eurEl.textContent = Number.isFinite(eurRate) ? fmtFxNO.format(eurRate) : '--';
+  }
+  const eurMetaEl = $('marketEurMeta');
+  if (eurMetaEl){
+    eurMetaEl.textContent = fx.source ? `Kilde: ${fx.source}` : '';
+  }
+
+  const updatedEl = $('marketUpdated');
+  if (updatedEl){
+    updatedEl.textContent = formatMarketTimestamp(snapshot.updatedAt);
+  }
+  const manualMode = snapshot.mode === 'static';
+  setMarketStatus(manualMode ? MARKET_STATUS_MANUAL : MARKET_STATUS_DEFAULT, false);
+  updateUsdRateFromMarket(snapshot);
+}
+
+async function refreshMarketData(){
+  if (!$('marketTicker')) return;
+  setMarketStatus('Oppdaterer...', false);
+  try{
+    const res = await fetch('/api/market-data', { cache:'no-store' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const payload = await res.json();
+    applyMarketSnapshot(payload);
+  }catch(err){
+    console.warn('Kunne ikke hente markedsdata', err);
+    setMarketStatus('Kunne ikke hente markedsdata', true);
+  }
+}
+
+function initMarketDataTicker(){
+  if (!$('marketTicker')) return;
+  refreshMarketData();
+  if (marketTickerState.timerId){
+    clearInterval(marketTickerState.timerId);
+  }
+  marketTickerState.timerId = window.setInterval(refreshMarketData, MARKET_REFRESH_INTERVAL_MS);
+}
+
+function loadAuthFromSession(){
+  if (typeof sessionStorage === 'undefined') return;
+  try{
+    const stored = sessionStorage.getItem(AUTH_SESSION_KEY);
+    if (!stored) return;
+    const parsed = JSON.parse(stored);
+    if (!parsed || parsed.loggedIn !== true) return;
+    const username = typeof parsed.username === 'string' ? parsed.username.trim() : '';
+    authState = { loggedIn: true, username };
+  }catch(err){
+    console.warn('Kunne ikke lese innloggingsstatus', err);
+  }
+}
+
+function persistAuthToSession(){
+  if (typeof sessionStorage === 'undefined') return;
+  try{
+    if (authState.loggedIn){
+      sessionStorage.setItem(AUTH_SESSION_KEY, JSON.stringify({
+        loggedIn: true,
+        username: authState.username || ''
+      }));
+      return;
+    }
+    sessionStorage.removeItem(AUTH_SESSION_KEY);
+  }catch(err){
+    console.warn('Kunne ikke lagre innloggingsstatus', err);
+  }
+}
 
 function updateAuthUI(){
   const calcBtn = $('calcBtn');
@@ -75,11 +591,12 @@ function updateAuthUI(){
 
   const statusEl = $('status');
   if (statusEl){
+    const loginMsg = 'Logg inn for \u00E5 beregne.';
     if (!authState.loggedIn){
       if (!statusEl.textContent){
-        statusEl.textContent = 'Logg inn for \u00E5 beregne.';
+        statusEl.textContent = loginMsg;
       }
-    } else if (statusEl.textContent === 'Logg inn for \u00E5 beregne.'){
+    } else if (statusEl.textContent === loginMsg){
       statusEl.textContent = '';
     }
   }
@@ -139,6 +656,7 @@ function handleLoginSubmit(){
     return;
   }
   authState = { loggedIn: true, username };
+  persistAuthToSession();
   hideLoginModal();
   updateAuthUI();
   const statusEl = $('status');
@@ -153,6 +671,7 @@ const logoutBtn = $('logoutBtn');
 if (logoutBtn){
   logoutBtn.addEventListener('click', ()=>{
     authState = { loggedIn: false, username: '' };
+    persistAuthToSession();
     hideLoginModal();
    updateAuthUI();
     const statusEl = $('status');
@@ -203,19 +722,156 @@ function addToHistory(list, value){
   }
 }
 
-function updateProjectMetaDisplay(){
-  const meta = $('projectMeta');
-  const nameEl = $('projectNameDisplay');
-  const customerEl = $('customerNameDisplay');
-  const editBtn = $('editProjectBtn');
-  const hasData = Boolean(projectState.currentProject && projectState.currentCustomer);
-  if (nameEl) nameEl.textContent = projectState.currentProject;
-  if (customerEl) customerEl.textContent = projectState.currentCustomer;
-  if (meta) meta.hidden = !hasData;
-  if (editBtn){
-    editBtn.hidden = !hasData;
-    editBtn.disabled = !hasData;
+function generateProjectId(){
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'){
+    return crypto.randomUUID();
   }
+  return `proj-${Date.now().toString(36)}-${Math.random().toString(16).slice(2, 10)}`;
+}
+
+function normalizeProject(raw){
+  if (!raw) return null;
+  const fallback = new Date().toISOString();
+  return {
+    id: raw.id || generateProjectId(),
+    name: String(raw.name || '').trim(),
+    customer: String(raw.customer || '').trim(),
+    createdAt: raw.createdAt || fallback,
+    updatedAt: raw.updatedAt || fallback,
+    lines: Array.isArray(raw.lines) ? raw.lines : []
+  };
+}
+
+function loadProjectsFromStorage(){
+  if (typeof localStorage === 'undefined') return [];
+  try{
+    const stored = localStorage.getItem(PROJECTS_STORAGE_KEY);
+    if (!stored) return [];
+    const parsed = JSON.parse(stored);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map(normalizeProject).filter(Boolean);
+  }catch(err){
+    console.warn('Kunne ikke lese prosjekter', err);
+    return [];
+  }
+}
+
+function saveProjectsToStorage(){
+  if (typeof localStorage === 'undefined') return;
+  try{
+    localStorage.setItem(PROJECTS_STORAGE_KEY, JSON.stringify(projectState.projects));
+  }catch(err){
+    console.warn('Kunne ikke lagre prosjekter', err);
+  }
+}
+
+function sortProjects(){
+  projectState.projects.sort((a,b)=>{
+    const aTime = new Date(a.updatedAt || a.createdAt || 0).getTime();
+    const bTime = new Date(b.updatedAt || b.createdAt || 0).getTime();
+    return bTime - aTime;
+  });
+}
+
+function getProjectById(id){
+  if (!id) return null;
+  return projectState.projects.find(p=>p.id === id) || null;
+}
+
+function hasActiveProject(){
+  return Boolean(projectState.currentProjectId && projectState.currentProject && projectState.currentCustomer);
+}
+
+function updateProjectHistories(){
+  projectState.projectHistory.length = 0;
+  projectState.customerHistory.length = 0;
+  projectState.projects.forEach(project=>{
+    addToHistory(projectState.projectHistory, project.name);
+    addToHistory(projectState.customerHistory, project.customer);
+  });
+}
+
+function setActiveProject(project){
+  const nextProject = typeof project === 'string' ? getProjectById(project) : project;
+  if (!nextProject){
+    clearActiveProject();
+    return;
+  }
+  projectState.currentProjectId = nextProject.id;
+  projectState.currentProject = nextProject.name;
+  projectState.currentCustomer = nextProject.customer;
+  addToHistory(projectState.projectHistory, nextProject.name);
+  addToHistory(projectState.customerHistory, nextProject.customer);
+  updateProjectMetaDisplay();
+  updateAuthUI();
+}
+
+function clearActiveProject(){
+  projectState.currentProjectId = null;
+  projectState.currentProject = '';
+  projectState.currentCustomer = '';
+  updateProjectMetaDisplay();
+  updateAuthUI();
+}
+
+function createProject(projectName, customerName){
+  const now = new Date().toISOString();
+  const project = {
+    id: generateProjectId(),
+    name: projectName,
+    customer: customerName,
+    createdAt: now,
+    updatedAt: now,
+    lines: []
+  };
+  projectState.projects.push(project);
+  sortProjects();
+  saveProjectsToStorage();
+  addToHistory(projectState.projectHistory, project.name);
+  addToHistory(projectState.customerHistory, project.customer);
+  renderProjectDashboard();
+  return project;
+}
+
+function updateProject(projectId, updates){
+  const target = getProjectById(projectId);
+  if (!target) return null;
+  target.name = updates.name;
+  target.customer = updates.customer;
+  target.updatedAt = new Date().toISOString();
+  sortProjects();
+  saveProjectsToStorage();
+  renderProjectDashboard();
+  if (projectState.currentProjectId === projectId){
+    projectState.currentProject = target.name;
+    projectState.currentCustomer = target.customer;
+    updateProjectMetaDisplay();
+    updateAuthUI();
+  }
+  addToHistory(projectState.projectHistory, target.name);
+  addToHistory(projectState.customerHistory, target.customer);
+  return target;
+}
+
+function updateProjectMetaDisplay(){
+  const hasData = hasActiveProject();
+  const nameNodes = document.querySelectorAll('[data-project-name]');
+  const customerNodes = document.querySelectorAll('[data-project-customer]');
+  const metaWrappers = document.querySelectorAll('[data-project-meta]');
+  const editButtons = document.querySelectorAll('[data-project-edit]');
+  nameNodes.forEach(el=>{
+    el.textContent = projectState.currentProject || '';
+  });
+  customerNodes.forEach(el=>{
+    el.textContent = projectState.currentCustomer || '';
+  });
+  metaWrappers.forEach(el=>{
+    el.hidden = !hasData;
+  });
+  editButtons.forEach(btn=>{
+    btn.hidden = !hasData;
+    btn.disabled = !hasData;
+  });
 }
 
 function hideSuggestions(listEl){
@@ -252,7 +908,9 @@ function updateProjectSubmitState(){
   submit.disabled = !(projectVal && customerVal);
 }
 
-function openProjectModal(){
+function openProjectModal(options = {}){
+  projectModalState.mode = options.mode || 'create';
+  projectModalState.projectId = options.projectId || null;
   const modal = $('projectModal');
   if (!modal) return;
   modal.style.display = 'flex';
@@ -260,8 +918,17 @@ function openProjectModal(){
   if (errorEl) errorEl.textContent = '';
   const projectInput = $('projectNameInput');
   const customerInput = $('customerNameInput');
+  const titleEl = $('projectTitle');
+  if (titleEl){
+    titleEl.textContent = projectModalState.mode === 'edit' ? 'Oppdater prosjekt' : 'Nytt prosjekt';
+  }
   if (projectInput){
-    projectInput.value = projectState.currentProject || '';
+    if (projectModalState.mode === 'edit'){
+      const existing = getProjectById(projectModalState.projectId);
+      projectInput.value = existing?.name || '';
+    } else {
+      projectInput.value = '';
+    }
     projectInput.focus();
     const len = projectInput.value.length;
     try{
@@ -271,7 +938,12 @@ function openProjectModal(){
     }
   }
   if (customerInput){
-    customerInput.value = projectState.currentCustomer || '';
+    if (projectModalState.mode === 'edit'){
+      const existing = getProjectById(projectModalState.projectId);
+      customerInput.value = existing?.customer || '';
+    } else {
+      customerInput.value = '';
+    }
   }
   updateProjectSubmitState();
 }
@@ -284,26 +956,801 @@ function closeProjectModal(){
   if (errorEl) errorEl.textContent = '';
   hideSuggestions($('projectSuggestions'));
   hideSuggestions($('customerSuggestions'));
+  projectModalState.mode = 'create';
+  projectModalState.projectId = null;
 }
 
-function persistProjectInfo(projectName, customerName){
-  projectState.currentProject = projectName;
-  projectState.currentCustomer = customerName;
-  addToHistory(projectState.projectHistory, projectName);
-  addToHistory(projectState.customerHistory, customerName);
+function persistProjectInfo(projectName, customerName, options = {}){
+  const trimmedName = projectName.trim();
+  const trimmedCustomer = customerName.trim();
+  if (options.projectId){
+    updateProject(options.projectId, { name: trimmedName, customer: trimmedCustomer });
+    setActiveProject(options.projectId);
+    return;
+  }
+  const created = createProject(trimmedName, trimmedCustomer);
+  setActiveProject(created);
+}
+
+function formatProjectTimestamp(value){
+  if (!value) return '-';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '-';
+  try{
+    return fmtTimestampNO.format(date);
+  }catch(_err){
+    return date.toLocaleString('no-NO');
+  }
+}
+
+function formatLineSummary(line){
+  if (!line) return '';
+  const input = line.inputs || {};
+  const parts = [];
+  if (input.series) parts.push(input.series);
+  const amp = Number(input.ampere ?? input.amp ?? line.ampere);
+  if (Number.isFinite(amp)) parts.push(`${fmtIntNO.format(amp)}A`);
+  const meter = Number(input.meter);
+  if (Number.isFinite(meter)) parts.push(`${fmtIntNO.format(meter)} meter`);
+  const v90h = Number(input.v90h ?? input.v90_h);
+  const v90v = Number(input.v90v ?? input.v90_v);
+  const totalAngles = (Number.isFinite(v90h) ? v90h : 0) + (Number.isFinite(v90v) ? v90v : 0);
+  if (totalAngles > 0) parts.push(`${fmtIntNO.format(totalAngles)} vinkler`);
+  const fbQty = Number(input.fbQty ?? input.fireBarrierQty);
+  if (Number.isFinite(fbQty) && fbQty > 0) parts.push(`Brann: ${fmtIntNO.format(fbQty)}`);
+  const boxQty = Number(input.boxQty);
+  if (Number.isFinite(boxQty) && boxQty > 0) parts.push(`Bokser: ${fmtIntNO.format(boxQty)}`);
+  if (input.ledere) parts.push(input.ledere);
+  return parts.join(' | ') || 'Ingen detaljer lagret';
+}
+
+function formatLineUpdatedText(line){
+  if (!line) return '';
+  const stamp = line.updatedAt || line.createdAt;
+  if (!stamp) return '';
+  return `Oppdatert ${formatProjectTimestamp(stamp)}`;
+}
+
+function resolveLineDisplayTotal(line){
+  const directTotal = Number(line?.selectedAddonTotal ?? line?.totals?.selectedAddonTotal);
+  if (Number.isFinite(directTotal)){
+    return round2(directTotal);
+  }
+  const totals = line?.totals || {};
+  const baseTotal = Number(totals.totalExMontasje);
+  if (!Number.isFinite(baseTotal)) return NaN;
+  const savedFlags = line?.selectedAddonConfig || totals.selectedAddonConfig || null;
+  const includeMontasje = savedFlags ? Boolean(savedFlags.includeMontasje) : true;
+  const includeEngineering = savedFlags ? Boolean(savedFlags.includeEngineering) : true;
+  const includeOppheng = savedFlags ? Boolean(savedFlags.includeOppheng) : true;
+  const montasjeTotal = Number(totals.totalInclMontasje);
+  const engineeringTotal = Number(totals.totalInclEngineering);
+  const opphengTotal = Number(totals.total);
+  let total = baseTotal;
+  if (includeMontasje && Number.isFinite(montasjeTotal)) total += montasjeTotal;
+  if (includeEngineering && Number.isFinite(engineeringTotal)) total += engineeringTotal;
+  if (includeOppheng && Number.isFinite(opphengTotal)) total += opphengTotal;
+  return round2(total);
+}
+
+function formatLineTotal(line){
+  const total = resolveLineDisplayTotal(line);
+  return Number.isFinite(total) ? `${fmtNO.format(total)} NOK` : 'Ingen sum';
+}
+
+function renderProjectDashboard(){
+  const listEl = $('projectList');
+  if (!listEl) return;
+  listEl.innerHTML = '';
+  if (!projectState.projects.length){
+    const empty = document.createElement('div');
+    empty.className = 'empty-state';
+    const text = document.createElement('p');
+    text.textContent = 'Ingen prosjekter er registrert ennå.';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn';
+    btn.dataset.action = 'create-project';
+    btn.textContent = 'Opprett nytt prosjekt';
+    empty.appendChild(text);
+    empty.appendChild(btn);
+    listEl.appendChild(empty);
+    projectState.expandedProjectId = null;
+    return;
+  }
+  const frag = document.createDocumentFragment();
+  projectState.projects.forEach(project=>{
+    const expanded = projectState.expandedProjectId === project.id;
+    const projectLines = Array.isArray(project.lines) ? project.lines : [];
+    const projectTotal = round2(projectLines.reduce((sum, line)=>{
+      const lineTotal = resolveLineDisplayTotal(line);
+      return Number.isFinite(lineTotal) ? sum + lineTotal : sum;
+    }, 0));
+    const row = document.createElement('section');
+    row.className = 'project-row';
+    if (expanded) row.classList.add('is-expanded');
+
+    const head = document.createElement('div');
+    head.className = 'project-row-head';
+    const titleWrap = document.createElement('div');
+    titleWrap.className = 'project-row-title';
+    const title = document.createElement('h3');
+    title.textContent = project.name || 'Uten navn';
+    const customer = document.createElement('p');
+    customer.textContent = project.customer ? `Kunde: ${project.customer}` : 'Kunde: -';
+    const created = document.createElement('p');
+    created.className = 'project-row-meta';
+    created.textContent = `Opprettet: ${formatProjectTimestamp(project.createdAt)}`;
+    const summary = document.createElement('p');
+    summary.className = 'project-row-meta';
+    const lineCount = projectLines.length;
+    summary.textContent = `Linjer: ${lineCount} | Totalsum linjer: ${fmtNO.format(projectTotal)} NOK`;
+    titleWrap.appendChild(title);
+    titleWrap.appendChild(customer);
+    titleWrap.appendChild(created);
+    titleWrap.appendChild(summary);
+
+    const actions = document.createElement('div');
+    actions.className = 'project-row-actions';
+
+    const detailBtn = document.createElement('button');
+    detailBtn.type = 'button';
+    detailBtn.className = 'btn alt';
+    detailBtn.dataset.projectDetail = project.id;
+    detailBtn.textContent = expanded ? 'Skjul linjer' : 'Vis linjer';
+    detailBtn.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+    const safeProjectId = String(project.id || '').replace(/[^A-Za-z0-9_-]/g,'');
+    const detailId = `project-detail-${safeProjectId || Math.random().toString(36).slice(2)}`;
+    detailBtn.setAttribute('aria-controls', detailId);
+
+    const newLineBtn = document.createElement('button');
+    newLineBtn.type = 'button';
+    newLineBtn.className = 'btn';
+    newLineBtn.dataset.projectNewline = project.id;
+    newLineBtn.textContent = 'Ny linje';
+
+    const openBtn = document.createElement('button');
+    openBtn.type = 'button';
+    openBtn.className = 'btn';
+    openBtn.dataset.projectOpen = project.id;
+    openBtn.textContent = 'Åpne kalkulator';
+
+    actions.appendChild(detailBtn);
+    actions.appendChild(newLineBtn);
+    actions.appendChild(openBtn);
+
+    head.appendChild(titleWrap);
+    head.appendChild(actions);
+    row.appendChild(head);
+
+    const detail = document.createElement('div');
+    detail.className = 'project-detail';
+    detail.id = detailId;
+    detail.hidden = !expanded;
+
+    const linesWrapper = document.createElement('div');
+    linesWrapper.className = 'project-detail-lines';
+    const lines = [...projectLines];
+    lines.sort((a,b)=>{
+      const aTime = new Date(a.updatedAt || a.createdAt || 0).getTime();
+      const bTime = new Date(b.updatedAt || b.createdAt || 0).getTime();
+      return bTime - aTime;
+    });
+    if (!lines.length){
+      const emptyLine = document.createElement('p');
+      emptyLine.className = 'project-line-empty';
+      emptyLine.textContent = 'Ingen lagrede linjer. Klikk «Ny linje» for å starte.';
+      linesWrapper.appendChild(emptyLine);
+    } else {
+      lines.forEach(line=>{
+        const lineBtn = document.createElement('button');
+        lineBtn.type = 'button';
+        lineBtn.className = 'project-line-row';
+        lineBtn.dataset.lineEdit = line.id;
+        lineBtn.dataset.projectId = project.id;
+
+        const nameSpan = document.createElement('span');
+        nameSpan.className = 'line-name';
+        nameSpan.textContent = line.lineNumber || 'Uten linjenummer';
+
+        const infoSpan = document.createElement('span');
+        infoSpan.className = 'line-info';
+        infoSpan.textContent = formatLineSummary(line);
+
+        const totalSpan = document.createElement('span');
+        totalSpan.className = 'line-total';
+        totalSpan.textContent = formatLineTotal(line);
+
+        const updatedSpan = document.createElement('span');
+        updatedSpan.className = 'line-updated';
+        updatedSpan.textContent = formatLineUpdatedText(line);
+
+        lineBtn.appendChild(nameSpan);
+        lineBtn.appendChild(infoSpan);
+        lineBtn.appendChild(totalSpan);
+        lineBtn.appendChild(updatedSpan);
+        linesWrapper.appendChild(lineBtn);
+      });
+    }
+    detail.appendChild(linesWrapper);
+    row.appendChild(detail);
+
+    frag.appendChild(row);
+  });
+  listEl.appendChild(frag);
+}
+
+function initProjectDashboard(){
+  projectState.projects = loadProjectsFromStorage();
+  sortProjects();
+  updateProjectHistories();
+  if (hasDashboardUI()){
+    showDashboardView({ clearSelection: true });
+  }
   updateProjectMetaDisplay();
+}
+
+function applyCalculatorQueryContext(){
+  if (!hasCalculatorUI()) return;
+  const params = new URLSearchParams(window.location.search);
+  const projectId = params.get('project');
+  const lineId = params.get('line');
+  const newLine = params.get('newLine') === '1';
+  if (!projectId) return;
+  const project = getProjectById(projectId);
+  if (!project) return;
+
+  setActiveProject(project);
+  projectState.expandedProjectId = project.id;
+  if (lineId){
+    openProjectLine(project.id, lineId);
+  } else if (newLine){
+    resetCalculatorForm({ preserveProject: true });
+    const statusEl = $('status');
+    if (statusEl) statusEl.textContent = 'Oppgi linjenummer for ny linje.';
+    const lineInput = $('lineNumberInput');
+    if (lineInput) lineInput.focus();
+  }
+
+  if (typeof history !== 'undefined' && history.replaceState){
+    const cleanUrl = new URL(window.location.href);
+    cleanUrl.search = '';
+    history.replaceState({}, '', cleanUrl.toString());
+  }
+}
+
+function handleProjectSelection(projectId){
+  const project = getProjectById(projectId);
+  if (!project) return;
+  if (!hasCalculatorUI()){
+    goToCalculator({ project: project.id });
+    return;
+  }
+  projectState.expandedProjectId = projectId;
+  renderProjectDashboard();
+  setActiveProject(project);
+  showCalculatorView();
+  resetCalculatorForm({ preserveProject: true });
   const statusEl = $('status');
-  if (statusEl && statusEl.textContent === 'Oppgi prosjektnavn og kunde.'){
+  if (
+    statusEl
+    && (
+      statusEl.textContent === 'Velg eller opprett et prosjekt for \u00E5 starte.'
+      || statusEl.textContent === 'Opprett nytt prosjekt for \u00E5 lagre linjen.'
+    )
+  ){
     statusEl.textContent = '';
   }
 }
 
-function resolveProjectModal(result){
-  if (projectModalResolve){
-    const resolve = projectModalResolve;
-    projectModalResolve = null;
-    resolve(result);
+function selectProjectDetail(projectId){
+  if (!projectId){
+    projectState.expandedProjectId = null;
+    renderProjectDashboard();
+    return;
   }
+  if (projectState.expandedProjectId === projectId){
+    projectState.expandedProjectId = null;
+    renderProjectDashboard();
+    return;
+  }
+  const project = getProjectById(projectId);
+  if (!project) return;
+  projectState.expandedProjectId = projectId;
+  setActiveProject(project);
+  renderProjectDashboard();
+}
+
+function startNewLineForProject(projectId){
+  const project = getProjectById(projectId);
+  if (!project) return;
+  if (!hasCalculatorUI()){
+    goToCalculator({ project: project.id, newLine: '1' });
+    return;
+  }
+  setActiveProject(project);
+  if (projectState.expandedProjectId !== projectId){
+    projectState.expandedProjectId = projectId;
+    renderProjectDashboard();
+  } else {
+    renderProjectDashboard();
+  }
+  resetCalculatorForm({ preserveProject: true });
+  showCalculatorView();
+  const lineInput = $('lineNumberInput');
+  if (lineInput){
+    lineInput.focus();
+  }
+  const statusEl = $('status');
+  if (statusEl) statusEl.textContent = 'Oppgi linjenummer for ny linje.';
+}
+
+function ensureOption(selectEl, value, label){
+  if (!selectEl) return;
+  if ([...selectEl.options].some(opt=>opt.value === value)) return;
+  const opt = document.createElement('option');
+  opt.value = value;
+  opt.textContent = label || value;
+  selectEl.appendChild(opt);
+}
+
+function applyInputsToCalculator(input){
+  if (!input) return;
+  const seriesEl = $('series');
+  if (seriesEl){
+    seriesEl.value = input.series || '';
+  }
+  refreshUIBySeries();
+  const distEl = $('dist');
+  if (distEl){
+    let distValue = 'Nei';
+    if (typeof input.dist === 'string'){
+      distValue = input.dist;
+    } else if (input.dist){
+      distValue = 'Ja';
+    }
+    distEl.value = distValue;
+  }
+  const setNumberValue = (id, value)=>{
+    const el = $(id);
+    if (!el) return;
+    if (value === undefined || value === null || Number.isNaN(value)){
+      el.value = '';
+      return;
+    }
+    el.value = String(value);
+  };
+  setNumberValue('meter', input.meter);
+  setNumberValue('v90h', input.v90_h ?? input.v90h);
+  setNumberValue('v90v', input.v90_v ?? input.v90v);
+  setNumberValue('fbQty', input.fbQty);
+  setNumberValue('boxQty', input.boxQty);
+  const ampEl = $('ampSelect');
+  if (ampEl){
+    const ampValue = Number(input.ampere);
+    if (Number.isFinite(ampValue)){
+      const ampStr = String(ampValue);
+      ensureOption(ampEl, ampStr, ampStr);
+      ampEl.value = ampStr;
+    } else {
+      ampEl.value = '';
+    }
+  }
+  const ledereEl = $('ledere');
+  if (ledereEl && !seriesLocksLedere(input.series || '')){
+    ledereEl.value = input.ledere || '';
+  }
+  const startEl = $('startEl');
+  if (startEl) startEl.value = input.startEl || '';
+  const sluttEl = $('sluttEl');
+  if (sluttEl){
+    const value = input.sluttEl || '';
+    if (!seriesSupportsCrtFeed(input.series) && value === 'crt_board_feed'){
+      sluttEl.value = '';
+    } else {
+      sluttEl.value = value;
+    }
+  }
+  const boxSel = $('boxSel');
+  if (boxSel){
+    const value = input.boxSel || '';
+    if (value && ![...boxSel.options].some(opt=>opt.value === value)){
+      ensureOption(boxSel, value, value);
+    }
+    boxSel.value = value;
+  }
+  const freightSelect = $('freightRate');
+  if (freightSelect){
+    const freightValue = Number(input.freightRate);
+    if (Number.isFinite(freightValue)){
+      const value = freightValue.toFixed(2);
+      ensureOption(freightSelect, value, `${Math.round(freightValue * 100)} % (lagret)`);
+      freightSelect.value = value;
+    }
+  }
+  setCurrentMarginRate(resolveMarginRateFromData({ input }));
+  setCurrentMontasjeMarginRate(resolveDgRate(input?.montasjeMarginRate, NaN, DEFAULT_MARGIN_RATE));
+  setCurrentEngineeringMarginRate(resolveDgRate(input?.engineeringMarginRate, NaN, DEFAULT_MARGIN_RATE));
+  const montasjeInput = $('montasjeHourlyRate');
+  const opphengInput = $('opphengRate');
+  const rateToggle = $('rateToggle');
+  if (input.montasjeSettings){
+    const hourlyRate = Number(input.montasjeSettings.hourlyRate);
+    if (montasjeInput && Number.isFinite(hourlyRate)){
+      montasjeInput.value = String(hourlyRate);
+    }
+    if (opphengInput){
+      const rate = Number(input.montasjeSettings.opphengRate);
+      opphengInput.value = Number.isFinite(rate) ? String(rate) : '';
+    }
+    if (rateToggle){
+      const custom = Number.isFinite(hourlyRate) && hourlyRate !== DEFAULT_HOURLY_RATE
+        || Number(input.montasjeSettings.opphengRate) > 0;
+      rateToggle.checked = custom;
+    }
+    const locked = !(rateToggle ? rateToggle.checked : true);
+    if (montasjeInput){
+      setInputLocked(montasjeInput, locked);
+      if (locked){
+        montasjeInput.value = String(DEFAULT_HOURLY_RATE);
+      }
+    }
+    if (opphengInput){
+      setInputLocked(opphengInput, locked);
+      if (locked){
+        opphengInput.value = '';
+      }
+    }
+  }
+  const engineeringInput = $('engineeringHourlyRate');
+  const engineeringToggle = $('engineeringRateToggle');
+  if (input.engineeringSettings){
+    const hourlyRate = Number(input.engineeringSettings.hourlyRate);
+    if (engineeringInput && Number.isFinite(hourlyRate)){
+      engineeringInput.value = String(hourlyRate);
+    }
+    if (engineeringToggle){
+      const custom = Number.isFinite(hourlyRate) && hourlyRate !== DEFAULT_ENGINEERING_HOURLY_RATE;
+      engineeringToggle.checked = custom;
+    }
+    const locked = !(engineeringToggle ? engineeringToggle.checked : true);
+    if (engineeringInput){
+      setInputLocked(engineeringInput, locked);
+      if (locked){
+        engineeringInput.value = String(DEFAULT_ENGINEERING_HOURLY_RATE);
+      }
+    }
+  } else {
+    if (engineeringToggle){
+      engineeringToggle.checked = false;
+    }
+    if (engineeringInput){
+      engineeringInput.value = String(DEFAULT_ENGINEERING_HOURLY_RATE);
+      setInputLocked(engineeringInput, true);
+    }
+  }
+  updateMontasjePreview();
+}
+
+function applySavedTotalsToUI(line){
+  if (!line || !line.totals) return;
+  const totals = line.totals;
+  const savedMarginRate = resolveMarginRateFromData({ totals, input: line.inputs });
+  const savedMontasjeMarginRate = resolveDgRate(line.inputs?.montasjeMarginRate, totals?.montasjeMarginRate, DEFAULT_MARGIN_RATE);
+  const savedEngineeringMarginRate = resolveDgRate(line.inputs?.engineeringMarginRate, totals?.engineeringMarginRate, DEFAULT_MARGIN_RATE);
+  setCurrentMarginRate(savedMarginRate);
+  setCurrentMontasjeMarginRate(savedMontasjeMarginRate);
+  setCurrentEngineeringMarginRate(savedEngineeringMarginRate);
+  const setText = (id, value)=>{
+    const el = $(id);
+    if (!el) return;
+    const num = Number(value);
+    el.textContent = Number.isFinite(num) ? fmtNO.format(num) : '--';
+  };
+  setText('mat', totals.material);
+  setText('margin', totals.margin);
+  setText('subtotal', totals.subtotal);
+  setText('freight', totals.freight);
+  setText('totalExMontasje', totals.totalExMontasje);
+  const montasjePricing = calculateDgPricing(totals.montasje?.cost, savedMontasjeMarginRate);
+  const fallbackTotalInclMontasje = round2(Number(montasjePricing.totalWithDg || 0));
+  setText('totalInclMontasje', totals.totalInclMontasje ?? fallbackTotalInclMontasje);
+  const engineeringPricing = calculateDgPricing(totals.engineering?.cost, savedEngineeringMarginRate);
+  const fallbackTotalInclEngineering = round2(Number(engineeringPricing.totalWithDg || 0));
+  setText('totalInclEngineering', totals.totalInclEngineering ?? fallbackTotalInclEngineering);
+  const fallbackOpphengTotal = round2(Number(totals.oppheng?.cost || 0));
+  const resolvedOpphengTotal = Number.isFinite(Number(totals.oppheng?.cost))
+    ? Number(totals.oppheng.cost)
+    : (totals.total ?? fallbackOpphengTotal);
+  setText('total', resolvedOpphengTotal);
+  const montasjeEl = $('montasje');
+  if (montasjeEl && totals.montasje){
+    const cost = Number(totals.montasje.cost);
+    montasjeEl.textContent = Number.isFinite(cost) ? fmtNO.format(cost) : '--';
+  }
+  const opphengEl = $('oppheng');
+  if (opphengEl && totals.oppheng){
+    const cost = Number(totals.oppheng.cost);
+    opphengEl.textContent = Number.isFinite(cost) ? fmtNO.format(cost) : '--';
+  }
+  const engineeringEl = $('engineering');
+  if (engineeringEl){
+    const cost = Number(totals.engineering?.cost);
+    engineeringEl.textContent = Number.isFinite(cost) ? fmtNO.format(cost) : '--';
+  }
+  const montasjeCost = Number(totals.montasje?.cost);
+  const montasjeMarginVal = Number.isFinite(montasjeCost) ? (totals.montasjeMargin ?? montasjePricing.dg) : NaN;
+  setText('montasjeMargin', montasjeMarginVal);
+  const engineeringCost = Number(totals.engineering?.cost);
+  const engineeringMarginVal = Number.isFinite(engineeringCost) ? (totals.engineeringMargin ?? engineeringPricing.dg) : NaN;
+  setText('engineeringMargin', engineeringMarginVal);
+  const montasjeDetailEl = $('montasjeDetail');
+  if (montasjeDetailEl) montasjeDetailEl.textContent = totals.montasjeDetail || '';
+  const opphengDetailEl = $('opphengDetail');
+  if (opphengDetailEl) opphengDetailEl.textContent = totals.opphengDetail || '';
+  const engineeringDetailEl = $('engineeringDetail');
+  if (engineeringDetailEl) engineeringDetailEl.textContent = totals.engineeringDetail || '';
+  const resultsEl = $('results');
+  if (resultsEl) resultsEl.hidden = false;
+  renderBomTable('bomTbl', Array.isArray(line.bom) ? line.bom : []);
+  updateXapComparisonUI(null);
+  lastCalc = deepClone(totals);
+  if (lastCalc){
+    lastCalc.lineNumber = line.lineNumber || '';
+    lastCalc.marginRate = savedMarginRate;
+    lastCalc.marginFactor = marginFactorFromRate(savedMarginRate);
+    lastCalc.montasjeMarginRate = savedMontasjeMarginRate;
+    lastCalc.engineeringMarginRate = savedEngineeringMarginRate;
+  }
+  lastCalcInput = line.inputs ? deepClone(line.inputs) : null;
+  if (lastCalcInput){
+    lastCalcInput.marginRate = savedMarginRate;
+    lastCalcInput.montasjeMarginRate = savedMontasjeMarginRate;
+    lastCalcInput.engineeringMarginRate = savedEngineeringMarginRate;
+  }
+  const totalsForPayload = deepClone(totals);
+  if (totalsForPayload){
+    totalsForPayload.marginRate = savedMarginRate;
+    totalsForPayload.montasjeMarginRate = savedMontasjeMarginRate;
+    totalsForPayload.engineeringMarginRate = savedEngineeringMarginRate;
+  }
+  lastEmailPayload = {
+    project: projectState.currentProject,
+    customer: projectState.currentCustomer,
+    lineNumber: line.lineNumber || '',
+    inputs: line.inputs ? deepClone(line.inputs) : null,
+    totals: totalsForPayload,
+    bom: line.bom ? deepClone(line.bom) : []
+  };
+  if (lastEmailPayload.inputs){
+    lastEmailPayload.inputs.marginRate = savedMarginRate;
+    lastEmailPayload.inputs.montasjeMarginRate = savedMontasjeMarginRate;
+    lastEmailPayload.inputs.engineeringMarginRate = savedEngineeringMarginRate;
+  }
+  updateEngineeringPreview();
+  const sendBtn = $('sendRequestBtn');
+  if (sendBtn){
+    sendBtn.disabled = false;
+    sendBtn.textContent = 'Send forespørsel';
+  }
+  const saveBtn = $('saveLineBtn');
+  if (saveBtn){
+    saveBtn.disabled = false;
+  }
+  updateSelectedAddonTotalUI();
+  markClean();
+}
+
+function openProjectLine(projectId, lineId){
+  const project = getProjectById(projectId);
+  if (!project) return;
+  if (!hasCalculatorUI()){
+    goToCalculator({ project: project.id, line: lineId });
+    return;
+  }
+  projectState.expandedProjectId = projectId;
+  renderProjectDashboard();
+  const line = project.lines?.find(entry=>entry.id === lineId);
+  if (!line) return;
+  setActiveProject(project);
+  showCalculatorView();
+  if (line.inputs){
+    applyInputsToCalculator(line.inputs);
+  } else {
+    resetCalculatorForm({ preserveProject: true });
+  }
+  projectState.currentLineNumber = line.lineNumber || '';
+  const lineInput = $('lineNumberInput');
+  if (lineInput){
+    lineInput.value = line.lineNumber || '';
+  }
+  if (line.totals){
+    applySavedTotalsToUI(line);
+    const statusEl = $('status');
+    if (statusEl){
+      statusEl.textContent = `Linje ${line.lineNumber || ''} er lastet. Beregn på nytt ved endringer.`;
+    }
+  } else {
+    const statusEl = $('status');
+    if (statusEl){
+      statusEl.textContent = 'Linjen har ingen lagrede summer. Gjør endringer og beregn.';
+    }
+    const resultsEl = $('results');
+    if (resultsEl) resultsEl.hidden = true;
+    renderBomTable('bomTbl', []);
+    updateXapComparisonUI(null);
+  }
+}
+
+function showDashboardView(options = {}){
+  if (!hasDashboardUI()){
+    goToDashboard();
+    return;
+  }
+  if (options.clearSelection){
+    projectState.expandedProjectId = null;
+  }
+  const dash = $('dashboardView');
+  if (dash) dash.hidden = false;
+  renderProjectDashboard();
+}
+
+function showCalculatorView(){
+  if (!hasCalculatorUI()){
+    if (projectState.currentProjectId){
+      goToCalculator({ project: projectState.currentProjectId });
+    } else {
+      goToCalculator();
+    }
+    return;
+  }
+  const calc = $('calculatorView');
+  if (calc) calc.hidden = false;
+  updateProjectMetaDisplay();
+}
+
+function saveCurrentLineToProject(){
+  if (!hasActiveProject()){
+    const statusEl = $('status');
+    if (statusEl) statusEl.textContent = 'Opprett nytt prosjekt for \u00E5 lagre linjen.';
+    openProjectModal({ mode: 'create' });
+    return;
+  }
+  if (!lastCalc){
+    const statusEl = $('status');
+    if (statusEl) statusEl.textContent = 'Kj\u00F8r en beregning f\u00F8r du lagrer.';
+    return;
+  }
+  const lineInput = $('lineNumberInput');
+  const lineValue = (lineInput?.value || projectState.currentLineNumber || '').trim();
+  if (!lineValue){
+    const statusEl = $('status');
+    if (statusEl) statusEl.textContent = 'Oppgi linjenummer f\u00F8r du lagrer.';
+    if (lineInput) lineInput.focus();
+    return;
+  }
+  const project = getProjectById(projectState.currentProjectId);
+  if (!project) return;
+  const now = new Date().toISOString();
+  const selectedAddonFlags = {
+    includeMontasje: Boolean($('includeMontasje')?.checked),
+    includeEngineering: Boolean($('includeEngineering')?.checked),
+    includeOppheng: Boolean($('includeOppheng')?.checked)
+  };
+  const selectedAddonTotal = round2(calculateSelectedAddonTotal(lastCalc).total);
+  const totalsSnapshot = deepClone(lastCalc) || {};
+  totalsSnapshot.selectedAddonTotal = selectedAddonTotal;
+  totalsSnapshot.selectedAddonConfig = deepClone(selectedAddonFlags);
+  const entryData = {
+    id: generateProjectId(),
+    lineNumber: lineValue,
+    createdAt: now,
+    updatedAt: now,
+    totals: totalsSnapshot,
+    selectedAddonTotal,
+    selectedAddonConfig: selectedAddonFlags,
+    inputs: lastCalcInput ? deepClone(lastCalcInput) : null,
+    bom: Array.isArray(lastEmailPayload?.bom) ? deepClone(lastEmailPayload.bom) : []
+  };
+  const normalized = lineValue.toLowerCase();
+  const existingIdx = project.lines.findIndex(line=>String(line.lineNumber||'').toLowerCase() === normalized);
+  let message = `Linje ${lineValue} lagret.`;
+  if (existingIdx >= 0){
+    const existing = project.lines[existingIdx];
+    entryData.id = existing.id || entryData.id;
+    entryData.createdAt = existing.createdAt || entryData.createdAt;
+    project.lines[existingIdx] = entryData;
+    message = `Linje ${lineValue} oppdatert.`;
+  } else {
+    project.lines.push(entryData);
+  }
+  project.updatedAt = now;
+  saveProjectsToStorage();
+  renderProjectDashboard();
+  setActiveProject(project);
+  projectState.currentLineNumber = '';
+  if (lineInput){
+    lineInput.value = '';
+  }
+  const statusEl = $('status');
+  if (statusEl) statusEl.textContent = message;
+}
+
+function resetCalculatorForm(options = {}){
+  const { preserveProject = true } = options;
+  ['series','dist','ampSelect','ledere','startEl','sluttEl','boxSel'].forEach(id=>{
+    const el = $(id);
+    if (el){
+      el.value = '';
+      el.disabled = false;
+    }
+  });
+  ['meter','v90h','v90v','fbQty','boxQty'].forEach(id=>{
+    const el = $(id);
+    if (el){
+      el.value = '';
+    }
+  });
+  const lineNumberEl = $('lineNumberInput');
+  if (lineNumberEl){
+    lineNumberEl.value = '';
+  }
+  projectState.currentLineNumber = '';
+  const res = document.getElementById('results');
+  if (res) res.hidden = true;
+  const st = document.getElementById('status');
+  if (st){
+    st.textContent = '';
+  }
+  const rateInput = $('montasjeHourlyRate');
+  const rateToggle = $('rateToggle');
+  if (rateToggle) rateToggle.checked = false;
+  if (rateInput){
+    rateInput.value = String(DEFAULT_HOURLY_RATE);
+    setInputLocked(rateInput, true);
+  }
+  const opphengInput = $('opphengRate');
+  if (opphengInput){
+    opphengInput.value = '';
+    opphengInput.dataset.appliedValue = '';
+    opphengInput.dataset.userOverride = 'false';
+    opphengInput.dataset.defaultRate = '';
+    opphengInput.dataset.appliedAmp = '';
+    setInputLocked(opphengInput, true);
+  }
+  const engineeringRateInput = $('engineeringHourlyRate');
+  const engineeringRateToggle = $('engineeringRateToggle');
+  if (engineeringRateToggle) engineeringRateToggle.checked = false;
+  if (engineeringRateInput){
+    engineeringRateInput.value = String(DEFAULT_ENGINEERING_HOURLY_RATE);
+    setInputLocked(engineeringRateInput, true);
+  }
+  const includeMontasje = $('includeMontasje');
+  const includeEngineering = $('includeEngineering');
+  const includeOppheng = $('includeOppheng');
+  if (includeMontasje) includeMontasje.checked = true;
+  if (includeEngineering) includeEngineering.checked = true;
+  if (includeOppheng) includeOppheng.checked = true;
+  refreshUIBySeries();
+  setCurrentMarginRate(DEFAULT_MARGIN_RATE);
+  setCurrentMontasjeMarginRate(DEFAULT_MARGIN_RATE);
+  setCurrentEngineeringMarginRate(DEFAULT_MARGIN_RATE);
+  updateMontasjePreview();
+  updateXapComparisonUI(null);
+  renderBomTable('bomTbl', []);
+  if (!preserveProject){
+    clearActiveProject();
+  }
+  lastCalc = null;
+  lastCalcInput = null;
+  lastEmailPayload = null;
+  isDirty = false;
+  const sendBtnReset = document.getElementById('sendRequestBtn');
+  if (sendBtnReset){
+    sendBtnReset.disabled = true;
+    sendBtnReset.textContent = 'Send foresp\u00f8rsel';
+  }
+  updateSelectedAddonTotalUI();
 }
 
 function submitProjectModal(){
@@ -317,33 +1764,17 @@ function submitProjectModal(){
     updateProjectSubmitState();
     return;
   }
-  persistProjectInfo(projectName, customerName);
+  if (projectModalState.mode === 'edit' && projectModalState.projectId){
+    persistProjectInfo(projectName, customerName, { projectId: projectModalState.projectId });
+  } else {
+    persistProjectInfo(projectName, customerName);
+    showDashboardView();
+  }
   closeProjectModal();
-  resolveProjectModal({ projectName, customerName });
 }
 
 function cancelProjectModal(){
   closeProjectModal();
-  if (!projectState.currentProject || !projectState.currentCustomer){
-    const statusEl = $('status');
-    if (statusEl) statusEl.textContent = 'Oppgi prosjektnavn og kunde.';
-  }
-  resolveProjectModal(null);
-}
-
-function ensureProjectInfo(){
-  if (projectState.currentProject && projectState.currentCustomer){
-    return Promise.resolve({
-      projectName: projectState.currentProject,
-      customerName: projectState.currentCustomer
-    });
-  }
-  const statusEl = $('status');
-  if (statusEl) statusEl.textContent = 'Oppgi prosjektnavn og kunde.';
-  return new Promise(resolve=>{
-    projectModalResolve = resolve;
-    openProjectModal();
-  });
 }
 
 const projectSubmit = $('projectSubmit');
@@ -359,6 +1790,104 @@ if (projectModal){
   projectModal.addEventListener('click', evt=>{
     if (evt.target === projectModal){
       cancelProjectModal();
+    }
+  });
+}
+
+const newProjectBtn = $('newProjectBtn');
+if (newProjectBtn){
+  newProjectBtn.addEventListener('click', ()=>openProjectModal({ mode: 'create' }));
+}
+
+const projectListEl = $('projectList');
+if (projectListEl){
+  projectListEl.addEventListener('click', evt=>{
+    const target = evt.target.closest('button');
+    if (!target) return;
+    if (target.dataset.lineEdit){
+      openProjectLine(target.dataset.projectId, target.dataset.lineEdit);
+      return;
+    }
+    if (target.dataset.projectOpen){
+      handleProjectSelection(target.dataset.projectOpen);
+      return;
+    }
+    if (target.dataset.projectDetail){
+      selectProjectDetail(target.dataset.projectDetail);
+      return;
+    }
+    if (target.dataset.projectNewline){
+      startNewLineForProject(target.dataset.projectNewline);
+      return;
+    }
+    if (target.dataset.action === 'create-project'){
+      openProjectModal({ mode: 'create' });
+    }
+  });
+}
+
+const saveLineBtn = $('saveLineBtn');
+if (saveLineBtn){
+  saveLineBtn.disabled = true;
+  saveLineBtn.addEventListener('click', saveCurrentLineToProject);
+}
+
+const lineNumberInputEl = $('lineNumberInput');
+if (lineNumberInputEl){
+  lineNumberInputEl.addEventListener('input', ()=>{
+    const value = lineNumberInputEl.value.trim();
+    projectState.currentLineNumber = value;
+    if (lastCalc){
+      lastCalc.lineNumber = value;
+    }
+    if (lastEmailPayload){
+      lastEmailPayload.lineNumber = value;
+    }
+  });
+}
+
+const resetBtn = $('resetBtn');
+if (resetBtn){
+  resetBtn.addEventListener('click', ()=>{
+    resetCalculatorForm({ preserveProject: true });
+  });
+}
+
+['includeMontasje','includeEngineering','includeOppheng'].forEach(id=>{
+  const checkbox = $(id);
+  if (!checkbox) return;
+  checkbox.addEventListener('change', updateSelectedAddonTotalUI);
+});
+updateSelectedAddonTotalUI();
+
+const marginCancelBtn = $('marginCancel');
+if (marginCancelBtn){
+  marginCancelBtn.addEventListener('click', closeMarginModal);
+}
+
+const marginSubmitBtn = $('marginSubmit');
+if (marginSubmitBtn){
+  marginSubmitBtn.addEventListener('click', submitMarginModal);
+}
+
+const marginPercentInput = $('marginPercentInput');
+if (marginPercentInput){
+  marginPercentInput.addEventListener('keydown', evt=>{
+    if (evt.key === 'Enter'){
+      evt.preventDefault();
+      submitMarginModal();
+    } else if (evt.key === 'Escape'){
+      evt.preventDefault();
+      closeMarginModal();
+    }
+  });
+}
+
+const marginModal = $('marginModal');
+if (marginModal){
+  marginModal.addEventListener('click', evt=>{
+    if (evt.target === marginModal){
+      closeMarginModal();
     }
   });
 }
@@ -408,8 +1937,8 @@ bindSuggestionBehaviour('customerNameInput', 'customerSuggestions', projectState
 const editProjectBtn = $('editProjectBtn');
 if (editProjectBtn){
   editProjectBtn.addEventListener('click', ()=>{
-    projectModalResolve = null;
-    openProjectModal();
+    if (!projectState.currentProjectId) return;
+    openProjectModal({ mode: 'edit', projectId: projectState.currentProjectId });
   });
 }
 
@@ -420,6 +1949,11 @@ document.addEventListener('keydown', evt=>{
       hideLoginModal();
       return;
     }
+    const marginModalEl = $('marginModal');
+    if (marginModalEl && marginModalEl.style.display === 'flex'){
+      closeMarginModal();
+      return;
+    }
     const projectModalEl = $('projectModal');
     if (projectModalEl && projectModalEl.style.display === 'flex'){
       cancelProjectModal();
@@ -427,6 +1961,7 @@ document.addEventListener('keydown', evt=>{
   }
 });
 
+loadAuthFromSession();
 updateProjectMetaDisplay();
 updateAuthUI();
 
@@ -438,7 +1973,10 @@ const H = {
   et2:   ['element_type_2','Element type 2','element type 2','H']
 };
 
-const DEFAULT_HOURLY_RATE = 700;
+const DEFAULT_HOURLY_RATE = 657.8;
+const DEFAULT_ENGINEERING_HOURLY_RATE = 929.9;
+const ENGINEERING_HOURS_PER_METER = 0.30;
+const ENGINEERING_HOURS_PER_TEN_ANGLES = 0.30;
 const OPPHENG_RATE_TABLE = Object.freeze([
   { maxAmp: 1600, rate: 400, label: '160–1600A' },
   { maxAmp: 2500, rate: 500, label: '2000–2500A' },
@@ -452,11 +1990,11 @@ const MONTASJE_TIME_TABLE = Object.freeze([
   { maxAmp: Infinity, hoursPerMeter: 5, hoursPerAngle: 1.5, label: '3200–5000A' }
 ]);
 
-function sanitizeHourlyRate(value){
+function sanitizeHourlyRate(value, fallback = DEFAULT_HOURLY_RATE){
   const raw = value ?? '';
-  if (String(raw).trim()==='') return DEFAULT_HOURLY_RATE;
+  if (String(raw).trim()==='') return fallback;
   const n = toNum(raw);
-  if (!Number.isFinite(n)) return DEFAULT_HOURLY_RATE;
+  if (!Number.isFinite(n)) return fallback;
   return Math.max(0, n);
 }
 
@@ -508,7 +2046,7 @@ function getMontasjeProfileForAmp(amp){
 function calculateMontasje({ meter, angles, amp, hourlyRate }){
   const totalMeters = Math.max(0, Math.ceil(Number(meter) || 0));
   const totalAngles = Math.max(0, Math.round(Number(angles) || 0));
-  const rate = sanitizeHourlyRate(hourlyRate);
+  const rate = sanitizeHourlyRate(hourlyRate, DEFAULT_HOURLY_RATE);
   const ampValue = Number(amp);
   const profile = getMontasjeProfileForAmp(ampValue);
   if (!profile){
@@ -537,9 +2075,28 @@ function calculateMontasje({ meter, angles, amp, hourlyRate }){
   };
 }
 
+function calculateEngineering({ meter, angles, hourlyRate }){
+  const totalMeters = Math.max(0, Math.ceil(Number(meter) || 0));
+  const totalAngles = Math.max(0, Math.round(Number(angles) || 0));
+  const rate = sanitizeHourlyRate(hourlyRate, DEFAULT_ENGINEERING_HOURLY_RATE);
+  const hoursFromMeters = totalMeters * ENGINEERING_HOURS_PER_METER;
+  const hoursFromAngles = (totalAngles / 10) * ENGINEERING_HOURS_PER_TEN_ANGLES;
+  const totalHours = round2(hoursFromMeters + hoursFromAngles);
+  const cost = round2(totalHours * rate);
+  return {
+    cost,
+    meters: totalMeters,
+    angles: totalAngles,
+    hourlyRate: rate,
+    totalHours,
+    hoursPerMeter: ENGINEERING_HOURS_PER_METER,
+    hoursPerTenAngles: ENGINEERING_HOURS_PER_TEN_ANGLES
+  };
+}
+
 function readMontasjeSettingsFromUI(){
   const hourlyRateInput = document.getElementById('montasjeHourlyRate');
-  const hourlyRate = sanitizeHourlyRate(hourlyRateInput ? hourlyRateInput.value : DEFAULT_HOURLY_RATE);
+  const hourlyRate = sanitizeHourlyRate(hourlyRateInput ? hourlyRateInput.value : DEFAULT_HOURLY_RATE, DEFAULT_HOURLY_RATE);
   if (hourlyRateInput){
     hourlyRateInput.value = String(hourlyRate);
   }
@@ -561,6 +2118,18 @@ function readMontasjeSettingsFromUI(){
     opphengRate = sanitized;
   }
   return { hourlyRate, opphengRate };
+}
+
+function readEngineeringSettingsFromUI(){
+  const hourlyRateInput = document.getElementById('engineeringHourlyRate');
+  const hourlyRate = sanitizeHourlyRate(
+    hourlyRateInput ? hourlyRateInput.value : DEFAULT_ENGINEERING_HOURLY_RATE,
+    DEFAULT_ENGINEERING_HOURLY_RATE
+  );
+  if (hourlyRateInput){
+    hourlyRateInput.value = String(hourlyRate);
+  }
+  return { hourlyRate };
 }
 
 function formatMontasjeDetail(m){
@@ -595,6 +2164,19 @@ function formatOpphengDetail(o){
   const costTxt = fmtNO.format(o.cost);
   const labelTxt = o.profile ? ` (${o.profile.label})` : '';
   return `Opphengsmateriell${labelTxt}: ${metersTxt} m × ${rateTxt} kr/m = ${costTxt} kr`;
+}
+
+function formatEngineeringDetail(e){
+  if (!e){
+    return 'Ingeniør beregnes automatisk fra meter og vinkler.';
+  }
+  const metersTxt = fmtIntNO.format(e.meters);
+  const anglesTxt = fmtIntNO.format(e.angles);
+  const perMeterTxt = fmtNO.format(e.hoursPerMeter);
+  const perTenAnglesTxt = fmtNO.format(e.hoursPerTenAngles);
+  const totalHoursTxt = fmtNO.format(e.totalHours);
+  const rateTxt = fmtNO.format(e.hourlyRate);
+  return `Ingeniørgrunnlag: ${metersTxt} m × ${perMeterTxt} t/m + (${anglesTxt} / 10) × ${perTenAnglesTxt} t = ${totalHoursTxt} t × ${rateTxt} kr/t`;
 }
 
 function setInputLocked(input, locked){
@@ -733,6 +2315,58 @@ function updateMontasjePreview(){
   if (opphengDetailEl){
     opphengDetailEl.textContent = formatOpphengDetail(opphengPreview);
   }
+  updateEngineeringPreview();
+}
+
+function updateEngineeringPreview(){
+  const meterEl = $('meter');
+  const v90hEl = $('v90h');
+  const v90vEl = $('v90v');
+  const rateEl = $('engineeringHourlyRate');
+  const rateToggle = $('engineeringRateToggle');
+
+  const meter = meterEl ? Number(meterEl.value || 0) : 0;
+  const angles = (v90hEl ? Number(v90hEl.value || 0) : 0) + (v90vEl ? Number(v90vEl.value || 0) : 0);
+
+  const ratesUnlocked = rateToggle ? rateToggle.checked : true;
+  const locked = !ratesUnlocked;
+  if (rateEl){
+    setInputLocked(rateEl, locked);
+    if (locked){
+      rateEl.value = String(DEFAULT_ENGINEERING_HOURLY_RATE);
+    }
+  }
+  const preview = calculateEngineering({
+    meter,
+    angles,
+    hourlyRate: rateEl ? rateEl.value : DEFAULT_ENGINEERING_HOURLY_RATE
+  });
+
+  const profileEl = $('engineeringProfileLabel');
+  const perMeterEl = $('engineeringHoursPerMeter');
+  const perTenAnglesEl = $('engineeringHoursPerTenAngles');
+  const totalHoursEl = $('engineeringTotalHours');
+  const costEl = $('engineeringPreviewCost');
+  const detailEl = $('engineeringDetail');
+
+  if (profileEl){
+    profileEl.textContent = 'Ingeniørtid gjelder alle serier og alle ampere.';
+  }
+  if (perMeterEl){
+    perMeterEl.textContent = `${fmtNO.format(preview.hoursPerMeter)} t/m`;
+  }
+  if (perTenAnglesEl){
+    perTenAnglesEl.textContent = `${fmtNO.format(preview.hoursPerTenAngles)} t / 10 vinkler`;
+  }
+  if (totalHoursEl){
+    totalHoursEl.textContent = `${fmtNO.format(preview.totalHours)} t`;
+  }
+  if (costEl){
+    costEl.textContent = `${fmtNO.format(preview.cost)} kr`;
+  }
+  if (detailEl){
+    detailEl.textContent = formatEngineeringDetail(preview);
+  }
 }
 
 // --- detect ---
@@ -794,6 +2428,119 @@ function detectType(descRaw){
   return '';
 }
 
+const XAP_TYPE_MAP = Object.freeze({
+  'Straight length, 3 meters max.': 'straight_3m',
+  'Straight length, 1 meter': 'straight_500_1000',
+  'L horizontal elbow': 'elbow_horizontal_90',
+  'L horizontal elbow, special angle': 'elbow_horizontal_90',
+  'L vertical elbow': 'elbow_vertical_90',
+  'L vertical elbow, special angle': 'elbow_vertical_90',
+  'L veritcal elbow, special angle': 'elbow_vertical_90',
+  'Expansion Joint': 'expansion_unit',
+  'Switchboard/panel flange end': 'board_feed',
+  'Transformer flange end': 'crt_board_feed',
+  'End cap': 'end_cover',
+  'End tap box - EMPTY': 'end_feed_unit',
+  'End tap box - with 400A MCCB, 3P, 36kA': 'end_feed_unit',
+  'End tap box - with 400A MCCB, 4P, 36kA': 'end_feed_unit',
+  'End tap box - with 500A MCCB, 3P, 50kA': 'end_feed_unit',
+  'End tap box - with 500A MCCB, 4P, 50kA': 'end_feed_unit',
+  'End tap box - with 630A MCCB, 3P, 50kA': 'end_feed_unit',
+  'End tap box - with 630A MCCB, 4P, 50kA': 'end_feed_unit',
+  'End tap box - with 800A MCCB, 3P, 50kA': 'end_feed_unit',
+  'End tap box - with 800A MCCB, 4P, 50kA': 'end_feed_unit',
+  'End tap box - with 1000A MCCB, 3P, 50kA': 'end_feed_unit',
+  'End tap box - with 1000A MCCB, 4P, 50kA': 'end_feed_unit',
+  'End tap box - with 1250A MCCB, 3P, 50kA': 'end_feed_unit',
+  'End tap box - with 1250A MCCB, 4P, 50kA': 'end_feed_unit',
+  'End tap box - with 1600A MCCB, 3P, 50kA': 'end_feed_unit',
+  'End tap box - with 1600A MCCB, 4P, 50kA': 'end_feed_unit',
+  'End tap box - with 2000A ACB, 3P, 50kA': 'end_feed_unit',
+  'End tap box - with 2000A ACB, 4P, 50kA': 'end_feed_unit',
+  'End tap box - with 2500A ACB, 3P, 50kA': 'end_feed_unit',
+  'End tap box - with 2500A ACB, 4P, 50kA': 'end_feed_unit',
+  'End tap box - with 3200A ACB, 3P, 50kA': 'end_feed_unit',
+  'End tap box - with 3200A ACB, 4P, 50kA': 'end_feed_unit',
+  'End tap box - with 4000A ACB, 3P, 50kA': 'end_feed_unit',
+  'End tap box - with 4000A ACB, 4P, 50kA': 'end_feed_unit',
+  'End tap box - with 5000A ACB, 3P, 50kA': 'end_feed_unit',
+  'End tap box - with 5000A ACB, 4P, 50kA': 'end_feed_unit',
+  'Outlet for tap-off boxes': 'outlet_section',
+  'Joint': 'joint',
+  'Flexible set': 'flexible_set',
+  'Tee horizontal offset': 'tee_horizontal_offset',
+  'Tee vertical offset': 'tee_vertical_offset',
+  'Z horizontal offset': 'z_horizontal_offset',
+  'Z vertical offset': 'z_vertical_offset'
+});
+
+function isXAPRow(row){
+  return Object.prototype.hasOwnProperty.call(row,'Beskrivelse')
+      && Object.prototype.hasOwnProperty.call(row,'Pris_USD');
+}
+
+function parseXAPPriceUSD(raw){
+  if (raw===undefined || raw===null) return 0;
+  const txt = String(raw).trim();
+  if (!txt || txt==='-' || txt==='$-') return 0;
+  const cleaned = txt.replace(/\$/g,'').replace(/\s/g,'').replace(',','.');
+  const num = Number(cleaned);
+  return Number.isFinite(num) ? round2(num) : 0;
+}
+
+function parseXAPAmp(row, desc){
+  const raw = row?.Ampere;
+  if (raw){
+    const cleaned = String(raw).replace(/[^\d.,]/g,'').replace(',', '.');
+    const num = Number(cleaned);
+    if (Number.isFinite(num)) return num;
+  }
+  const match = String(desc||'').match(/(\d{2,4})\s*A/i);
+  if (match) return Number(match[1]);
+  return NaN;
+}
+
+function normalizeXAPMaterial(value){
+  if (!value && value !== 0) return '';
+  const txt = String(value).trim();
+  if (!txt) return '';
+  if (/^al/i.test(txt)) return 'Al';
+  if (/^cu/i.test(txt)) return 'Cu';
+  return txt;
+}
+
+function adaptXAPRow(row){
+  const desc = String(row?.Beskrivelse || '').trim();
+  if (!desc) return [];
+  const parts = desc.split(' - ');
+  const typeLabelRaw = parts.length > 1 ? parts.slice(1).join(' - ').trim() : '';
+  const normalizedLabel = typeLabelRaw.replace(/\s+/g,' ').trim();
+  const seriesPart = desc.split(/\s+/)[0] || XAP_SERIES;
+  const series = seriesPart.replace(/[^A-Za-z0-9-]/g,'') || XAP_SERIES;
+  const type = XAP_TYPE_MAP[normalizedLabel] || '';
+  const ampere = parseXAPAmp(row, desc);
+  const unit_price_usd = parseXAPPriceUSD(row?.Pris_USD);
+  const unit_price = convertUsdToNok(unit_price_usd);
+  const base = {
+    code: desc,
+    type,
+    series,
+    ampere,
+    unit_price,
+    unit_price_usd,
+    _desc: desc,
+    ledere: '3F+N+PE',
+    ledermateriell: normalizeXAPMaterial(row?.Leder || '')
+  };
+  const entries = [base];
+  if (type === 'straight_3m'){
+    entries.push({ ...base, type: 'straight_3m_dist' });
+  } else if (type === 'straight_500_1000'){
+    entries.push({ ...base, type: 'straight_500_1000_dist' });
+  }
+  return entries;
+}
+
 // amp
 function extractAmpGeneric(row){
   let src = (pick(row, H.desc) + ' ' + pick(row, H.code)).toUpperCase();
@@ -813,7 +2560,13 @@ function deriveAmp(row){
 
 // rå → katalog
 function adaptRawToCatalog(rawRows){
-  return rawRows.map(r=>{
+  const list = [];
+  rawRows.forEach(r=>{
+    if (isXAPRow(r)){
+      const adapted = adaptXAPRow(r);
+      adapted.filter(Boolean).forEach(item=>list.push(item));
+      return;
+    }
     const code = pick(r, H.code);
     const price = toNum(pick(r, H.price));
     const desc  = pick(r, H.desc);
@@ -845,13 +2598,15 @@ function adaptRawToCatalog(rawRows){
 
     const amp = Number.isFinite(tagAmp) ? tagAmp : extractAmpGeneric(r);
 
-    return { code, type, series, ampere: amp, unit_price: price, _desc: desc, _et2: et2H };
-  })
-
+    list.push({ code, type, series, ampere: amp, unit_price: price, _desc: desc, _et2: et2H });
+  });
+  return list;
 }
 
 // match
 function matchesLedere(row, ledere){
+  if (!ledere) return true;
+  if (row.ledere) return row.ledere === ledere;
   if (row.series === 'XCM') return true;
   const c = String(row.code||'').toUpperCase();
   const implied = c.includes('-3W') ? '3F+PE' : '3F+N+PE';
@@ -907,17 +2662,46 @@ function makeCustomLine(code, type, series, amp, ledere, unit, qty){
   if (!Number.isFinite(unit)) throw new Error('Ugyldig pris: '+type);
   return { code, type, series, ampere: amp||'', ledere, antall: qty, enhet: unit, sum: round2(unit*qty) };
 }
+const preferTypes = (...types)=>{
+  const seen = new Set();
+  const list = [];
+  types.forEach(t=>{
+    if (!t || seen.has(t)) return;
+    seen.add(t);
+    list.push(t);
+  });
+  return list;
+};
+const toTypeArray = spec => Array.isArray(spec) ? spec.filter(Boolean) : (spec ? [spec] : []);
+const primaryTypeLabel = spec => toTypeArray(spec)[0] || 'lengde';
+
 // Hvilke type-navn tilsvarer 3m / ~2m / ~1m for valgt serie og distribusjon
 function lengthTypes(series, dist){
   if (series==='XCM'){
     return dist
-      ? {L3:'straight_3m_dist', L2:'xcm_dist_1500_2999',  L1:'xcm_dist_1000_1500'}
-      : {L3:'xcm_feeder_3m',    L2:'xcm_feeder_1501_2999',L1:'xcm_feeder_600_1500'};
+      ? {
+          L3: preferTypes('straight_3m_dist','xcm_feeder_3m'),
+          L2: preferTypes('xcm_dist_1500_2999','xcm_feeder_1501_2999'),
+          L1: preferTypes('xcm_dist_1000_1500','xcm_feeder_600_1500')
+        }
+      : {
+          L3: preferTypes('xcm_feeder_3m','straight_3m_dist'),
+          L2: preferTypes('xcm_feeder_1501_2999','xcm_dist_1500_2999'),
+          L1: preferTypes('xcm_feeder_600_1500','xcm_dist_1000_1500')
+        };
   }
   // XCP-S
   return dist
-    ? {L3:'straight_3m_dist', L2:'straight_1501_2000_dist', L1:'straight_500_1000_dist'}
-    : {L3:'straight_3m',      L2:'straight_1501_2000',      L1:'straight_500_1000'};
+    ? {
+        L3: preferTypes('straight_3m_dist','straight_3m'),
+        L2: preferTypes('straight_1501_2000_dist','straight_1501_2000'),
+        L1: preferTypes('straight_500_1000_dist','straight_500_1000')
+      }
+    : {
+        L3: preferTypes('straight_3m','straight_3m_dist'),
+        L2: preferTypes('straight_1501_2000','straight_1501_2000_dist'),
+        L1: preferTypes('straight_500_1000','straight_500_1000_dist')
+      };
 }
 
 // Greedy plan (3,2,1) + fallback-regler
@@ -961,10 +2745,17 @@ function planWithFallback(m, avail){
 }
 
 // Finn ut om type finnes for valgt konfig
-function hasType(catRows, series, amp, ledere, type){
+function findLengthVariant(catRows, series, amp, ledere, typeSpec){
   const rows = catRows.filter(r=>r.series===series);
-  const r = findByTypeSeriesAmp(rows, type, series, amp) || byTypeAmpSeriesL(rows,type,amp,series,ledere);
-  return !!r;
+  for (const type of toTypeArray(typeSpec)){
+    const row = findByTypeSeriesAmp(rows, type, series, amp) || byTypeAmpSeriesL(rows,type,amp,series,ledere);
+    if (row) return row;
+  }
+  return null;
+}
+
+function hasType(catRows, series, amp, ledere, typeSpec){
+  return Boolean(findLengthVariant(catRows, series, amp, ledere, typeSpec));
 }
 
 // pris
@@ -996,7 +2787,7 @@ if (input.sluttEl === 'board_feed'){
   if (!bf) throw new Error(`Mangler board_feed for ${input.series}.`);
   push(bf,1);
 } else if (input.sluttEl === 'crt_board_feed'){
-  if (input.series !== 'XCP-S') throw new Error('Trafoelement er kun for XCP-S.');
+  if (!seriesSupportsCrtFeed(input.series)) throw new Error('Trafoelement er ikke tilgjengelig for valgt system.');
   const crt = needAnyAmp(cat.rows, 'crt_board_feed', input.ampere, input.series);
   if (!crt) throw new Error(`Mangler crt_board_feed for ${input.series}.`);
   push(crt,1);
@@ -1017,18 +2808,18 @@ const pf = planWithFallback(input.meter, avail);
 
 // legg til linjer etter plan
 if (pf.n3){
-  const r = findByTypeSeriesAmp(cat.rows, tmap.L3, input.series, input.ampere) || byTypeAmpSeriesL(cat.rows,tmap.L3,input.ampere,input.series,input.ledere);
-  if(!r) throw new Error(`Mangler ${tmap.L3}.`);
+  const r = findLengthVariant(cat.rows, input.series, input.ampere, input.ledere, tmap.L3);
+  if(!r) throw new Error(`Mangler ${primaryTypeLabel(tmap.L3)}.`);
   push(r, pf.n3);
 }
 if (pf.n2){
-  const r = findByTypeSeriesAmp(cat.rows, tmap.L2, input.series, input.ampere) || byTypeAmpSeriesL(cat.rows,tmap.L2,input.ampere,input.series,input.ledere);
-  if(!r) throw new Error(`Mangler ${tmap.L2}.`);
+  const r = findLengthVariant(cat.rows, input.series, input.ampere, input.ledere, tmap.L2);
+  if(!r) throw new Error(`Mangler ${primaryTypeLabel(tmap.L2)}.`);
   push(r, pf.n2);
 }
 if (pf.n1){
-  const r = findByTypeSeriesAmp(cat.rows, tmap.L1, input.series, input.ampere) || byTypeAmpSeriesL(cat.rows,tmap.L1,input.ampere,input.series,input.ledere);
-  if(!r) throw new Error(`Mangler ${tmap.L1}.`);
+  const r = findLengthVariant(cat.rows, input.series, input.ampere, input.ledere, tmap.L1);
+  if(!r) throw new Error(`Mangler ${primaryTypeLabel(tmap.L1)}.`);
   push(r, pf.n1);
 }
 
@@ -1072,44 +2863,179 @@ if (pf.n1){
   }
 
   const material = round2(bom.reduce((s,x)=>s+x.sum,0));
-  const margin   = round2(material*0.20);
-  const subtotal = round2(material+margin);
+  const marginRate = normalizeMarginRate(input.marginRate, DEFAULT_MARGIN_RATE);
   const rate     = Number(input.freightRate ?? 0.10);
-  const freight  = round2(subtotal * rate);
   const montasje = calculateMontasje({
     meter: input.meter,
     angles: (input.v90_h || 0) + (input.v90_v || 0),
     amp: input.ampere,
     hourlyRate: input.montasjeSettings?.hourlyRate
   });
+  const engineering = calculateEngineering({
+    meter: input.meter,
+    angles: (input.v90_h || 0) + (input.v90_v || 0),
+    hourlyRate: input.engineeringSettings?.hourlyRate
+  });
   const oppheng = calculateOpphengsmateriell({
     meter: input.meter,
     amp: input.ampere,
     ratePerMeter: input.montasjeSettings?.opphengRate
   });
-  const totalExMontasje = round2(subtotal + freight);
-  const total    = round2(totalExMontasje + montasje.cost + oppheng.cost);
-  return { bom, material, margin, subtotal, freight, montasje, oppheng, totalExMontasje, total };
+  const totals = calculateTotalsFromMaterial({
+    material,
+    marginRate,
+    freightRate: rate,
+    montasjeCost: montasje.cost,
+    montasjeMarginRate: input.montasjeMarginRate,
+    engineeringCost: engineering.cost,
+    engineeringMarginRate: input.engineeringMarginRate,
+    opphengCost: oppheng.cost
+  });
+  return {
+    bom,
+    material,
+    marginRate: totals.marginRate,
+    marginFactor: totals.marginFactor,
+    margin: totals.margin,
+    subtotal: totals.subtotal,
+    freight: totals.freight,
+    montasjeMarginRate: totals.montasjeMarginRate,
+    montasjeMargin: totals.montasjeMargin,
+    montasje,
+    engineeringMarginRate: totals.engineeringMarginRate,
+    engineeringMargin: totals.engineeringMargin,
+    engineering,
+    oppheng,
+    totalExMontasje: totals.totalExMontasje,
+    totalInclMontasje: totals.totalInclMontasje,
+    totalInclEngineering: totals.totalInclEngineering,
+    total: totals.total
+  };
+}
+
+function renderBomTable(tableId, bomList){
+  const tbody = document.querySelector(`#${tableId} tbody`);
+  if (!tbody) return;
+  tbody.innerHTML = '';
+  (bomList || []).forEach(b=>{
+    const unitVal = Number(b.enhet);
+    const sumVal = Number(b.sum);
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${b.code}</td><td>${b.type}</td><td>${b.series}</td><td>${b.ampere}</td><td>${b.lederes||b.ledere||''}</td><td>${b.antall}</td><td>${Number.isFinite(unitVal)?unitVal.toFixed(2):''}</td><td>${Number.isFinite(sumVal)?sumVal.toFixed(2):''}</td>`;
+    tbody.appendChild(tr);
+  });
+}
+
+function computeXapComparison(baseInput){
+  const xapRows = catalog.filter(r=>r.series===XAP_SERIES);
+  if (!xapRows.length) return { error: 'XAP-B-data mangler.' };
+  const cmpInput = { ...baseInput, series: XAP_SERIES, ledere: '3F+N+PE' };
+  const xapCat = { rows: xapRows, catalog };
+  try{
+    return price(xapCat, cmpInput);
+  }catch(err){
+    return { error: String(err && err.message ? err.message : err) };
+  }
+}
+
+function updateXapComparisonUI(result){
+  const line = $('xapCompareLine');
+  const valueEl = $('xapComparisonValue');
+  const currencyEl = $('xapComparisonCurrency');
+  const wrapper = $('xapBomWrapper');
+  if (!line || !valueEl || !wrapper) return;
+  if (!result){
+    line.hidden = true;
+    if (currencyEl) currencyEl.hidden = false;
+    valueEl.textContent = '';
+    wrapper.hidden = true;
+    renderBomTable('xapBomTbl', []);
+    return;
+  }
+  line.hidden = false;
+  const hasError = Boolean(result.error);
+  if (currencyEl) currencyEl.hidden = hasError;
+  if (hasError){
+    valueEl.textContent = result.error;
+    wrapper.hidden = true;
+    renderBomTable('xapBomTbl', []);
+    return;
+  }
+  valueEl.textContent = fmtNO.format(result.totalExMontasje || 0);
+  wrapper.hidden = false;
+  renderBomTable('xapBomTbl', result.bom || []);
 }
 
 // --- app ---
 let catalog=[];
+const ampOptionsBySeries = new Map();
 let isDirty = false;
 
 function markDirty(){
   isDirty = true;
   const st = $('status');
   if (st) st.textContent = 'Beregn for å få inkludere endringer';
+  const saveBtn = $('saveLineBtn');
+  if (saveBtn) saveBtn.disabled = true;
 }
 
 function markClean(){
   isDirty = false;
   const st = $('status');
   if (st) st.textContent = 'OK';
+  const saveBtn = $('saveLineBtn');
+  if (saveBtn) saveBtn.disabled = false;
+}
+
+function applyUsdRateToCatalog(){
+  if (!Array.isArray(catalog)) return;
+  catalog.forEach(item=>{
+    if (Number.isFinite(item.unit_price_usd)){
+      item.unit_price = convertUsdToNok(item.unit_price_usd);
+    }
+  });
+}
+
+function rebuildAmpLookup(){
+  ampOptionsBySeries.clear();
+  if (!Array.isArray(catalog) || !catalog.length) return;
+  const grouped = new Map();
+  catalog.forEach(item=>{
+    if (!item || !item.series) return;
+    if (item.type && /box$/i.test(item.type)) return;
+    const ampValue = Number(deriveAmp(item));
+    if (!Number.isFinite(ampValue)) return;
+    const key = String(item.series);
+    if (!grouped.has(key)){
+      grouped.set(key, new Set());
+    }
+    grouped.get(key).add(ampValue);
+  });
+  grouped.forEach((set, key)=>{
+    const sorted = Array.from(set).sort((a,b)=>a-b);
+    ampOptionsBySeries.set(key, sorted);
+  });
+}
+
+function updateUsdRateFromMarket(snapshot){
+  const next = Number(snapshot?.fx?.usdNok);
+  if (!Number.isFinite(next) || next <= 0) return;
+  if (Math.abs(next - usdToNokRate) < 0.0005) return;
+  usdToNokRate = next;
+  applyUsdRateToCatalog();
+  markDirty();
 }
 window.addEventListener('DOMContentLoaded', async ()=>{
+  initProjectDashboard();
+  initMarketDataTicker();
+  if (!hasCalculatorUI()){
+    return;
+  }
   try{
-    ['meter','v90h','v90v','fbQty','boxQty'].forEach(id => $(id).value = '');
+    ['meter','v90h','v90v','fbQty','boxQty'].forEach(id=>{
+      const el = $(id);
+      if (el) el.value = '';
+    });
 
     const all = [];
     for (const p of RAW_CSV_PATHS){
@@ -1120,14 +3046,29 @@ window.addEventListener('DOMContentLoaded', async ()=>{
       }catch{}
     }
     catalog = adaptRawToCatalog(all);
+    applyUsdRateToCatalog();
+    rebuildAmpLookup();
 
-    $('series').addEventListener('change', refreshUIBySeries);
-    $('meter').addEventListener('change', ()=>Math.ceil(Number($('meter').value||0)));
-    $('meter').addEventListener('blur',  ()=>Math.ceil(Number($('meter').value||0)));
+    const sendBtnInit = document.getElementById('sendRequestBtn');
+    if (sendBtnInit){
+      sendBtnInit.disabled = true;
+    }
+
+    const seriesEl = $('series');
+    if (seriesEl){
+      seriesEl.addEventListener('change', refreshUIBySeries);
+    }
+    const meterEl = $('meter');
+    if (meterEl){
+      meterEl.addEventListener('change', ()=>Math.ceil(Number(meterEl.value||0)));
+      meterEl.addEventListener('blur', ()=>Math.ceil(Number(meterEl.value||0)));
+    }
 
     const rateInput = $('montasjeHourlyRate');
     const opphengInput = $('opphengRate');
     const rateToggle = $('rateToggle');
+    const engineeringRateInput = $('engineeringHourlyRate');
+    const engineeringRateToggle = $('engineeringRateToggle');
     if (rateInput){
       if (!rateInput.value) rateInput.value = String(DEFAULT_HOURLY_RATE);
       const syncRate = ()=>{
@@ -1193,6 +3134,37 @@ window.addEventListener('DOMContentLoaded', async ()=>{
       setInputLocked(rateInput, false);
       if (opphengInput) setInputLocked(opphengInput, false);
     }
+    if (engineeringRateInput){
+      if (!engineeringRateInput.value) engineeringRateInput.value = String(DEFAULT_ENGINEERING_HOURLY_RATE);
+      const syncEngineeringRate = ()=>{
+        engineeringRateInput.value = String(sanitizeHourlyRate(engineeringRateInput.value, DEFAULT_ENGINEERING_HOURLY_RATE));
+        updateEngineeringPreview();
+        markDirty();
+      };
+      engineeringRateInput.addEventListener('input', ()=>{
+        if (engineeringRateToggle && !engineeringRateToggle.checked) return;
+        updateEngineeringPreview();
+        markDirty();
+      });
+      engineeringRateInput.addEventListener('change', syncEngineeringRate);
+      engineeringRateInput.addEventListener('blur', syncEngineeringRate);
+    }
+    if (engineeringRateToggle){
+      engineeringRateToggle.checked = false;
+      const applyEngineeringRateLock = (markDirtyAfter)=>{
+        const locked = !engineeringRateToggle.checked;
+        setInputLocked(engineeringRateInput, locked);
+        if (locked && engineeringRateInput){
+          engineeringRateInput.value = String(DEFAULT_ENGINEERING_HOURLY_RATE);
+        }
+        updateEngineeringPreview();
+        if (markDirtyAfter) markDirty();
+      };
+      engineeringRateToggle.addEventListener('change', ()=>applyEngineeringRateLock(true));
+      applyEngineeringRateLock(false);
+    }else{
+      setInputLocked(engineeringRateInput, false);
+    }
     ['meter','v90h','v90v'].forEach(id=>{
       const el = $(id);
       if (!el) return;
@@ -1211,30 +3183,29 @@ window.addEventListener('DOMContentLoaded', async ()=>{
       distEl.addEventListener('blur', ensureDist);
     }
     refreshUIBySeries();
+    setCurrentMarginRate(DEFAULT_MARGIN_RATE);
+    setCurrentMontasjeMarginRate(DEFAULT_MARGIN_RATE);
+    setCurrentEngineeringMarginRate(DEFAULT_MARGIN_RATE);
+    applyCalculatorQueryContext();
+
+    const marginConfigBtn = $('marginConfigBtn');
+    if (marginConfigBtn){
+      marginConfigBtn.addEventListener('click', ()=>openMarginModal('material'));
+    }
+    const montasjeDgConfigBtn = $('montasjeDgConfigBtn');
+    if (montasjeDgConfigBtn){
+      montasjeDgConfigBtn.addEventListener('click', ()=>openMarginModal('montasje'));
+    }
+    const engineeringDgConfigBtn = $('engineeringDgConfigBtn');
+    if (engineeringDgConfigBtn){
+      engineeringDgConfigBtn.addEventListener('click', ()=>openMarginModal('engineering'));
+    }
 
     const frSel = document.getElementById('freightRate');
     if (frSel){
       frSel.addEventListener('change', ()=>{
         if (!lastCalc) return;
-        const rate = Number(frSel.value || 0.10);
-        const freight = round2((lastCalc.subtotal || 0) * rate);
-        const totalEx = round2((lastCalc.subtotal || 0) + freight);
-        const montasjeCost = round2(lastCalc.montasje?.cost || 0);
-        const opphengCost = round2(lastCalc.oppheng?.cost || 0);
-        const totalInclMontasje = round2(totalEx + montasjeCost);
-        const total = round2(totalInclMontasje + opphengCost);
-        const freightEl = $('freight');
-        if (freightEl) freightEl.textContent = fmtNO.format(freight);
-        const totalExEl = $('totalExMontasje');
-        if (totalExEl) totalExEl.textContent = fmtNO.format(totalEx);
-        const totalInclEl = document.getElementById('totalInclMontasje');
-        if (totalInclEl) totalInclEl.textContent = fmtNO.format(totalInclMontasje);
-        const totalEl = $('total');
-        if (totalEl) totalEl.textContent = fmtNO.format(total);
-        lastCalc.freight = freight;
-        lastCalc.totalExMontasje = totalEx;
-        lastCalc.totalInclMontasje = totalInclMontasje;
-        lastCalc.total = total;
+        recalcLastTotalsFromCurrentRates();
       });
     }
 
@@ -1253,79 +3224,114 @@ window.addEventListener('DOMContentLoaded', async ()=>{
     });
 
   function enhanceNumberSteppers() {
-  // Finn alle number-felt vi bruker
-  const ids = ['meter','v90h','v90v','fbQty','boxQty'];
-  ids.forEach(id=>{
-    const input = document.getElementById(id);
-    if (!input || input.dataset.enhanced) return;
+    const ids = ['meter','v90h','v90v','fbQty','boxQty'];
+    ids.forEach(id=>{
+      const input = document.getElementById(id);
+      if (!input || input.dataset.enhanced) return;
 
-    // Krav: heltall >= 0
-    input.setAttribute('min','0');
-    input.setAttribute('step','1');
-    input.placeholder = input.placeholder || '0';
+      input.setAttribute('min','0');
+      input.setAttribute('step','1');
+      input.placeholder = input.placeholder || '0';
 
-    // Pakk inn i stepper
-    const wrap = document.createElement('div');
-    wrap.className = 'stepper';
-    input.parentNode.insertBefore(wrap, input);
-    wrap.appendChild(input);
+      const wrap = document.createElement('div');
+      wrap.className = 'stepper';
 
-    wrap.appendChild(input);
+      const plus = document.createElement('button');
+      plus.type = 'button';
+      plus.className = 'btn-step';
+      plus.textContent = '+';
 
-const plus  = document.createElement('button');
-plus.type = 'button';
-plus.className = 'btn-step';
-plus.textContent = '+';
+      const minus = document.createElement('button');
+      minus.type = 'button';
+      minus.className = 'btn-step';
+      minus.textContent = '-';
 
-const minus = document.createElement('button');
-minus.type = 'button';
-minus.className = 'btn-step';
-minus.textContent = '–';
+      const parent = input.parentNode;
+      if (!parent) return;
+      parent.insertBefore(wrap, input);
+      wrap.appendChild(input);
+      wrap.appendChild(plus);
+      wrap.appendChild(minus);
 
-wrap.appendChild(plus);
-wrap.appendChild(minus);
+      const clampInt = ()=>{
+        const v = Math.max(0, Math.round(Number(input.value||0)));
+        input.value = Number.isFinite(v) ? String(v) : '0';
+      };
 
-    const clampInt = () => {
-      const v = Math.max(0, Math.round(Number(input.value||0)));
-      input.value = isFinite(v) ? String(v) : '0';
-    };
+      minus.addEventListener('click', ()=>{
+        const next = Math.max(0, Number(input.value||0) - 1);
+        input.value = String(next);
+        clampInt();
+        input.dispatchEvent(new Event('change'));
+      });
+      plus.addEventListener('click', ()=>{
+        const next = Math.max(0, Number(input.value||0) + 1);
+        input.value = String(next);
+        clampInt();
+        input.dispatchEvent(new Event('change'));
+      });
 
-    minus.addEventListener('click', ()=>{ input.value = String(Math.max(0, (Number(input.value||0)-1))); clampInt(); input.dispatchEvent(new Event('change')); });
-    plus .addEventListener('click', ()=>{ input.value = String(Math.max(0, (Number(input.value||0)+1))); clampInt(); input.dispatchEvent(new Event('change')); });
+      input.addEventListener('input', clampInt);
+      input.addEventListener('blur', clampInt);
 
-    input.addEventListener('input', clampInt);
-    input.addEventListener('blur',  clampInt);
-
-    input.dataset.enhanced = '1';
-  });
-}
+      input.dataset.enhanced = '1';
+    });
+  }
 
 // Kall denne etter UI er bygd første gang
 enhanceNumberSteppers();
 
-    $('status').textContent = `CSV lastet (${catalog.length} varer)`;
+    const statusEl = $('status');
+    if (statusEl){
+      statusEl.textContent = `CSV lastet (${catalog.length} varer)`;
+    }
   }catch(e){
-    $('status').textContent = 'Feil CSV: '+(e.message||e);
+    const statusEl = $('status');
+    if (statusEl){
+      statusEl.textContent = 'Feil CSV: '+(e.message||e);
+    }
   }
 });
 
 function refreshUIBySeries(){
   const series = $('series').value;
 
-  // XCM låser ledere
-  if (series==='XCM'){ $('ledere').value='3F+N+PE'; $('ledere').disabled=true; }
-  else { $('ledere').disabled=false; if(!$('ledere').value) $('ledere').value=''; }
+  // Ledere låses for enkelte serier
+  const ledereEl = $('ledere');
+  if (ledereEl){
+    if (seriesLocksLedere(series)){
+      ledereEl.value = '3F+N+PE';
+      ledereEl.disabled = true;
+    } else {
+      ledereEl.disabled = false;
+      if (!ledereEl.value) ledereEl.value = '';
+    }
+  }
 
   // Sluttelement: skjul trafo for ikke-XCP-S
   const slutt = $('sluttEl');
+  const crtAllowed = seriesSupportsCrtFeed(series);
   Array.from(slutt.options).forEach(opt=>{
-    if (opt.value==='crt_board_feed') opt.hidden = (series!=='XCP-S');
+    if (opt.value==='crt_board_feed') opt.hidden = !crtAllowed;
   });
-  if (series!=='XCP-S' && slutt.value==='crt_board_feed') slutt.value='';
+  if (!crtAllowed && slutt.value==='crt_board_feed') slutt.value='';
 
   // Amp-valg
-  const amps = Array.from(new Set(catalog.filter(r=>r.series===series && !/box$/.test(r.type)).map(r=>Number(deriveAmp(r))))).filter(Number.isFinite).sort((a,b)=>a-b);
-  $('ampSelect').innerHTML = '<option value="">Velg…</option>' + amps.map(a=>`<option value="${a}">${a}</option>`).join('');
+  const ampSelectEl = $('ampSelect');
+  if (ampSelectEl){
+    const previousValue = ampSelectEl.value;
+    const ampList = ampOptionsBySeries.get(series) || [];
+    const options = ampList.map(a=>`<option value="${a}">${a}</option>`).join('');
+    ampSelectEl.innerHTML = '<option value="">Velg…</option>' + options;
+    const prevExists = ampList.some(val=>String(val) === String(previousValue));
+    ampSelectEl.value = prevExists ? previousValue : '';
+    const disabled = !series || !ampList.length;
+    ampSelectEl.disabled = disabled;
+    ampSelectEl.setAttribute('aria-disabled', disabled ? 'true' : 'false');
+    ampSelectEl.title = disabled
+      ? (!series ? 'Velg system for å få ampere-listen.' : 'Ingen ampere funnet for valgt system.')
+      : '';
+  }
 
   // Bokser
   const boxes = catalog.filter(r=>['plug_in_box','tap_off_box','bolt_on_box'].includes(r.type));
@@ -1356,8 +3362,35 @@ function askExpansionIfNeeded(meter){
   });
 }
 
+async function sendCalculationEmail(payload){
+  const res = await fetch('/api/send-calculation-email', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  if (!res.ok){
+    let errorText = `Send foresp\u00f8rsel feilet (${res.status})`;
+    try{
+      const data = await res.json();
+      if (data && typeof data.error === 'string' && data.error.trim()){
+        errorText += `: ${data.error.trim()}`;
+      }
+    }catch(_jsonErr){
+      try{
+        const txt = await res.text();
+        if (txt && txt.trim()) errorText += `: ${txt.trim()}`;
+      }catch(_textErr){}
+    }
+    const err = new Error(errorText);
+    err.status = res.status;
+    throw err;
+  }
+}
+
 // beregn
-$('calcBtn').addEventListener('click', async ()=>{
+const calcBtn = $('calcBtn');
+if (calcBtn){
+  calcBtn.addEventListener('click', async ()=>{
   if (!authState.loggedIn){
     const statusEl = $('status');
     if (statusEl) statusEl.textContent = 'Logg inn for \u00E5 beregne.';
@@ -1373,7 +3406,7 @@ $('calcBtn').addEventListener('click', async ()=>{
     const v90_h  = Number($('v90h').value || 0);
     const v90_v  = Number($('v90v').value || 0);
     const ampSel = $('ampSelect').value;
-    const ledere = series==='XCM' ? '3F+N+PE' : $('ledere').value;
+    const ledere = seriesLocksLedere(series) ? '3F+N+PE' : $('ledere').value;
     const startEl= $('startEl').value;
     const sluttEl= $('sluttEl').value;
     const fbQty  = Number($('fbQty').value || 0);
@@ -1383,13 +3416,21 @@ $('calcBtn').addEventListener('click', async ()=>{
     if (!series) throw new Error('Velg system.');
     if (!meter) throw new Error('Angi meter (heltall).');
     if (!ampSel) throw new Error('Velg ampere.');
-    if (series!=='XCM' && !ledere) throw new Error('Velg ledere.');
+    if (!seriesLocksLedere(series) && !ledere) throw new Error('Velg ledere.');
     if (!startEl) throw new Error('Velg startelement.');
     if (!sluttEl) throw new Error('Velg sluttelement.');
 
-    if (!projectState.currentProject || !projectState.currentCustomer){
-      const info = await ensureProjectInfo();
-      if (!info) return;
+    const lineNumberInputEl = $('lineNumberInput');
+    const lineNumberValue = (lineNumberInputEl?.value || '').trim();
+    if (!lineNumberValue){
+      const statusEl = $('status');
+      if (statusEl) statusEl.textContent = 'Oppgi linjenummer f\u00F8r beregning.';
+      if (lineNumberInputEl) lineNumberInputEl.focus();
+      return;
+    }
+    projectState.currentLineNumber = lineNumberValue;
+    if (lineNumberInputEl){
+      lineNumberInputEl.value = lineNumberValue;
     }
 
     const expansionYes = await askExpansionIfNeeded(meter);
@@ -1397,26 +3438,50 @@ $('calcBtn').addEventListener('click', async ()=>{
     const rows = catalog.filter(r=>r.series===series);
     const freightRate = Number((document.getElementById('freightRate')?.value) || 0.10);
     const montasjeSettings = readMontasjeSettingsFromUI();
+    const engineeringSettings = readEngineeringSettingsFromUI();
 
     const cat = { rows, catalog };
-    const out = price(cat, {
+    const priceInput = {
       series, dist, meter, v90_h, v90_v, ampere: amp, ledere,
       startEl, sluttEl,
       fbQty, boxQty, boxSel,
-      expansionYes, freightRate, montasjeSettings
-    });
+      expansionYes, freightRate, marginRate: currentMarginRate,
+      montasjeMarginRate: currentMontasjeMarginRate,
+      engineeringMarginRate: currentEngineeringMarginRate,
+      montasjeSettings, engineeringSettings
+    };
+    const out = price(cat, priceInput);
+    priceInput.marginRate = out.marginRate;
+    priceInput.montasjeMarginRate = out.montasjeMarginRate;
+    priceInput.engineeringMarginRate = out.engineeringMarginRate;
+    setCurrentMarginRate(out.marginRate);
+    setCurrentMontasjeMarginRate(out.montasjeMarginRate);
+    setCurrentEngineeringMarginRate(out.engineeringMarginRate);
+    lastCalcInput = deepClone(priceInput);
+    let xapComparison = null;
+    if (shouldCompareXap(series)){
+      xapComparison = computeXapComparison(priceInput);
+    }
     $('mat').textContent      = fmtNO.format(out.material);
     $('margin').textContent   = fmtNO.format(out.margin);
     $('subtotal').textContent = fmtNO.format(out.subtotal);
     $('freight').textContent  = fmtNO.format(out.freight);
     const montasjeEl = document.getElementById('montasje');
     if (montasjeEl) montasjeEl.textContent = fmtNO.format(out.montasje.cost);
-    const montasjeMarginVal = round2(out.montasje.cost * 0.20);
+    const montasjeMarginVal = round2(out.montasjeMargin ?? 0);
     const montasjeMarginEl = document.getElementById('montasjeMargin');
     if (montasjeMarginEl) montasjeMarginEl.textContent = fmtNO.format(montasjeMarginVal);
     const montasjeDetailText = formatMontasjeDetail(out.montasje);
     const montasjeDetailEl = document.getElementById('montasjeDetail');
     if (montasjeDetailEl) montasjeDetailEl.textContent = montasjeDetailText;
+    const engineeringEl = document.getElementById('engineering');
+    if (engineeringEl) engineeringEl.textContent = fmtNO.format(out.engineering.cost);
+    const engineeringMarginVal = round2(out.engineeringMargin ?? 0);
+    const engineeringMarginEl = document.getElementById('engineeringMargin');
+    if (engineeringMarginEl) engineeringMarginEl.textContent = fmtNO.format(engineeringMarginVal);
+    const engineeringDetailText = formatEngineeringDetail(out.engineering);
+    const engineeringDetailEl = document.getElementById('engineeringDetail');
+    if (engineeringDetailEl) engineeringDetailEl.textContent = engineeringDetailText;
     const opphengEl = document.getElementById('oppheng');
     if (opphengEl) opphengEl.textContent = fmtNO.format(out.oppheng.cost);
     const opphengDetailText = formatOpphengDetail(out.oppheng);
@@ -1424,34 +3489,69 @@ $('calcBtn').addEventListener('click', async ()=>{
     if (opphengDetailEl) opphengDetailEl.textContent = opphengDetailText;
     const totalExEl = document.getElementById('totalExMontasje');
     if (totalExEl) totalExEl.textContent = fmtNO.format(out.totalExMontasje);
-    const totalInclMontasjeVal = round2(out.totalExMontasje + out.montasje.cost);
+    const totalInclMontasjeVal = round2(out.totalInclMontasje ?? calculateDgPricing(out.montasje.cost, out.montasjeMarginRate).totalWithDg);
     const totalInclMontasjeEl = document.getElementById('totalInclMontasje');
     if (totalInclMontasjeEl) totalInclMontasjeEl.textContent = fmtNO.format(totalInclMontasjeVal);
+    const totalInclEngineeringVal = round2(out.totalInclEngineering ?? calculateDgPricing(out.engineering.cost, out.engineeringMarginRate).totalWithDg);
+    const totalInclEngineeringEl = document.getElementById('totalInclEngineering');
+    if (totalInclEngineeringEl) totalInclEngineeringEl.textContent = fmtNO.format(totalInclEngineeringVal);
     $('total').textContent    = fmtNO.format(out.total);
+    const calcTimestamp = new Date().toISOString();
     lastCalc = {
+      lineNumber: lineNumberValue,
+      timestamp: calcTimestamp,
       material: out.material,
+      marginRate: out.marginRate,
+      marginFactor: out.marginFactor,
       margin: out.margin,
+      montasjeMarginRate: out.montasjeMarginRate,
+      montasjeMargin: montasjeMarginVal,
+      engineeringMarginRate: out.engineeringMarginRate,
+      engineeringMargin: engineeringMarginVal,
       subtotal: out.subtotal,
+      freightRate,
       freight: out.freight,
       totalExMontasje: out.totalExMontasje,
       totalInclMontasje: totalInclMontasjeVal,
+      totalInclEngineering: totalInclEngineeringVal,
       montasje: out.montasje,
+      engineering: out.engineering,
       oppheng: out.oppheng,
       montasjeDetail: montasjeDetailText,
+      engineeringDetail: engineeringDetailText,
       opphengDetail: opphengDetailText,
       total: out.total
     };
+    updateSelectedAddonTotalUI();
     markClean();
 
-    const tbody = document.querySelector('#bomTbl tbody');
-    tbody.innerHTML = '';
-    out.bom.forEach(b=>{
-      const tr = document.createElement('tr');
-      tr.innerHTML = `<td>${b.code}</td><td>${b.type}</td><td>${b.series}</td><td>${b.ampere}</td><td>${b.lederes||b.ledere||''}</td><td>${b.antall}</td><td>${b.enhet.toFixed(2)}</td><td>${b.sum.toFixed(2)}</td>`;
-      tbody.appendChild(tr);
-    });
+    renderBomTable('bomTbl', out.bom);
     document.getElementById('results').hidden = false;
     updateProjectMetaDisplay();
+    updateXapComparisonUI(xapComparison);
+
+    lastEmailPayload = {
+      project: projectState.currentProject,
+      customer: projectState.currentCustomer,
+      lineNumber: lineNumberValue,
+      inputs: deepClone(priceInput),
+      totals: {
+        material: out.material,
+        marginRate: out.marginRate,
+        margin: out.margin,
+        montasjeMarginRate: out.montasjeMarginRate,
+        montasjeMargin: montasjeMarginVal,
+        engineeringMarginRate: out.engineeringMarginRate,
+        engineeringMargin: engineeringMarginVal,
+        subtotal: out.subtotal,
+        freight: out.freight,
+        total: out.total,
+        totalExMontasje: out.totalExMontasje,
+        totalInclMontasje: totalInclMontasjeVal,
+        totalInclEngineering: totalInclEngineeringVal
+      },
+      bom: out.bom
+    };
 
     document.getElementById('exportCsv').onclick = ()=>{
       const header = ['code','type','series','ampere','ledere','antall','enhet','sum'];
@@ -1459,50 +3559,49 @@ $('calcBtn').addEventListener('click', async ()=>{
       const blob = new Blob([lines.join('\n')], {type:'text/csv;charset=utf-8;'});
       const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'BOM.csv'; a.click();
     };
+    const sendBtn = document.getElementById('sendRequestBtn');
+    if (sendBtn){
+      sendBtn.disabled = false;
+      sendBtn.textContent = 'Send foresp\u00f8rsel';
+      sendBtn.onclick = async ()=>{
+        if (!lastEmailPayload){
+          console.warn('Ingen beregning \u00e5 sende.');
+          return;
+        }
+        const originalText = sendBtn.textContent;
+        sendBtn.disabled = true;
+        sendBtn.textContent = 'Sender...';
+        try{
+          await sendCalculationEmail(lastEmailPayload);
+          sendBtn.textContent = 'Sent';
+          const statusEl = $('status');
+          if (statusEl) statusEl.textContent = 'Foresp\u00f8rsel sendt.';
+        }catch(err){
+          console.warn('E-postsending feilet', err);
+          sendBtn.textContent = 'Feil, pr\u00f8v igjen';
+          sendBtn.disabled = false;
+          const statusEl = $('status');
+          if (statusEl) statusEl.textContent = String(err.message||err);
+          return;
+        }
+        setTimeout(()=>{
+          sendBtn.textContent = originalText;
+          sendBtn.disabled = false;
+        }, 2000);
+      };
+    }
   }catch(err){
     $('status').textContent = String(err.message||err);
+    lastEmailPayload = null;
+    updateXapComparisonUI(null);
+    const sendBtn = document.getElementById('sendRequestBtn');
+    if (sendBtn){
+      sendBtn.disabled = true;
+      sendBtn.textContent = 'Send foresp\u00f8rsel';
+    }
   }
-  
-// Nullstill
-document.getElementById('resetBtn').addEventListener('click', ()=>{
-  // tøm felter
-  ['series','dist','ampSelect','ledere','startEl','sluttEl','boxSel'].forEach(id=>{ const el=$(id); if(el){ el.value=''; el.disabled=false; }});
-  ['meter','v90h','v90v','fbQty','boxQty'].forEach(id=>{ const el=$(id); if(el){ el.value=''; }});
+  });
+}
 
-  // skjul resultat
-  const res = document.getElementById('results');
-  if (res) res.hidden = true;
 
-  // nullstill status
-  const st = document.getElementById('status');
-  if (st) st.textContent = '';
-
-  // bygg UI på nytt
-  const rateInput = $('montasjeHourlyRate');
-  const rateToggle = $('rateToggle');
-  if (rateToggle) rateToggle.checked = false;
-  if (rateInput){
-    rateInput.value = String(DEFAULT_HOURLY_RATE);
-    setInputLocked(rateInput, true);
-  }
-  const opphengInput = $('opphengRate');
-  if (opphengInput){
-    opphengInput.value = '';
-    opphengInput.dataset.appliedValue = '';
-    opphengInput.dataset.userOverride = 'false';
-    opphengInput.dataset.defaultRate = '';
-    opphengInput.dataset.appliedAmp = '';
-    setInputLocked(opphengInput, true);
-  }
-  refreshUIBySeries();
-  updateMontasjePreview();
-  projectState.currentProject = '';
-  projectState.currentCustomer = '';
-  updateProjectMetaDisplay();
-  updateAuthUI();
-  lastCalc = null;
-  isDirty = false;
-});
-
-});
 

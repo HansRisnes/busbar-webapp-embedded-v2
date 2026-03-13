@@ -1,0 +1,479 @@
+﻿<!DOCTYPE html>
+<html lang="no">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Busbar Priskalkulator</title>
+  <link rel="stylesheet" href="styles.css">
+  <style>
+    :root{
+      --bg:#f1f0f0; --text:#f1f0f0; --muted:#9fb0c6;
+      --card:#08172e; --card-border:#435A7F;
+      --input:#2B3A58; --input-border:#435A7F;
+      --accent:#2B3A58; --accent-weak:#435A7F;
+      --warning:#febe10; --placeholder:#6b7280;
+    }
+    header h1{margin:0 0 6px 0; color:var(--muted)}
+    
+    .logo{display:block;width:180px;max-width:100%;height:auto;background:transparent;padding:0}
+    /* Ens bredde og spacing for alle felter, venstre→høyre */
+
+/* Skjul nettleserens små spinnere på number-felt */
+input[type="number"]{
+  appearance: textfield;      /* standard */
+  -moz-appearance: textfield; /* Firefox */
+}
+
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button{
+  -webkit-appearance: none;   /* Chrome / Edge / Safari */
+  margin: 0;
+}
+
+/* Stepper-wrapper */
+.stepper{ display:flex; align-items:stretch; gap:8px; }
+.stepper input[type="number"]{ flex:1 1 auto; height:44px; }
+.stepper .btn-step{ min-width:44px; width:44px; height:44px; padding:0; }
+
+/* Store, runde knapper i samme stil som select-pila */
+.btn-step{
+  min-width:44px; height:40px;
+  border:1px solid var(--input-border);
+  background:var(--input);
+  color:var(--text);
+  border-radius:10px;
+  font-size:18px; line-height:1; cursor:pointer;
+  display:flex; align-items:center; justify-content:center;
+  transition:transform .06s ease, background .15s ease, border-color .15s ease;
+}
+.btn-step:active{ transform:translateY(1px); }
+.btn-step:hover{ border-color:var(--accent-weak); }
+
+    /* modal */
+    .modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,0.6);display:none;align-items:center;justify-content:center;z-index:50}
+    .modal{background:var(--card);border:1px solid var(--card-border);border-radius:12px;padding:16px;min-width:320px;max-width:90vw}
+    .modal h3{margin:0 0 8px 0}
+    .modal p{margin:0 0 12px 0;color:var(--muted)}
+    .actions{display:flex;gap:8px;justify-content:flex-end}
+    .btn{padding:10px 14px;background:var(--accent);border:1px solid var(--accent);border-radius:10px;color:#fff;cursor:pointer}
+    .btn.alt{background:var(--input);border-color:var(--input-border)}
+
+/* Totals styling centralized in styles.css */
+
+  </style>
+</head>
+<body>
+  <header>
+    <div class="header-top">
+      <h1>Busbar Priskalkulator</h1>
+      <div id="authControls" class="auth-controls">
+        <button id="loginBtn" class="btn">Logg på</button>
+        <span id="authUser" class="auth-user muted-text" hidden></span>
+        <button id="logoutBtn" class="btn alt" hidden>Logg av</button>
+      </div>
+    </div>
+    <div class="market-bar" id="marketTicker" aria-live="polite">
+      <div class="market-item">
+        <span class="market-label">LME aluminium</span>
+        <span class="market-value" id="marketAlPrice">--</span>
+        <span class="market-note" id="marketAlMeta">USD/t · ALI=F</span>
+      </div>
+      <div class="market-item">
+        <span class="market-label">USD / NOK</span>
+        <span class="market-value" id="marketUsdNok">--</span>
+        <span class="market-note" id="marketUsdMeta">Henter...</span>
+      </div>
+      <div class="market-item">
+        <span class="market-label">EUR / NOK</span>
+        <span class="market-value" id="marketEurNok">--</span>
+        <span class="market-note" id="marketEurMeta">Henter...</span>
+      </div>
+      <div class="market-item market-updated">
+        <span class="market-label">Sist oppdatert</span>
+        <span class="market-value small" id="marketUpdated">--</span>
+        <span class="market-status" id="marketStatus">Henter...</span>
+      </div>
+    </div>
+    <p>Leser rå CSV fra <code>data/busbar-webapp-embedded-v2.csv</code>, <code>data/busbar-webapp-embedded-v2.1.csv</code> og <code>data/XAP_busbar_prisliste_ekstrakt_5W_clean.csv</code>.</p>
+  </header>
+
+  <main class="app-views">
+    <div id="calculatorView" class="view-stack">
+      <div class="view-toolbar">
+        <a href="index.html" class="btn alt nav-page-btn">Åpne prosjektoversikt</a>
+        <div id="activeProjectBar" class="project-pill" data-project-meta hidden>
+          <div class="project-pill-field">
+            <span class="pill-label">Prosjekt</span>
+            <span id="activeProjectName" class="pill-value" data-project-name></span>
+          </div>
+          <div class="project-pill-field">
+            <span class="pill-label">Kunde</span>
+            <span id="activeCustomerName" class="pill-value" data-project-customer></span>
+          </div>
+          <button id="editProjectBtn" type="button" class="btn alt btn-inline" data-project-edit>Endre</button>
+        </div>
+      </div>
+
+      <section class="card">
+      <div class="card-header">
+  <div class="logo-mask" role="img" aria-label="Logo"></div>
+  <h2>Dette er en testversjon, kun til internbruk</h2>
+    </div>
+
+    <div class="rows">
+      <!-- Rad 1 -->
+      <div class="row">
+        <label>System*<br>
+          <select id="series">
+            <option value="">Velg…</option>
+              <option value="XCM">XCM Legrand (160-1000A)</option>
+            <option value="XCP-S">XCP-S Legrand (1250-5000A)</option>
+            <option value="XAP-B">XAP-B Eaton (400-5000A)</option>
+            
+          </select>
+        </label>
+
+        <label>Meter*<br>
+          <input id="meter" type="number" step="1" inputmode="numeric" placeholder="0">
+        </label>
+
+        <label>90° horisontal vinkel<br>
+          <input id="v90h" type="number" step="1" inputmode="numeric" placeholder="0">
+        </label>
+
+        <label>90° vertikal vinkel<br>
+          <input id="v90v" type="number" step="1" inputmode="numeric" placeholder="0">
+        </label>
+      </div>
+
+      <!-- Rad 2 -->
+      <div class="row">
+        <label>Ampere*<br>
+          <select id="ampSelect"></select>
+        </label>
+
+        <label>Ledere*<br>
+          <select id="ledere">
+            <option value="">Velg…</option>
+            <option>3F+N+PE</option>
+            <option>3F+PE</option>
+          </select>
+        </label>
+
+        <label>Startelement*<br>
+          <select id="startEl">
+            <option value="">Velg…</option>
+            <option value="board_feed">Tavleelement</option>
+            <option value="end_feed_unit">Endetilførselsboks</option>
+            <option value="none">Ingen</option>
+          </select>
+        </label>
+
+        <label>Sluttelement*<br>
+          <select id="sluttEl">
+            <option value="">Velg…</option>
+            <option value="board_feed">Tavleelement</option>
+            <option value="crt_board_feed" data-series="XCP-S">Trafoelement</option>
+            <option value="end_cover">Endelokk</option>
+            <option value="none">Ingen</option>
+          </select>
+        </label>
+      </div>
+
+      <!-- Rad 3 -->
+      <div class="row">
+        <label>Med avtappingspunkter<br>
+          <select id="dist">
+            <option value="">Velg…</option>
+            <option>Ja</option>
+            <option>Nei</option>
+          </select>
+        </label>
+
+        <label>Avtappingsbokser (antall)<br>
+          <input id="boxQty" type="number" step="1" inputmode="numeric" placeholder="0">
+        </label>
+
+        <label>Type boks<br>
+          <select id="boxSel">
+            <option value="">Velg...</option>
+          </select>
+        </label>
+
+        <label>Brannelement (antall)<br>
+          <input id="fbQty" type="number" step="1" inputmode="numeric" placeholder="0">
+            </label>
+          </div>
+        <p class="muted-text">* er obligatoriske felt.</p>
+      </div>
+
+      <div class="row montasje-row">
+        <div class="full-width">
+          <fieldset class="montasje-box">
+            <legend>Montasje</legend>
+            <div class="montasje-grid">
+              <div class="montasje-rates">
+                <label class="montasje-rate">Timessats (NOK)<br>
+                  <input id="montasjeHourlyRate" type="number" inputmode="decimal" step="0.01" min="0" value="657.8">
+                </label>
+                <label class="oppheng-rate">Opphengsmateriell (NOK/stk)<br>
+                  <input id="opphengRate" type="number" inputmode="decimal" step="0.01" min="0" placeholder="0">
+                </label>
+                <label class="rate-toggle">
+                  <input id="rateToggle" type="checkbox">
+                  Juster fra standard
+                </label>
+              </div>
+              <div class="montasje-stats">
+                <p id="montasjeProfileLabel" class="muted-text">Velg ampere for å hente montasjetider.</p>
+                <dl class="montasje-breakdown">
+                  <div><dt>Timer pr. meter</dt><dd><span id="montasjeHoursPerMeter">-</span></dd></div>
+                  <div><dt>Timer pr. 90°-vinkel</dt><dd><span id="montasjeHoursPerAngle">-</span></dd></div>
+                  <div><dt>Timer totalt</dt><dd><span id="montasjeTotalHours">-</span></dd></div>
+                  <div><dt>Estimert montasje</dt><dd><span id="montasjePreviewCost">-</span></dd></div>
+                  <div><dt>Oppheng kr/stk</dt><dd><span id="opphengPreviewRate">-</span></dd></div>
+                  <div><dt>Oppheng sum</dt><dd><span id="opphengPreviewCost">-</span></dd></div>
+                </dl>
+                <div id="montasjeDetail" class="muted-text"></div>
+                <div id="opphengDetail" class="muted-text"></div>
+              </div>
+            </div>
+            <p class="muted-text">Beregningen bruker meter og vinkler fra skjemaet. Avtappingsbokser og brannelementer har ingen montasjekost.</p>
+          </fieldset>
+        </div>
+      </div>
+      <div class="row montasje-row">
+        <div class="full-width">
+          <fieldset class="montasje-box">
+            <legend>Ingeniør</legend>
+            <div class="montasje-grid">
+              <div class="montasje-rates engineering-rates">
+                <label class="montasje-rate">Timessats (NOK)<br>
+                  <input id="engineeringHourlyRate" type="number" inputmode="decimal" step="0.01" min="0" value="929.9">
+                </label>
+                <label class="rate-toggle">
+                  <input id="engineeringRateToggle" type="checkbox">
+                  Juster fra standard
+                </label>
+              </div>
+              <div class="montasje-stats">
+                <p id="engineeringProfileLabel" class="muted-text">Ingeniørtid gjelder alle serier og alle ampere.</p>
+                <dl class="montasje-breakdown">
+                  <div><dt>Timer pr. meter</dt><dd><span id="engineeringHoursPerMeter">-</span></dd></div>
+                  <div><dt>Timer pr. 10x 90°-vinkel</dt><dd><span id="engineeringHoursPerTenAngles">-</span></dd></div>
+                  <div><dt>Timer totalt</dt><dd><span id="engineeringTotalHours">-</span></dd></div>
+                  <div><dt>Estimert ingeniør</dt><dd><span id="engineeringPreviewCost">-</span></dd></div>
+                </dl>
+                <div id="engineeringDetail" class="muted-text"></div>
+              </div>
+            </div>
+            <p class="muted-text">Beregningen bruker meter og vinkler fra skjemaet.</p>
+          </fieldset>
+        </div>
+      </div>
+      <div class="row row-actions">
+        <label class="line-number-field">Linjenummer*
+          <input id="lineNumberInput" type="text" inputmode="text" autocomplete="off" placeholder="Eks. L1-01" required>
+        </label>
+        <div class="actions-group">
+          <button id="calcBtn" class="btn alt" disabled>Beregn</button>
+          <button id="resetBtn" class="btn alt" type="button">Nullstill</button>
+          <span id="status" class="status"></span>
+        </div>
+      </div>
+    </div>
+
+  </section>
+
+  <section id="results" class="card" hidden>
+    <div class="results-heading">
+      <h2>Resultat</h2>
+      <div id="projectMeta" class="project-meta" data-project-meta hidden>
+        <span class="project-field"><strong>Prosjekt:</strong> <span id="projectNameDisplay" data-project-name></span></span>
+        <span class="project-field"><strong>Kunde:</strong> <span id="customerNameDisplay" data-project-customer></span></span>
+      </div>
+    </div>
+    <div class="totals">
+      <!-- Rad 1: materiel, margin, subtotal -->
+      <div class="totals-line">
+        <div class="total-item"><strong>Materielkost:</strong> <span id="mat"></span></div>
+        <div class="total-item margin-item">
+          <button id="marginConfigBtn" type="button" class="btn alt margin-config-btn">Endre</button>
+          <strong id="marginLabel">DG 20 %:</strong>
+          <span id="margin"></span>
+        </div>
+        <div class="total-item aligned-total-right"><strong>Total strømskinne:</strong> <span id="subtotal"></span> NOK eks.mva</div>
+      </div>
+      <!-- Rad 2: frakt (1), tom (2), total strømskinne ink. frakt (3) -->
+      <div class="totals-line">
+        <div class="total-item freight-item">
+          <strong>Frakt:</strong>
+          <span id="freight" class="freight-value"></span>
+          <select id="freightRate">
+            <option value="0.10" selected>10 % (Standard)</option>
+            <option value="0.15">15 % (Nord-Norge)</option>
+          </select>
+        </div>
+        <div class="total-item placeholder"></div>
+        <div class="total-item aligned-total-right"><strong>Total strømskinne ink. frakt:</strong> <span id="totalExMontasje"></span> NOK eks.mva</div>
+      </div>
+      <div class="totals-line xap-compare" id="xapCompareLine" hidden>
+        <div class="total-item"><span id="xapComparisonValue"></span> <span id="xapComparisonCurrency"></span></div>
+      </div>
+      <!-- Rad 3: montasje, ingeniør og oppheng i egen firkant (full bredde) -->
+      <div class="totals-montasje">
+        <div class="totals-line">
+          <div class="total-item"><strong>Montasje:</strong> <span id="montasje"></span></div>
+          <div class="total-item margin-item">
+            <button id="montasjeDgConfigBtn" type="button" class="btn alt margin-config-btn">Endre</button>
+            <strong id="montasjeDgLabel">DG 20%:</strong>
+            <span id="montasjeMargin"></span>
+          </div>
+          <div class="total-item"><strong>Total montasje:</strong> <span id="totalInclMontasje"></span> NOK eks. mva</div>
+        </div>
+        <div class="totals-line">
+          <div class="total-item"><strong>Ingeniør:</strong> <span id="engineering"></span></div>
+          <div class="total-item margin-item">
+            <button id="engineeringDgConfigBtn" type="button" class="btn alt margin-config-btn">Endre</button>
+            <strong id="engineeringDgLabel">DG 20%:</strong>
+            <span id="engineeringMargin"></span>
+          </div>
+          <div class="total-item"><strong>Total ingeniør:</strong> <span id="totalInclEngineering"></span> NOK eks. mva</div>
+        </div>
+        <div class="totals-line totals-oppheng">
+          <div class="total-item"><strong>Opphengsmateriell:</strong> <span id="oppheng"></span></div>
+          <div class="total-item margin-item">
+            <button id="opphengDgConfigBtn" type="button" class="btn alt margin-config-btn">Endre</button>
+            <strong id="opphengDgLabel">DG 20%:</strong>
+            <span id="opphengMargin"></span>
+          </div>
+          <div class="total-item"><strong>Total opphengsmateriell:</strong> <span id="total"></span> NOK eks. mva</div>
+        </div>
+      </div>
+      <div class="totals-line totals-selectors">
+        <div class="addon-selectors" role="group" aria-label="Velg tillegg i totalsum">
+          <label><input id="includeMontasje" type="checkbox" checked> Montasje</label>
+          <label><input id="includeEngineering" type="checkbox" checked> Ingeniør</label>
+          <label><input id="includeOppheng" type="checkbox" checked> Opphengsmateriell</label>
+        </div>
+        <div class="total-item addon-total aligned-total-right"><strong>Total valgte:</strong> <span id="selectedAddonTotal">0,00</span> NOK eks. mva</div>
+      </div>
+    </div>
+    <h3>BOM</h3>
+    <table id="bomTbl">
+      <thead>
+        <tr>
+          <th>Code</th><th>Type</th><th>Serie</th><th>Ampere</th><th>Ledere</th><th>Antall</th><th>Enhet</th><th>Sum</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+    <div id="xapBomWrapper" hidden>
+      <h3>XAP-B BOM</h3>
+      <table id="xapBomTbl">
+        <thead>
+          <tr>
+            <th>Code</th><th>Type</th><th>Serie</th><th>Ampere</th><th>Ledere</th><th>Antall</th><th>Enhet</th><th>Sum</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div class="result-actions">
+      <button id="saveLineBtn" type="button" disabled>Lagre i prosjekt</button>
+      <button id="exportCsv">Eksporter BOM som CSV</button>
+      <button id="sendRequestBtn">Send forespørsel</button>
+    </div>
+  </section>
+
+    </div>
+  </main>
+
+  <!-- Modal for ekspansjon -->
+  <div id="expModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="expTitle">
+    <div class="modal">
+      <h3 id="expTitle">Er det sammenhengende 30 meter rett skinne?</h3>
+      <p>Velg Ja for å legge til ekspansjonsledd.</p>
+      <div class="actions">
+        <button id="expNo" class="btn alt">Nei</button>
+        <button id="expYes" class="btn">Ja</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal for innlogging -->
+  <div id="loginModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="loginTitle">
+    <div class="modal">
+      <h3 id="loginTitle">Logg på</h3>
+      <form class="login-form" onsubmit="return false;" autocomplete="off">
+        <label for="loginUsername">Brukernavn (valgfritt)
+          <input id="loginUsername" type="text" inputmode="text" autocomplete="username">
+        </label>
+        <label for="loginPassword">Passord
+          <input id="loginPassword" type="password" autocomplete="current-password" required>
+        </label>
+        <p id="loginError" class="login-error" role="alert"></p>
+        <div class="actions">
+          <button id="loginCancel" type="button" class="btn alt">Avbryt</button>
+          <button id="loginSubmit" type="button" class="btn">Logg på</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Modal for prosjektinformasjon -->
+  <div id="projectModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="projectTitle">
+    <div class="modal">
+      <h3 id="projectTitle">Prosjektinformasjon</h3>
+      <form class="project-form" onsubmit="return false;" autocomplete="off">
+        <label>Prosjektnavn
+          <div class="suggest-wrapper">
+            <input id="projectNameInput" type="text" autocomplete="off" required>
+            <ul id="projectSuggestions" class="suggestions" hidden></ul>
+          </div>
+        </label>
+        <label>Kunde
+          <div class="suggest-wrapper">
+            <input id="customerNameInput" type="text" autocomplete="off" required>
+            <ul id="customerSuggestions" class="suggestions" hidden></ul>
+          </div>
+        </label>
+        <label>Kontaktperson
+          <div class="suggest-wrapper">
+            <input id="contactPersonInput" type="text" autocomplete="off" required>
+            <ul id="contactSuggestions" class="suggestions" hidden></ul>
+          </div>
+        </label>
+        <p id="projectError" class="login-error project-error" role="alert"></p>
+        <div class="actions">
+          <button id="projectCancel" type="button" class="btn alt">Avbryt</button>
+          <button id="projectSubmit" type="button" class="btn" disabled>Fortsett</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Modal for DG -->
+  <div id="marginModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="marginTitle">
+    <div class="modal">
+      <h3 id="marginTitle">Endre DG</h3>
+      <form class="project-form" onsubmit="return false;" autocomplete="off">
+        <label for="marginPercentInput">DG (%)
+          <input id="marginPercentInput" type="number" inputmode="decimal" min="0" max="95" step="0.01" required>
+        </label>
+        <p id="marginError" class="login-error project-error" role="alert"></p>
+        <div class="actions">
+          <button id="marginCancel" type="button" class="btn alt">Avbryt</button>
+          <button id="marginSubmit" type="button" class="btn">Lagre</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <footer>
+    <small>Lengderegler: 3 m for rester &gt; 2,00 m. 1501-2000 (eller 1500-2999 for XCM) for rester &gt; 1,00 m. 500-1000 (600-1500 for XCM feeder) for rester &gt; 0,00 m.</small>
+  </footer>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

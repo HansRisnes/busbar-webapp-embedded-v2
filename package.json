@@ -1,0 +1,51 @@
+{
+  "name": "busbar-webapp-embedded-v2_backup_newer",
+  "version": "1.0.0",
+  "description": "1. **Sjekk status**\r    ```bash\r    git status -sb\r    ```\r    Da ser du hvilke filer som er endret.",
+  "main": "app.js",
+  "scripts": {
+    "start": "node server/mail.js",
+    "market-data:dev": "tsx src/index.ts",
+    "market-data:build": "tsc -p tsconfig.json",
+    "market-data:start": "node dist/index.js",
+    "pm2:start": "pm2 start ecosystem.config.cjs --only busbar-api",
+    "pm2:restart": "pm2 restart busbar-api",
+    "pm2:stop": "pm2 stop busbar-api",
+    "pm2:delete": "pm2 delete busbar-api",
+    "pm2:status": "pm2 status busbar-api",
+    "pm2:logs": "pm2 logs busbar-api",
+    "pm2:save": "pm2 save",
+    "pm2:resurrect": "pm2 resurrect",
+    "pm2:startup:task": "powershell -ExecutionPolicy Bypass -File scripts/register-pm2-startup-task.ps1",
+    "pm2:startup:task:remove": "powershell -ExecutionPolicy Bypass -File scripts/unregister-pm2-startup-task.ps1",
+    "pm2:startup:startupfolder": "powershell -ExecutionPolicy Bypass -File scripts/install-pm2-startup-shortcut.ps1",
+    "pm2:startup:startupfolder:remove": "powershell -ExecutionPolicy Bypass -File scripts/remove-pm2-startup-shortcut.ps1",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/HansRisnes/busbar-webapp-embedded-v2.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/HansRisnes/busbar-webapp-embedded-v2/issues"
+  },
+  "homepage": "https://github.com/HansRisnes/busbar-webapp-embedded-v2#readme",
+  "dependencies": {
+    "@azure/identity": "^4.13.0",
+    "adm-zip": "^0.5.16",
+    "dotenv": "^17.2.3",
+    "express": "^5.1.0",
+    "fast-xml-parser": "^4.5.3",
+    "nodemailer": "^7.0.10",
+    "playwright": "^1.58.2"
+  },
+  "devDependencies": {
+    "@types/node": "^24.4.0",
+    "pm2": "^6.0.8",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.2"
+  }
+}

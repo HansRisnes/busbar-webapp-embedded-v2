@@ -1,0 +1,27 @@
+{
+  "aluminium": {
+    "price": 3035,
+    "currency": "USD",
+    "symbol": "MANUAL",
+    "source": "Manuell",
+    "notation": "USD/t",
+    "unit": "t"
+  },
+  "fx": {
+    "usdNok": {
+      "pair": "USD/NOK",
+      "rate": 9.7238,
+      "date": "2026-03-13",
+      "source": "Norges Bank"
+    },
+    "eurNok": {
+      "pair": "EUR/NOK",
+      "rate": 11.159,
+      "date": "2026-03-13",
+      "source": "Norges Bank"
+    },
+    "source": "Norges Bank"
+  },
+  "updatedAt": "2026-03-13T18:50:40.810Z",
+  "mode": "auto-daily"
+}

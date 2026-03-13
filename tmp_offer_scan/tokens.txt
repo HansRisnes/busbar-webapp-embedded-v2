@@ -1,0 +1,26 @@
+{{kunde}}
+{{prosjektnavn}}
+{{kontaktperson}}
+{{tilbud_nr}}
+{{dato}}
+{{kunde}}
+{{prosjektnavn}}
+{{kontaktperson}}
+{{tilbud_nr}}
+{{dato}}
+Tilleggstjenester
+ – {{lnr}} {{sys}}
+ {{led}}
+{{stv}}
+{{mtr}}
+{{vvk}}
+{{hvk}}
+{{s
+{{s
+Tilleggstjenester
+ er ikke ansvarlig installatør og forbeholder seg muligheten til å bruke ekstern montasjepartner.
+Demontering av eksisterende skinne er ikke 
+Oppdragsgiver er ansvarlig for at strømskinnene blir losset og lagret under tak i nærheten av montasje stedet. Hvis det oppstår forsinkelser på byggeplassen utenfor 
+ sine generelle salgsbetingelser og prisliste. 
+Vi vil gjøre vårt ytterste for å bistå med teknisk support og oppfølging av vår prosjektleveranse. 
+produksjonstegninger

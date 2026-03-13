@@ -108,3 +108,68 @@ bruke de to sistnevnte for å hente endringene ned lokalt:
 
 Uansett metode bør du til slutt bekrefte at endringene ser riktige ut (`git status`, kjøre appen lokalt osv.), og deretter
 committe og pushe dem til GitHub.
+
+## Market Data Module (TypeScript)
+
+Denne modulen henter:
+- `USD/NOK` fra Norges Bank Datatorg
+- `EUR/NOK` fra Norges Bank Datatorg
+- `LME Aluminium` fra LME XML-feed
+
+### Endepunkter i bruk
+
+- USD/NOK:
+  `https://data.norges-bank.no/api/data/EXR/B.USD.NOK.SP?format=sdmx-json`
+- EUR/NOK:
+  `https://data.norges-bank.no/api/data/EXR/B.EUR.NOK.SP?format=sdmx-json`
+
+LME-feed settes via `LME_XML_URL` i `.env`.
+
+### Miljovariabler (.env)
+
+Legg dette i `.env`:
+
+```env
+REQUEST_TIMEOUT_MS=10000
+LME_XML_URL=
+LME_USERNAME=
+LME_PASSWORD=
+LME_API_KEY=
+```
+
+Notater:
+- `LME_XML_URL` er valgfri. Hvis den ikke er satt, vil valutakurser fortsatt fungere.
+- Hvis du bruker Basic Auth, sett begge: `LME_USERNAME` og `LME_PASSWORD`.
+- `LME_API_KEY` sendes som `X-API-Key` header.
+
+### Kjoring
+
+Kjor direkte med TypeScript:
+
+```bash
+npm run market-data:dev
+```
+
+Bygg og kjor kompilert kode:
+
+```bash
+npm run market-data:build
+npm run market-data:start
+```
+
+### LME-mapping og justering mot ekte XML
+
+LME-parseren er laget heuristisk for a vare fleksibel mot ukjent XML-struktur:
+- finner noder som inneholder `aluminium`/`aluminum`
+- prover a mappe `price`, `date`, `currency`, `unit`, `priceType` fra sannsynlige feltnavn
+- stotter `Official`, `Settlement`, `Monthly Average` dersom dette finnes i feeden
+
+Nar ekte LME XML er verifisert i miljoet ditt, kan du justere regex-reglene i:
+- `src/providers/lme.ts`
+
+Sok spesielt etter:
+- `PRICE_HINT_REGEX`
+- `DATE_HINT_REGEX`
+- `CURRENCY_HINT_REGEX`
+- `UNIT_HINT_REGEX`
+- `PRICE_TYPE_HINT_REGEX`
