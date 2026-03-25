@@ -41,6 +41,11 @@ const MARKET_DAILY_REFRESH_HOUR = (()=>{
   if (!Number.isInteger(parsed) || parsed < 0 || parsed > 23) return 6;
   return parsed;
 })();
+const MARKET_RETRY_DELAY_MINUTES = (()=>{
+  const parsed = Number(process.env.MARKET_RETRY_DELAY_MINUTES || 60);
+  if (!Number.isFinite(parsed) || parsed < 1 || parsed > 1440) return 60;
+  return Math.round(parsed);
+})();
 const MARKET_TIMEZONE =
   process.env.MARKET_TIMEZONE ||
   Intl.DateTimeFormat().resolvedOptions().timeZone ||
@@ -50,8 +55,12 @@ const MARKET_DAILY_REFRESH_LABEL = `${String(MARKET_DAILY_REFRESH_HOUR).padStart
 const marketScheduleState = {
   timerId: null,
   lastRunAt: null,
+  lastAttemptAt: null,
+  lastSuccessAt: null,
   nextRunAt: null,
-  lastError: null
+  lastError: null,
+  status: 'idle',
+  retryCount: 0
 };
 
 let marketCache = { payload: null };
@@ -816,10 +825,15 @@ function buildScheduleMeta() {
   return {
     type: 'daily',
     refreshAtLocal: MARKET_DAILY_REFRESH_LABEL,
+    retryDelayMinutes: MARKET_RETRY_DELAY_MINUTES,
     timezone: MARKET_TIMEZONE,
+    status: marketScheduleState.status,
     lastRunAt: marketScheduleState.lastRunAt,
+    lastAttemptAt: marketScheduleState.lastAttemptAt,
+    lastSuccessAt: marketScheduleState.lastSuccessAt,
     nextRunAt: marketScheduleState.nextRunAt,
-    lastError: marketScheduleState.lastError
+    lastError: marketScheduleState.lastError,
+    retryCount: marketScheduleState.retryCount
   };
 }
 
@@ -895,37 +909,65 @@ async function refreshMarketDataNow(reason = 'manual') {
 
   marketCache.payload = nextPayload;
   marketScheduleState.lastRunAt = nextPayload.updatedAt;
+  marketScheduleState.lastAttemptAt = nextPayload.updatedAt;
+  marketScheduleState.lastSuccessAt = nextPayload.updatedAt;
   marketScheduleState.lastError = null;
+  marketScheduleState.status = 'ok';
+  marketScheduleState.retryCount = 0;
 
   await writeMarketPayloadToFile(MARKET_DATA_FILE, nextPayload);
   return nextPayload;
 }
 
 async function runScheduledMarketRefresh(reason) {
+  marketScheduleState.lastAttemptAt = new Date().toISOString();
   try {
     await refreshMarketDataNow(reason);
     console.log(`[market-data] Oppdatert automatisk (${reason})`);
+    return true;
   } catch (err) {
     const details = err?.message || String(err);
     marketScheduleState.lastError = `${new Date().toISOString()} ${details}`;
+    marketScheduleState.status = 'error';
     console.error(`[market-data] Automatisk oppdatering feilet (${reason})`, err);
+    return false;
   }
 }
 
-function scheduleDailyMarketRefresh() {
+function scheduleMarketRefreshAt(targetDate, reason) {
   if (marketScheduleState.timerId) {
     clearTimeout(marketScheduleState.timerId);
     marketScheduleState.timerId = null;
   }
 
-  const nextRun = computeNextDailyRefresh();
-  marketScheduleState.nextRunAt = nextRun.toISOString();
-  const delayMs = Math.max(1000, nextRun.getTime() - Date.now());
+  marketScheduleState.nextRunAt = targetDate.toISOString();
+  const delayMs = Math.max(1000, targetDate.getTime() - Date.now());
 
   marketScheduleState.timerId = setTimeout(async ()=>{
-    await runScheduledMarketRefresh(`daily-${MARKET_DAILY_REFRESH_LABEL}`);
-    scheduleDailyMarketRefresh();
+    await handleScheduledMarketRefresh(reason);
   }, delayMs);
+}
+
+function scheduleDailyMarketRefresh() {
+  const nextRun = computeNextDailyRefresh();
+  scheduleMarketRefreshAt(nextRun, `daily-${MARKET_DAILY_REFRESH_LABEL}`);
+}
+
+function scheduleRetryMarketRefresh() {
+  const nextRun = new Date(Date.now() + MARKET_RETRY_DELAY_MINUTES * 60 * 1000);
+  const retryNumber = Math.max(1, marketScheduleState.retryCount);
+  scheduleMarketRefreshAt(nextRun, `retry-${retryNumber}`);
+}
+
+async function handleScheduledMarketRefresh(reason) {
+  const succeeded = await runScheduledMarketRefresh(reason);
+  if (succeeded) {
+    scheduleDailyMarketRefresh();
+    return;
+  }
+
+  marketScheduleState.retryCount += 1;
+  scheduleRetryMarketRefresh();
 }
 
 async function ensureMarketDataLoaded() {
@@ -936,6 +978,12 @@ async function ensureMarketDataLoaded() {
   const fromFile = await readMarketPayloadFromFile(MARKET_DATA_FILE);
   if (fromFile) {
     marketCache.payload = fromFile;
+    const fromFileUpdatedAt = normalizeIsoTimestamp(fromFile.updatedAt);
+    if (fromFileUpdatedAt) {
+      marketScheduleState.lastRunAt = fromFileUpdatedAt;
+      marketScheduleState.lastSuccessAt = fromFileUpdatedAt;
+      marketScheduleState.status = 'ok';
+    }
     return marketCache.payload;
   }
 
@@ -944,11 +992,16 @@ async function ensureMarketDataLoaded() {
 
 async function initializeMarketDataAutomation() {
   await ensureMarketDataLoaded();
-  await runScheduledMarketRefresh('startup');
-  scheduleDailyMarketRefresh();
+  const startupSucceeded = await runScheduledMarketRefresh('startup');
+  if (startupSucceeded) {
+    scheduleDailyMarketRefresh();
+  } else {
+    marketScheduleState.retryCount += 1;
+    scheduleRetryMarketRefresh();
+  }
 
   console.log(
-    `[market-data] Automatisk valutaoppdatering aktivert: daglig ${MARKET_DAILY_REFRESH_LABEL} (${MARKET_TIMEZONE})`
+    `[market-data] Automatisk valutaoppdatering aktivert: daglig ${MARKET_DAILY_REFRESH_LABEL} (${MARKET_TIMEZONE}), retry ${MARKET_RETRY_DELAY_MINUTES} min ved feil`
   );
 }
 
@@ -1113,7 +1166,7 @@ app.listen(port, () => {
   console.log(`Mail service lytter pa port ${port}`);
   initializeMarketDataAutomation().catch(err=>{
     console.error('[market-data] Init feilet', err);
-    scheduleDailyMarketRefresh();
+    scheduleRetryMarketRefresh();
   });
 });
 

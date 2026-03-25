@@ -10,18 +10,18 @@
   "fx": {
     "usdNok": {
       "pair": "USD/NOK",
-      "rate": 9.7238,
-      "date": "2026-03-13",
+      "rate": 9.7356,
+      "date": "2026-03-25",
       "source": "Norges Bank"
     },
     "eurNok": {
       "pair": "EUR/NOK",
-      "rate": 11.159,
-      "date": "2026-03-13",
+      "rate": 11.2855,
+      "date": "2026-03-25",
       "source": "Norges Bank"
     },
     "source": "Norges Bank"
   },
-  "updatedAt": "2026-03-13T20:29:41.742Z",
+  "updatedAt": "2026-03-25T15:15:11.056Z",
   "mode": "auto-daily"
 }

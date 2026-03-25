@@ -14,6 +14,7 @@
   --accent:#2B3A58;       /* primæraksent (knapp/fokus) */
   --accent-weak:#435A7F;  /* lys aksent (header, logo-bakgrunn) */
 
+  --success:#26b36a;      /* suksessstatus */
   --warning:#febe10;      /* status/varsel */
 }
 
@@ -410,6 +411,12 @@ header p{margin:0 0 16px 0;color:var(--muted)}
   font-size:1.35rem;
   color:var(--warning);
 }
+#marketUpdated.market-updated-ok{
+  color:var(--success);
+}
+#marketUpdated.market-updated-warning{
+  color:var(--warning);
+}
 .market-note{
   font-size:0.85rem;
   color:var(--muted);
@@ -420,6 +427,9 @@ header p{margin:0 0 16px 0;color:var(--muted)}
 }
 .market-status.error{
   color:var(--warning);
+}
+.market-status.ok{
+  color:var(--success);
 }
 .login-form,
 .project-form{

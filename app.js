@@ -17,7 +17,7 @@ const USD_TO_NOK_RATE = 10.95; // Dagens USD→NOK-kurs (2025-10-27)
 let usdToNokRate = USD_TO_NOK_RATE;
 const marketDataState = { snapshot: null };
 const MARKET_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
-const MARKET_STATUS_DEFAULT = 'Oppdateres hvert 5. minutt';
+const MARKET_STATUS_DEFAULT = 'Oppdateres daglig';
 const MARKET_STATUS_MANUAL = 'Oppdateres manuelt';
 const marketTickerState = { timerId: null };
 const DEFAULT_MARGIN_RATE = 0.20;
@@ -479,8 +479,13 @@ function submitMarginModal(){
 function setMarketStatus(message, isError){
   const statusEl = $('marketStatus');
   if (!statusEl) return;
+  const tone =
+    isError === true ? 'warning' :
+    isError === false ? 'neutral' :
+    isError;
   statusEl.textContent = message || '';
-  statusEl.classList.toggle('error', Boolean(isError && message));
+  statusEl.classList.toggle('error', tone === 'warning' && Boolean(message));
+  statusEl.classList.toggle('ok', tone === 'success' && Boolean(message));
 }
 
 function formatMarketTimestamp(value){
@@ -496,6 +501,57 @@ function formatMarketTimestamp(value){
 
 function getMarketSnapshotTimestamp(snapshot){
   return snapshot?.fetchedAt || snapshot?.updatedAt || null;
+}
+
+function formatDateKeyInTimezone(date, timeZone){
+  const value = date instanceof Date ? date : new Date(date);
+  if (Number.isNaN(value.getTime())) return '';
+  try{
+    return new Intl.DateTimeFormat('en-CA', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      timeZone: timeZone || undefined
+    }).format(value);
+  }catch(_err){
+    return new Intl.DateTimeFormat('en-CA', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    }).format(value);
+  }
+}
+
+function isTimestampTodayInTimezone(value, timeZone){
+  const dateKey = formatDateKeyInTimezone(value, timeZone);
+  if (!dateKey) return false;
+  return dateKey === formatDateKeyInTimezone(new Date(), timeZone);
+}
+
+function getMarketFreshness(snapshot){
+  const schedule = (snapshot && snapshot.schedule && typeof snapshot.schedule === 'object') ? snapshot.schedule : null;
+  const timezone = typeof schedule?.timezone === 'string' ? schedule.timezone.trim() : '';
+  const lastSuccessAt = schedule?.lastSuccessAt || schedule?.lastRunAt || getMarketSnapshotTimestamp(snapshot);
+  const lastAttemptAt = schedule?.lastAttemptAt || '';
+  const lastError = typeof schedule?.lastError === 'string' ? schedule.lastError.trim() : '';
+
+  const successMs = Date.parse(lastSuccessAt || '');
+  const attemptMs = Date.parse(lastAttemptAt || '');
+  const hasFreshError =
+    Boolean(lastError) &&
+    (
+      !Number.isFinite(successMs) ||
+      !Number.isFinite(attemptMs) ||
+      attemptMs >= successMs
+    );
+
+  const updatedToday = isTimestampTodayInTimezone(lastSuccessAt, timezone);
+  const isHealthyToday = updatedToday && !hasFreshError;
+
+  return {
+    isHealthyToday,
+    hasFreshError
+  };
 }
 
 function pickMarketAluminium(snapshot){
@@ -546,6 +602,7 @@ function applyMarketSnapshot(snapshot){
   marketDataState.snapshot = snapshot;
   const aluminium = pickMarketAluminium(snapshot);
   const fx = pickFxData(snapshot);
+  const freshness = getMarketFreshness(snapshot);
 
   const alEl = $('marketAlPrice');
   const alPrice = Number(aluminium.price);
@@ -593,9 +650,19 @@ function applyMarketSnapshot(snapshot){
   const updatedEl = $('marketUpdated');
   if (updatedEl){
     updatedEl.textContent = formatMarketTimestamp(getMarketSnapshotTimestamp(snapshot));
+    updatedEl.classList.toggle('market-updated-ok', freshness.isHealthyToday);
+    updatedEl.classList.toggle('market-updated-warning', !freshness.isHealthyToday);
   }
   const manualMode = snapshot.mode === 'static';
-  setMarketStatus(manualMode ? MARKET_STATUS_MANUAL : MARKET_STATUS_DEFAULT, false);
+  if (manualMode){
+    setMarketStatus(MARKET_STATUS_MANUAL, false);
+  } else if (freshness.isHealthyToday){
+    setMarketStatus('Oppdatert i dag', 'success');
+  } else if (freshness.hasFreshError){
+    setMarketStatus('Oppdatering feilet, prøver igjen automatisk', 'warning');
+  } else {
+    setMarketStatus(MARKET_STATUS_DEFAULT, false);
+  }
   updateUsdRateFromMarket(snapshot);
 }
 
