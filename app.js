@@ -95,6 +95,77 @@ function goToDashboard(params = {}){
 function goToCalculator(params = {}){
   window.location.href = buildAppUrl('calculator.html', params).toString();
 }
+
+function normalizeApiBaseUrl(value){
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  try{
+    const parsed = new URL(raw, window.location.origin);
+    if (!['http:', 'https:'].includes(parsed.protocol)) return '';
+    const pathname = parsed.pathname.replace(/\/+$/, '');
+    const suffix = pathname === '/' ? '' : pathname;
+    return `${parsed.origin}${suffix}`;
+  }catch(_err){
+    return '';
+  }
+}
+
+function resolveApiBaseUrl(){
+  let fromStorage = '';
+  try{
+    fromStorage = localStorage.getItem('busbar.api.base') || '';
+  }catch(_err){}
+
+  let fromQuery = '';
+  try{
+    fromQuery = new URLSearchParams(window.location.search).get('apiBase') || '';
+  }catch(_err){}
+
+  const fromMeta = document.querySelector('meta[name="busbar-api-base"]')?.getAttribute('content') || '';
+  const fromGlobal = typeof window.BUSBAR_API_BASE === 'string' ? window.BUSBAR_API_BASE : '';
+  const normalized = normalizeApiBaseUrl(fromQuery || fromMeta || fromGlobal || fromStorage);
+
+  if (fromQuery && normalized){
+    try{
+      localStorage.setItem('busbar.api.base', normalized);
+    }catch(_err){}
+  }
+  if (normalized) return normalized;
+
+  const host = String(window.location.hostname || '').toLowerCase();
+  if (host.endsWith('github.io')){
+    return 'http://localhost:5500';
+  }
+
+  return '';
+}
+
+const API_BASE_URL = resolveApiBaseUrl();
+
+function buildApiUrl(path){
+  const suffix = String(path || '').startsWith('/') ? String(path) : `/${String(path || '')}`;
+  return API_BASE_URL ? `${API_BASE_URL}${suffix}` : suffix;
+}
+
+function isGithubPagesWithoutApiBase(){
+  const host = String(window.location.hostname || '').toLowerCase();
+  return host.endsWith('github.io') && !API_BASE_URL;
+}
+
+function appendApiBaseHint(errorText, status){
+  if (!isGithubPagesWithoutApiBase()) return errorText;
+  if (status !== 404 && status !== 405) return errorText;
+  return `${errorText}. GitHub Pages kjører kun statisk frontend. Sett <meta name="busbar-api-base" ...> til backend-URL.`;
+}
+
+function buildStaticAssetUrl(relativePath){
+  try{
+    return new URL(String(relativePath || ''), window.location.href).toString();
+  }catch(_err){
+    return String(relativePath || '');
+  }
+}
+
 const round2 = n=>Math.round(n*100)/100;
 const fmtNO = new Intl.NumberFormat('no-NO', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fmtIntNO = new Intl.NumberFormat('no-NO', { maximumFractionDigits: 0 });
@@ -667,14 +738,18 @@ function applyMarketSnapshot(snapshot){
 }
 
 async function fetchMarketSnapshot(){
-  const sources = ['/api/market-data', '/data/market-data.json'];
+  const staticFallbackUrl = buildStaticAssetUrl('data/market-data.json');
+  const sources = [
+    buildApiUrl('/api/market-data'),
+    staticFallbackUrl
+  ];
   let lastErr = null;
   for (const url of sources){
     try{
       const res = await fetch(url, { cache:'no-store' });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const payload = await res.json();
-      if (url === '/data/market-data.json' && payload && typeof payload === 'object'){
+      if (url === staticFallbackUrl && payload && typeof payload === 'object'){
         if (!payload.mode) payload.mode = 'static';
       }
       return payload;
@@ -1339,7 +1414,7 @@ function getFilenameFromContentDisposition(headerValue){
 }
 
 async function generateProjectOffer(project){
-  const res = await fetch('/api/generate-offer', {
+  const res = await fetch(buildApiUrl('/api/generate-offer'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ project })
@@ -1357,7 +1432,7 @@ async function generateProjectOffer(project){
         if (txt && txt.trim()) errorText += `: ${txt.trim()}`;
       }catch(_textErr){}
     }
-    const err = new Error(errorText);
+    const err = new Error(appendApiBaseHint(errorText, res.status));
     err.status = res.status;
     throw err;
   }
@@ -3794,7 +3869,7 @@ function askExpansionIfNeeded(meter){
 }
 
 async function sendCalculationEmail(payload){
-  const res = await fetch('/api/send-calculation-email', {
+  const res = await fetch(buildApiUrl('/api/send-calculation-email'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload)
@@ -3812,7 +3887,7 @@ async function sendCalculationEmail(payload){
         if (txt && txt.trim()) errorText += `: ${txt.trim()}`;
       }catch(_textErr){}
     }
-    const err = new Error(errorText);
+    const err = new Error(appendApiBaseHint(errorText, res.status));
     err.status = res.status;
     throw err;
   }
