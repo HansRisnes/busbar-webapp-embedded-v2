@@ -28,6 +28,17 @@ const AUTH_PASSWORD = 'busbar';
 const AUTH_SESSION_KEY = 'busbar.auth.session.v1';
 let authState = { loggedIn: false, username: '' };
 const PROJECTS_STORAGE_KEY = 'busbar.projects.v1';
+const PROJECT_SYNC_DEBOUNCE_MS = 800;
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const PROJECT_SORT_STORAGE_KEY = 'busbar.project.sort.v1';
+const LINE_SORT_STORAGE_KEY = 'busbar.line.sort.v1';
+const PROJECT_SORT_OPTIONS = Object.freeze(['date_newest', 'date_oldest', 'alpha_asc', 'alpha_desc']);
+const LINE_SORT_OPTIONS = Object.freeze(['date_newest', 'date_oldest', 'alpha_asc', 'alpha_desc']);
+const projectSyncState = {
+  timerId: null,
+  inFlight: false,
+  pending: false
+};
 const projectState = {
   currentProjectId: null,
   currentProject: '',
@@ -38,10 +49,16 @@ const projectState = {
   customerHistory: [],
   contactHistory: [],
   projects: [],
-  expandedProjectId: null
+  expandedProjectId: null,
+  projectSort: 'date_newest',
+  lineSort: 'date_newest'
 };
 const projectModalState = {
   mode: 'create',
+  projectId: null,
+  saveLineAfterCreate: false
+};
+const projectMarginModalState = {
   projectId: null
 };
 let lastEmailPayload = null;
@@ -788,7 +805,8 @@ function loadAuthFromSession(){
     if (!stored) return;
     const parsed = JSON.parse(stored);
     if (!parsed || parsed.loggedIn !== true) return;
-    const username = typeof parsed.username === 'string' ? parsed.username.trim() : '';
+    const username = normalizeUserEmail(parsed.username);
+    if (!hasValidUserEmail(username)) return;
     authState = { loggedIn: true, username };
   }catch(err){
     console.warn('Kunne ikke lese innloggingsstatus', err);
@@ -818,9 +836,11 @@ function updateAuthUI(){
   const loginBtn = $('loginBtn');
   const logoutBtn = $('logoutBtn');
   const userLabel = $('authUser');
+  const adminBtn = $('adminPageBtn');
 
   if (loginBtn) loginBtn.hidden = authState.loggedIn;
   if (logoutBtn) logoutBtn.hidden = !authState.loggedIn;
+  if (adminBtn) adminBtn.hidden = !authState.loggedIn;
   if (userLabel){
     if (authState.loggedIn){
       userLabel.textContent = authState.username || 'Innlogget';
@@ -885,9 +905,9 @@ function handleLoginSubmit(){
     if (passwordInput) passwordInput.focus();
     return;
   }
-  const username = usernameInput ? usernameInput.value.trim() : '';
-  if (!username || !username.includes('@')){
-    if (errorEl) errorEl.textContent = 'Brukernavn må være en e-postadresse.';
+  const username = normalizeUserEmail(usernameInput ? usernameInput.value : '');
+  if (!hasValidUserEmail(username)){
+    if (errorEl) errorEl.textContent = 'Brukernavn må være en gyldig e-postadresse.';
     if (usernameInput){
       usernameInput.focus();
       try{
@@ -903,6 +923,7 @@ function handleLoginSubmit(){
   updateAuthUI();
   const statusEl = $('status');
   if (statusEl) statusEl.textContent = '';
+  void syncProjectsForCurrentUser();
 }
 
 const loginBtn = $('loginBtn');
@@ -913,6 +934,11 @@ const logoutBtn = $('logoutBtn');
 if (logoutBtn){
   logoutBtn.addEventListener('click', ()=>{
     authState = { loggedIn: false, username: '' };
+    if (projectSyncState.timerId){
+      clearTimeout(projectSyncState.timerId);
+      projectSyncState.timerId = null;
+    }
+    projectSyncState.pending = false;
     persistAuthToSession();
     hideLoginModal();
    updateAuthUI();
@@ -974,6 +1000,7 @@ function generateProjectId(){
 function normalizeProject(raw){
   if (!raw) return null;
   const fallback = new Date().toISOString();
+  const selectedAddonConfig = normalizeSelectedAddonConfig(raw.selectedAddonConfig || null, null);
   return {
     id: raw.id || generateProjectId(),
     name: String(raw.name || '').trim(),
@@ -981,8 +1008,160 @@ function normalizeProject(raw){
     contactPerson: String(raw.contactPerson || raw.contact || '').trim(),
     createdAt: raw.createdAt || fallback,
     updatedAt: raw.updatedAt || fallback,
+    selectedAddonConfig,
     lines: Array.isArray(raw.lines) ? raw.lines : []
   };
+}
+
+function normalizeUserEmail(value){
+  return String(value || '').trim().toLowerCase();
+}
+
+function hasValidUserEmail(value){
+  return EMAIL_REGEX.test(String(value || '').trim());
+}
+
+function getCurrentUserEmail(){
+  if (!authState || authState.loggedIn !== true) return '';
+  const email = normalizeUserEmail(authState.username);
+  if (!hasValidUserEmail(email)) return '';
+  return email;
+}
+
+function canUseProjectSyncApi(){
+  return !isGithubPagesWithoutApiBase();
+}
+
+function getProjectUpdateTimestamp(project){
+  if (!project || typeof project !== 'object') return 0;
+  const updated = new Date(project.updatedAt || project.createdAt || 0).getTime();
+  if (!Number.isFinite(updated)) return 0;
+  return updated;
+}
+
+function mergeProjectsByLatest(localProjects, remoteProjects){
+  const merged = new Map();
+  const add = project=>{
+    const normalized = normalizeProject(project);
+    if (!normalized) return;
+    const key = normalized.id || `${normalized.name}|${normalized.customer}|${normalized.contactPerson}`;
+    const existing = merged.get(key);
+    if (!existing){
+      merged.set(key, normalized);
+      return;
+    }
+    const existingTs = getProjectUpdateTimestamp(existing);
+    const candidateTs = getProjectUpdateTimestamp(normalized);
+    if (candidateTs >= existingTs){
+      merged.set(key, normalized);
+    }
+  };
+  (Array.isArray(localProjects) ? localProjects : []).forEach(add);
+  (Array.isArray(remoteProjects) ? remoteProjects : []).forEach(add);
+  return Array.from(merged.values());
+}
+
+async function fetchUserProjectsFromServer(email){
+  const query = encodeURIComponent(email);
+  const res = await fetch(buildApiUrl(`/api/user-projects?email=${query}`), {
+    cache: 'no-store'
+  });
+  if (!res.ok){
+    let message = `Kunne ikke hente prosjekter fra server (${res.status})`;
+    try{
+      const data = await res.json();
+      if (data && typeof data.error === 'string' && data.error.trim()){
+        message += `: ${data.error.trim()}`;
+      }
+    }catch(_err){}
+    throw new Error(appendApiBaseHint(message, res.status));
+  }
+  const payload = await res.json();
+  const projects = Array.isArray(payload?.projects) ? payload.projects : [];
+  return projects.map(normalizeProject).filter(Boolean);
+}
+
+async function pushUserProjectsToServer(email, projects){
+  const res = await fetch(buildApiUrl('/api/user-projects/sync'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      email,
+      projects: Array.isArray(projects) ? projects : []
+    })
+  });
+  if (!res.ok){
+    let message = `Kunne ikke synkronisere prosjekter (${res.status})`;
+    try{
+      const data = await res.json();
+      if (data && typeof data.error === 'string' && data.error.trim()){
+        message += `: ${data.error.trim()}`;
+      }
+    }catch(_err){}
+    throw new Error(appendApiBaseHint(message, res.status));
+  }
+  const payload = await res.json();
+  const syncedProjects = Array.isArray(payload?.projects) ? payload.projects : [];
+  return syncedProjects.map(normalizeProject).filter(Boolean);
+}
+
+async function flushProjectSync(){
+  if (!canUseProjectSyncApi()) return;
+  const email = getCurrentUserEmail();
+  if (!email) return;
+  if (projectSyncState.inFlight){
+    projectSyncState.pending = true;
+    return;
+  }
+  projectSyncState.inFlight = true;
+  try{
+    await pushUserProjectsToServer(email, projectState.projects);
+  }catch(err){
+    console.warn('Kunne ikke synkronisere prosjekter mot server', err);
+  }finally{
+    projectSyncState.inFlight = false;
+    if (projectSyncState.pending){
+      projectSyncState.pending = false;
+      queueProjectSync({ immediate: true });
+    }
+  }
+}
+
+function queueProjectSync(options = {}){
+  if (!canUseProjectSyncApi()) return;
+  const email = getCurrentUserEmail();
+  if (!email) return;
+  if (projectSyncState.timerId){
+    clearTimeout(projectSyncState.timerId);
+    projectSyncState.timerId = null;
+  }
+  if (options.immediate){
+    void flushProjectSync();
+    return;
+  }
+  projectSyncState.timerId = window.setTimeout(()=>{
+    projectSyncState.timerId = null;
+    void flushProjectSync();
+  }, PROJECT_SYNC_DEBOUNCE_MS);
+}
+
+async function syncProjectsForCurrentUser(){
+  if (!canUseProjectSyncApi()) return;
+  const email = getCurrentUserEmail();
+  if (!email) return;
+  try{
+    const remoteProjects = await fetchUserProjectsFromServer(email);
+    const mergedProjects = mergeProjectsByLatest(projectState.projects, remoteProjects);
+    projectState.projects = mergedProjects;
+    sortProjects();
+    updateProjectHistories();
+    saveProjectsToStorage({ skipRemoteSync: true });
+    renderProjectDashboard();
+    updateProjectMetaDisplay();
+    queueProjectSync({ immediate: true });
+  }catch(err){
+    console.warn('Kunne ikke hente prosjekter fra server', err);
+  }
 }
 
 function loadProjectsFromStorage(){
@@ -999,21 +1178,129 @@ function loadProjectsFromStorage(){
   }
 }
 
-function saveProjectsToStorage(){
+function saveProjectsToStorage(options = {}){
   if (typeof localStorage === 'undefined') return;
   try{
     localStorage.setItem(PROJECTS_STORAGE_KEY, JSON.stringify(projectState.projects));
   }catch(err){
     console.warn('Kunne ikke lagre prosjekter', err);
   }
+  if (!options.skipRemoteSync){
+    queueProjectSync();
+  }
+}
+
+function loadSortMode(storageKey, validModes, fallback){
+  if (typeof localStorage === 'undefined') return fallback;
+  try{
+    const raw = String(localStorage.getItem(storageKey) || '').trim();
+    return validModes.includes(raw) ? raw : fallback;
+  }catch(_err){
+    return fallback;
+  }
+}
+
+function saveSortMode(storageKey, mode){
+  if (typeof localStorage === 'undefined') return;
+  try{
+    localStorage.setItem(storageKey, mode);
+  }catch(_err){}
+}
+
+function getSortableCreatedTimestamp(item){
+  const created = new Date(item?.createdAt || item?.updatedAt || 0).getTime();
+  return Number.isFinite(created) ? created : 0;
+}
+
+function compareNoText(left, right){
+  return String(left || '').localeCompare(String(right || ''), 'no', {
+    sensitivity: 'base',
+    numeric: true
+  });
+}
+
+function compareProjectsForSort(a, b, mode = projectState.projectSort){
+  if (mode === 'alpha_asc'){
+    return compareNoText(a?.name, b?.name);
+  }
+  if (mode === 'alpha_desc'){
+    return compareNoText(b?.name, a?.name);
+  }
+  const aTime = getSortableCreatedTimestamp(a);
+  const bTime = getSortableCreatedTimestamp(b);
+  if (mode === 'date_oldest'){
+    return aTime - bTime;
+  }
+  return bTime - aTime;
+}
+
+function compareLinesForSort(a, b, mode = projectState.lineSort){
+  if (mode === 'alpha_asc'){
+    return compareNoText(a?.lineNumber, b?.lineNumber);
+  }
+  if (mode === 'alpha_desc'){
+    return compareNoText(b?.lineNumber, a?.lineNumber);
+  }
+  const aTime = getSortableCreatedTimestamp(a);
+  const bTime = getSortableCreatedTimestamp(b);
+  if (mode === 'date_oldest'){
+    return aTime - bTime;
+  }
+  return bTime - aTime;
+}
+
+function updateSortControlValues(){
+  const projectSelect = $('projectSortSelect');
+  const lineSelect = $('lineSortSelect');
+  if (projectSelect && PROJECT_SORT_OPTIONS.includes(projectState.projectSort)){
+    projectSelect.value = projectState.projectSort;
+  }
+  if (lineSelect && LINE_SORT_OPTIONS.includes(projectState.lineSort)){
+    lineSelect.value = projectState.lineSort;
+  }
+}
+
+function applyDashboardSortModesFromStorage(){
+  projectState.projectSort = loadSortMode(
+    PROJECT_SORT_STORAGE_KEY,
+    PROJECT_SORT_OPTIONS,
+    'date_newest'
+  );
+  projectState.lineSort = loadSortMode(
+    LINE_SORT_STORAGE_KEY,
+    LINE_SORT_OPTIONS,
+    'date_newest'
+  );
+  updateSortControlValues();
+}
+
+function setProjectSortMode(mode, options = {}){
+  if (!PROJECT_SORT_OPTIONS.includes(mode)) return;
+  projectState.projectSort = mode;
+  sortProjects();
+  if (options.persist !== false){
+    saveSortMode(PROJECT_SORT_STORAGE_KEY, mode);
+  }
+  updateSortControlValues();
+  if (options.render !== false){
+    renderProjectDashboard();
+  }
+}
+
+function setLineSortMode(mode, options = {}){
+  if (!LINE_SORT_OPTIONS.includes(mode)) return;
+  projectState.lineSort = mode;
+  if (options.persist !== false){
+    saveSortMode(LINE_SORT_STORAGE_KEY, mode);
+  }
+  updateSortControlValues();
+  if (options.render !== false){
+    renderProjectDashboard();
+  }
 }
 
 function sortProjects(){
-  projectState.projects.sort((a,b)=>{
-    const aTime = new Date(a.updatedAt || a.createdAt || 0).getTime();
-    const bTime = new Date(b.updatedAt || b.createdAt || 0).getTime();
-    return bTime - aTime;
-  });
+  projectState.projects.sort((a,b)=>compareProjectsForSort(a, b, projectState.projectSort));
 }
 
 function getProjectById(id){
@@ -1071,6 +1358,7 @@ function createProject(projectName, customerName, contactPerson){
     contactPerson: contactPerson,
     createdAt: now,
     updatedAt: now,
+    selectedAddonConfig: normalizeSelectedAddonConfig(null, null),
     lines: []
   };
   projectState.projects.push(project);
@@ -1231,6 +1519,7 @@ function updateProjectSubmitState(){
 function openProjectModal(options = {}){
   projectModalState.mode = options.mode || 'create';
   projectModalState.projectId = options.projectId || null;
+  projectModalState.saveLineAfterCreate = Boolean(options.saveLineAfterCreate);
   const modal = $('projectModal');
   if (!modal) return;
   modal.style.display = 'flex';
@@ -1288,6 +1577,7 @@ function closeProjectModal(){
   hideSuggestions($('contactSuggestions'));
   projectModalState.mode = 'create';
   projectModalState.projectId = null;
+  projectModalState.saveLineAfterCreate = false;
 }
 
 function persistProjectInfo(projectName, customerName, contactPerson, options = {}){
@@ -1316,6 +1606,124 @@ function formatProjectTimestamp(value){
   }catch(_err){
     return date.toLocaleString('no-NO');
   }
+}
+
+function resolveSelectedAddonFlag(value, fallback = true){
+  if (typeof value === 'boolean') return value;
+  if (value === 1 || value === '1' || value === 'true' || value === 'TRUE') return true;
+  if (value === 0 || value === '0' || value === 'false' || value === 'FALSE') return false;
+  return fallback;
+}
+
+function normalizeSelectedAddonConfig(config, fallbackConfig = null){
+  const fallback = fallbackConfig || {};
+  const includeMontasje = resolveSelectedAddonFlag(
+    config?.includeMontasje,
+    resolveSelectedAddonFlag(fallback.includeMontasje, true)
+  );
+  const includeEngineering = resolveSelectedAddonFlag(
+    config?.includeEngineering,
+    resolveSelectedAddonFlag(fallback.includeEngineering, true)
+  );
+  const includeOppheng = resolveSelectedAddonFlag(
+    config?.includeOppheng,
+    resolveSelectedAddonFlag(fallback.includeOppheng, true)
+  );
+  const showMontasje = resolveSelectedAddonFlag(
+    config?.showMontasje,
+    resolveSelectedAddonFlag(
+      config?.includeMontasje,
+      resolveSelectedAddonFlag(
+        fallback.showMontasje,
+        resolveSelectedAddonFlag(fallback.includeMontasje, false)
+      )
+    )
+  );
+  const showEngineering = resolveSelectedAddonFlag(
+    config?.showEngineering,
+    resolveSelectedAddonFlag(
+      config?.includeEngineering,
+      resolveSelectedAddonFlag(
+        fallback.showEngineering,
+        resolveSelectedAddonFlag(fallback.includeEngineering, false)
+      )
+    )
+  );
+  const showOppheng = resolveSelectedAddonFlag(
+    config?.showOppheng,
+    resolveSelectedAddonFlag(
+      config?.includeOppheng,
+      resolveSelectedAddonFlag(
+        fallback.showOppheng,
+        resolveSelectedAddonFlag(fallback.includeOppheng, false)
+      )
+    )
+  );
+  return {
+    includeMontasje,
+    includeEngineering,
+    includeOppheng,
+    showMontasje: includeMontasje && showMontasje,
+    showEngineering: includeEngineering && showEngineering,
+    showOppheng: includeOppheng && showOppheng
+  };
+}
+
+function getSelectedAddonConfig(line, fallbackConfig = null){
+  const totals = line?.totals || {};
+  const raw = line?.selectedAddonConfig || totals.selectedAddonConfig || null;
+  return normalizeSelectedAddonConfig(raw, fallbackConfig);
+}
+
+function getProjectSelectedAddonConfig(project){
+  return normalizeSelectedAddonConfig(project?.selectedAddonConfig || null, null);
+}
+
+function getOfferAddonCheckboxValuesFromUI(){
+  return normalizeSelectedAddonConfig({
+    includeMontasje: Boolean($('includeMontasje')?.checked),
+    includeEngineering: Boolean($('includeEngineering')?.checked),
+    includeOppheng: Boolean($('includeOppheng')?.checked),
+    showMontasje: Boolean($('showMontasje')?.checked),
+    showEngineering: Boolean($('showEngineering')?.checked),
+    showOppheng: Boolean($('showOppheng')?.checked)
+  }, null);
+}
+
+function applyOfferAddonCheckboxConstraints(){
+  const pairs = [
+    { includeId: 'includeMontasje', showId: 'showMontasje' },
+    { includeId: 'includeEngineering', showId: 'showEngineering' },
+    { includeId: 'includeOppheng', showId: 'showOppheng' }
+  ];
+  pairs.forEach(pair=>{
+    const includeEl = $(pair.includeId);
+    const showEl = $(pair.showId);
+    if (!showEl) return;
+    const includeChecked = Boolean(includeEl?.checked);
+    showEl.disabled = !includeChecked;
+    if (!includeChecked){
+      showEl.checked = false;
+    }
+  });
+}
+
+function applySelectedAddonCheckboxes(line){
+  const config = getSelectedAddonConfig(line);
+  const includeMontasje = $('includeMontasje');
+  const includeEngineering = $('includeEngineering');
+  const includeOppheng = $('includeOppheng');
+  const showMontasje = $('showMontasje');
+  const showEngineering = $('showEngineering');
+  const showOppheng = $('showOppheng');
+  if (includeMontasje) includeMontasje.checked = config.includeMontasje;
+  if (includeEngineering) includeEngineering.checked = config.includeEngineering;
+  if (includeOppheng) includeOppheng.checked = config.includeOppheng;
+  if (showMontasje) showMontasje.checked = config.showMontasje;
+  if (showEngineering) showEngineering.checked = config.showEngineering;
+  if (showOppheng) showOppheng.checked = config.showOppheng;
+  applyOfferAddonCheckboxConstraints();
+  return config;
 }
 
 function formatLineSummary(line){
@@ -1362,18 +1770,17 @@ function formatLineUpdatedText(line){
   return `Oppdatert ${formatProjectTimestamp(stamp)}`;
 }
 
-function resolveLineDisplayTotal(line){
-  const directTotal = Number(line?.selectedAddonTotal ?? line?.totals?.selectedAddonTotal);
-  if (Number.isFinite(directTotal)){
-    return round2(directTotal);
-  }
+function resolveLineDisplayTotalWithConfig(line, config){
   const totals = line?.totals || {};
   const baseTotal = Number(totals.totalExMontasje);
-  if (!Number.isFinite(baseTotal)) return NaN;
-  const savedFlags = line?.selectedAddonConfig || totals.selectedAddonConfig || null;
-  const includeMontasje = savedFlags ? Boolean(savedFlags.includeMontasje) : true;
-  const includeEngineering = savedFlags ? Boolean(savedFlags.includeEngineering) : true;
-  const includeOppheng = savedFlags ? Boolean(savedFlags.includeOppheng) : true;
+  if (!Number.isFinite(baseTotal)){
+    const directTotal = Number(line?.selectedAddonTotal ?? line?.totals?.selectedAddonTotal);
+    return Number.isFinite(directTotal) ? round2(directTotal) : NaN;
+  }
+  const flags = normalizeSelectedAddonConfig(config, getSelectedAddonConfig(line));
+  const includeMontasje = flags.includeMontasje;
+  const includeEngineering = flags.includeEngineering;
+  const includeOppheng = flags.includeOppheng;
   const montasjeTotal = Number(totals.totalInclMontasje);
   const engineeringTotal = Number(totals.totalInclEngineering);
   const opphengTotal = Number(totals.totalInclOppheng ?? totals.total);
@@ -1382,6 +1789,403 @@ function resolveLineDisplayTotal(line){
   if (includeEngineering && Number.isFinite(engineeringTotal)) total += engineeringTotal;
   if (includeOppheng && Number.isFinite(opphengTotal)) total += opphengTotal;
   return round2(total);
+}
+
+function resolveLineDisplayTotal(line){
+  return resolveLineDisplayTotalWithConfig(line, getSelectedAddonConfig(line));
+}
+
+function setLineSelectedAddonConfig(line, config){
+  if (!line) return normalizeSelectedAddonConfig(config, null);
+  const normalized = normalizeSelectedAddonConfig(config, getSelectedAddonConfig(line));
+  line.selectedAddonConfig = deepClone(normalized);
+  if (!line.totals || typeof line.totals !== 'object'){
+    line.totals = {};
+  }
+  line.totals.selectedAddonConfig = deepClone(normalized);
+  const computedTotal = resolveLineDisplayTotalWithConfig(line, normalized);
+  if (Number.isFinite(computedTotal)){
+    line.selectedAddonTotal = computedTotal;
+    line.totals.selectedAddonTotal = computedTotal;
+  }
+  return normalized;
+}
+
+function syncActiveCalculatorAddonConfig(project){
+  if (!hasCalculatorUI()) return;
+  if (!project || projectState.currentProjectId !== project.id) return;
+  const lineInput = $('lineNumberInput');
+  const currentLine = String(projectState.currentLineNumber || lineInput?.value || '').trim().toLowerCase();
+  if (!currentLine) return;
+  const activeLine = (Array.isArray(project.lines) ? project.lines : [])
+    .find(entry=>String(entry.lineNumber || '').trim().toLowerCase() === currentLine);
+  if (!activeLine) return;
+  applySelectedAddonCheckboxes(activeLine);
+  updateSelectedAddonTotalUI();
+}
+
+function applyProjectAddonCheckboxesToCalculator(project){
+  if (!hasCalculatorUI()) return;
+  if (!project) return;
+  const config = getProjectSelectedAddonConfig(project);
+  const includeMontasje = $('includeMontasje');
+  const includeEngineering = $('includeEngineering');
+  const includeOppheng = $('includeOppheng');
+  const showMontasje = $('showMontasje');
+  const showEngineering = $('showEngineering');
+  const showOppheng = $('showOppheng');
+  if (includeMontasje) includeMontasje.checked = config.includeMontasje;
+  if (includeEngineering) includeEngineering.checked = config.includeEngineering;
+  if (includeOppheng) includeOppheng.checked = config.includeOppheng;
+  if (showMontasje) showMontasje.checked = config.showMontasje;
+  if (showEngineering) showEngineering.checked = config.showEngineering;
+  if (showOppheng) showOppheng.checked = config.showOppheng;
+  applyOfferAddonCheckboxConstraints();
+  updateSelectedAddonTotalUI();
+}
+
+function updateLineSelectedAddonConfig(projectId, lineId, partialConfig){
+  const project = getProjectById(projectId);
+  if (!project || !Array.isArray(project.lines)) return;
+  const line = project.lines.find(entry=>entry.id === lineId);
+  if (!line) return;
+  const next = normalizeSelectedAddonConfig(partialConfig, getSelectedAddonConfig(line));
+  setLineSelectedAddonConfig(line, next);
+  saveProjectsToStorage();
+  renderProjectDashboard();
+  syncActiveCalculatorAddonConfig(project);
+}
+
+function updateProjectSelectedAddonConfig(projectId, partialConfig){
+  const project = getProjectById(projectId);
+  if (!project) return;
+  const current = getProjectSelectedAddonConfig(project);
+  const next = normalizeSelectedAddonConfig(partialConfig, current);
+  project.selectedAddonConfig = deepClone(next);
+  const lines = Array.isArray(project.lines) ? project.lines : [];
+  lines.forEach(line=>setLineSelectedAddonConfig(line, next));
+  project.updatedAt = new Date().toISOString();
+  saveProjectsToStorage();
+  sortProjects();
+  renderProjectDashboard();
+  syncActiveCalculatorAddonConfig(project);
+}
+
+function resolveLineMaterialMarginRate(line){
+  const totals = (line && typeof line === 'object' && line.totals && typeof line.totals === 'object')
+    ? line.totals
+    : {};
+  const input = (line && typeof line === 'object' && line.inputs && typeof line.inputs === 'object')
+    ? line.inputs
+    : {};
+  return resolveMarginRateFromData({ totals, input });
+}
+
+function resolveProjectMaterialMarginRate(project){
+  const lines = Array.isArray(project?.lines) ? project.lines : [];
+  for (const line of lines){
+    const rate = resolveLineMaterialMarginRate(line);
+    if (Number.isFinite(rate)) return rate;
+  }
+  return DEFAULT_MARGIN_RATE;
+}
+
+function getProjectMaterialMarginStats(project){
+  const lines = Array.isArray(project?.lines) ? project.lines : [];
+  const rates = lines
+    .map(resolveLineMaterialMarginRate)
+    .filter(rate=>Number.isFinite(rate))
+    .map(rate=>normalizeMarginRate(rate, DEFAULT_MARGIN_RATE));
+  const roundedKeys = new Set(rates.map(rate=>rate.toFixed(6)));
+  const minRate = rates.length ? Math.min(...rates) : NaN;
+  const maxRate = rates.length ? Math.max(...rates) : NaN;
+  return {
+    lineCount: lines.length,
+    uniqueCount: roundedKeys.size,
+    minRate,
+    maxRate
+  };
+}
+
+function formatProjectMarginSummary(project){
+  const stats = getProjectMaterialMarginStats(project);
+  if (!stats.lineCount) return 'Prosjektet har ingen linjer ennå.';
+  if (stats.uniqueCount <= 1 && Number.isFinite(stats.maxRate)){
+    return `Nåværende DG for prosjektet er ${fmtPercentNO.format(stats.maxRate * 100)} %.`;
+  }
+  if (Number.isFinite(stats.minRate) && Number.isFinite(stats.maxRate)){
+    return `DG varierer mellom ${fmtPercentNO.format(stats.minRate * 100)} % og ${fmtPercentNO.format(stats.maxRate * 100)} %. Ny verdi overstyrer alle linjer.`;
+  }
+  return 'DG er ikke satt på alle linjer. Ny verdi overstyrer alle linjer.';
+}
+
+function formatProjectMarginBadgeText(project){
+  const stats = getProjectMaterialMarginStats(project);
+  if (!stats.lineCount){
+    return 'DG prosjekt: -';
+  }
+  if (stats.uniqueCount <= 1 && Number.isFinite(stats.maxRate)){
+    return `DG prosjekt: ${fmtPercentNO.format(stats.maxRate * 100)} %`;
+  }
+  if (Number.isFinite(stats.minRate) && Number.isFinite(stats.maxRate)){
+    return `DG prosjekt: ${fmtPercentNO.format(stats.minRate * 100)}-${fmtPercentNO.format(stats.maxRate * 100)} %`;
+  }
+  return `DG prosjekt: ${fmtPercentNO.format(resolveProjectMaterialMarginRate(project) * 100)} %`;
+}
+
+function shouldUseWarningForProjectMargin(stats){
+  if (!stats || !stats.lineCount) return false;
+  if (!Number.isFinite(stats.minRate) || !Number.isFinite(stats.maxRate)) return true;
+  const epsilon = 0.000001;
+  return (
+    Math.abs(stats.minRate - DEFAULT_MARGIN_RATE) > epsilon ||
+    Math.abs(stats.maxRate - DEFAULT_MARGIN_RATE) > epsilon
+  );
+}
+
+function openProjectMarginModal(projectId){
+  const project = getProjectById(projectId);
+  if (!project) return false;
+  const modal = $('projectMarginModal');
+  if (!modal) return false;
+  const lineCount = Array.isArray(project.lines) ? project.lines.length : 0;
+  if (!lineCount){
+    const statusEl = $('status');
+    if (statusEl) statusEl.textContent = 'Prosjektet har ingen linjer å oppdatere.';
+    return true;
+  }
+  const titleEl = $('projectMarginTitle');
+  const currentEl = $('projectMarginCurrent');
+  const inputEl = $('projectMarginPercentInput');
+  const errorEl = $('projectMarginError');
+  if (errorEl) errorEl.textContent = '';
+  if (titleEl){
+    titleEl.textContent = `Sett prosjekt-DG: ${project.name || 'Uten navn'}`;
+  }
+  if (currentEl){
+    currentEl.textContent = formatProjectMarginSummary(project);
+  }
+  if (inputEl){
+    const currentRate = resolveProjectMaterialMarginRate(project);
+    inputEl.value = fmtPercentNO.format(currentRate * 100);
+    inputEl.focus();
+    const len = inputEl.value.length;
+    try{
+      inputEl.setSelectionRange(0, len);
+    }catch(_err){}
+  }
+  projectMarginModalState.projectId = project.id;
+  modal.style.display = 'flex';
+  return true;
+}
+
+function closeProjectMarginModal(){
+  const modal = $('projectMarginModal');
+  if (!modal) return;
+  modal.style.display = 'none';
+  projectMarginModalState.projectId = null;
+  const errorEl = $('projectMarginError');
+  if (errorEl) errorEl.textContent = '';
+}
+
+function submitProjectMarginModal(){
+  const projectId = projectMarginModalState.projectId;
+  if (!projectId){
+    closeProjectMarginModal();
+    return;
+  }
+  const inputEl = $('projectMarginPercentInput');
+  const errorEl = $('projectMarginError');
+  const raw = String(inputEl?.value ?? '').trim().replace(',','.');
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)){
+    if (errorEl) errorEl.textContent = 'Oppgi en gyldig DG i prosent.';
+    if (inputEl) inputEl.focus();
+    return;
+  }
+  const nextRate = parsed > 1 ? parsed / 100 : parsed;
+  if (!Number.isFinite(nextRate) || nextRate < 0 || nextRate > MAX_MARGIN_RATE){
+    if (errorEl) errorEl.textContent = 'DG må være mellom 0 og 95 %.';
+    if (inputEl) inputEl.focus();
+    return;
+  }
+  const result = applyProjectMarginRate(projectId, nextRate);
+  const appliedPercent = fmtPercentNO.format(result.appliedRate * 100);
+  const statusEl = $('status');
+  if (statusEl){
+    statusEl.textContent = `DG ${appliedPercent}% er satt på prosjektet. Oppdatert ${result.updatedLines} linje(r).`;
+  }
+  closeProjectMarginModal();
+}
+
+function applyProjectMarginRate(projectId, nextRate){
+  const project = getProjectById(projectId);
+  if (!project) return { updatedLines: 0, skippedLines: 0 };
+  const normalizedRate = normalizeMarginRate(nextRate, DEFAULT_MARGIN_RATE);
+  const lines = Array.isArray(project.lines) ? project.lines : [];
+  let updatedLines = 0;
+  let skippedLines = 0;
+
+  lines.forEach(line=>{
+    const totals = (line && typeof line === 'object' && line.totals && typeof line.totals === 'object')
+      ? line.totals
+      : null;
+    if (!totals){
+      skippedLines += 1;
+      return;
+    }
+    const material = Number(totals.material);
+    if (!Number.isFinite(material) || material < 0){
+      skippedLines += 1;
+      return;
+    }
+
+    const inputs = (line && typeof line === 'object' && line.inputs && typeof line.inputs === 'object')
+      ? line.inputs
+      : {};
+    const freightRate = Number(inputs.freightRate ?? totals.freightRate ?? 0.10);
+    const montasjeCost = Number(totals?.montasje?.cost);
+    const engineeringCost = Number(totals?.engineering?.cost);
+    const opphengCost = Number(totals?.oppheng?.cost);
+    const montasjeMarginRate = resolveDgRate(inputs?.montasjeMarginRate, totals?.montasjeMarginRate, DEFAULT_MARGIN_RATE);
+    const engineeringMarginRate = resolveDgRate(inputs?.engineeringMarginRate, totals?.engineeringMarginRate, DEFAULT_MARGIN_RATE);
+    const opphengMarginRate = resolveDgRate(inputs?.opphengMarginRate, totals?.opphengMarginRate, DEFAULT_MARGIN_RATE);
+
+    const recalculated = calculateTotalsFromMaterial({
+      material,
+      marginRate: normalizedRate,
+      freightRate,
+      montasjeCost: Number.isFinite(montasjeCost) ? montasjeCost : 0,
+      montasjeMarginRate,
+      engineeringCost: Number.isFinite(engineeringCost) ? engineeringCost : 0,
+      engineeringMarginRate,
+      opphengCost: Number.isFinite(opphengCost) ? opphengCost : 0,
+      opphengMarginRate
+    });
+
+    totals.marginRate = recalculated.marginRate;
+    totals.marginFactor = recalculated.marginFactor;
+    totals.margin = recalculated.margin;
+    totals.subtotal = recalculated.subtotal;
+    totals.freightRate = recalculated.freightRate;
+    totals.freight = recalculated.freight;
+    totals.totalExMontasje = recalculated.totalExMontasje;
+    totals.montasjeMarginRate = recalculated.montasjeMarginRate;
+    totals.montasjeMargin = recalculated.montasjeMargin;
+    totals.totalInclMontasje = recalculated.totalInclMontasje;
+    totals.engineeringMarginRate = recalculated.engineeringMarginRate;
+    totals.engineeringMargin = recalculated.engineeringMargin;
+    totals.totalInclEngineering = recalculated.totalInclEngineering;
+    totals.opphengMarginRate = recalculated.opphengMarginRate;
+    totals.opphengMargin = recalculated.opphengMargin;
+    totals.totalInclOppheng = recalculated.totalInclOppheng;
+    totals.total = recalculated.total;
+
+    if (inputs){
+      inputs.marginRate = recalculated.marginRate;
+      inputs.freightRate = recalculated.freightRate;
+      line.inputs = inputs;
+    }
+
+    setLineSelectedAddonConfig(line, getSelectedAddonConfig(line, getProjectSelectedAddonConfig(project)));
+    line.updatedAt = new Date().toISOString();
+    updatedLines += 1;
+  });
+
+  project.updatedAt = new Date().toISOString();
+  saveProjectsToStorage();
+  sortProjects();
+  renderProjectDashboard();
+  syncActiveCalculatorAddonConfig(project);
+  return { updatedLines, skippedLines, appliedRate: normalizedRate };
+}
+
+function promptAndApplyProjectMarginRate(projectId){
+  if (openProjectMarginModal(projectId)){
+    return;
+  }
+  const project = getProjectById(projectId);
+  if (!project) return;
+  const lineCount = Array.isArray(project.lines) ? project.lines.length : 0;
+  if (!lineCount){
+    const statusEl = $('status');
+    if (statusEl) statusEl.textContent = 'Prosjektet har ingen linjer å oppdatere.';
+    return;
+  }
+  const currentRate = resolveProjectMaterialMarginRate(project);
+  const defaultPercent = fmtPercentNO.format(currentRate * 100);
+  const input = window.prompt(
+    `Angi DG% for hele prosjektet "${project.name || 'Uten navn'}". Denne overstyrer DG på alle linjer.`,
+    defaultPercent
+  );
+  if (input === null) return;
+
+  const parsed = Number(String(input).replace(',', '.'));
+  if (!Number.isFinite(parsed)){
+    const statusEl = $('status');
+    if (statusEl) statusEl.textContent = 'Ugyldig DG-verdi.';
+    return;
+  }
+  const nextRate = normalizeMarginRate(parsed > 1 ? parsed / 100 : parsed, DEFAULT_MARGIN_RATE);
+  const result = applyProjectMarginRate(projectId, nextRate);
+  const appliedPercent = fmtPercentNO.format(result.appliedRate * 100);
+  const statusEl = $('status');
+  if (statusEl){
+    statusEl.textContent = `DG ${appliedPercent}% er satt på prosjektet. Oppdatert ${result.updatedLines} linje(r).`;
+  }
+}
+
+function buildAddonSelectorControl(config, options = {}){
+  const normalized = normalizeSelectedAddonConfig(config, null);
+  const wrapper = document.createElement('div');
+  const extraClass = options.className ? ` ${options.className}` : '';
+  wrapper.className = `addon-config-panel${extraClass}`;
+  const checkboxDefs = [
+    { includeKey: 'includeMontasje', showKey: 'showMontasje', label: 'Montasje' },
+    { includeKey: 'includeEngineering', showKey: 'showEngineering', label: 'Ingeniør' },
+    { includeKey: 'includeOppheng', showKey: 'showOppheng', label: 'Opphengsmateriell' }
+  ];
+
+  const buildSelectorGroup = (titleText, mode, keyName)=>{
+    const group = document.createElement('div');
+    group.className = 'addon-selectors';
+    const title = document.createElement('span');
+    title.className = 'addon-selectors-title';
+    const strong = document.createElement('strong');
+    strong.textContent = titleText;
+    title.appendChild(strong);
+    group.appendChild(title);
+
+    checkboxDefs.forEach(def=>{
+      const labelEl = document.createElement('label');
+      const input = document.createElement('input');
+      input.type = 'checkbox';
+      input.checked = Boolean(normalized[def[keyName]]);
+      input.dataset.addonField = def[keyName];
+      input.dataset.addonMode = mode;
+      if (mode === 'show' && !normalized[def.includeKey]){
+        input.checked = false;
+        input.disabled = true;
+      }
+      if (options.scope === 'project'){
+        input.dataset.projectAddon = '1';
+        input.dataset.projectId = options.projectId || '';
+      } else if (options.scope === 'line'){
+        input.dataset.lineAddon = '1';
+        input.dataset.projectId = options.projectId || '';
+        input.dataset.lineId = options.lineId || '';
+      }
+      labelEl.appendChild(input);
+      labelEl.appendChild(document.createTextNode(` ${def.label}`));
+      group.appendChild(labelEl);
+    });
+
+    return group;
+  };
+
+  wrapper.appendChild(buildSelectorGroup('Inkluder i tilbud:', 'include', 'includeKey'));
+  wrapper.appendChild(buildSelectorGroup('Synliggjør pris:', 'show', 'showKey'));
+  return wrapper;
 }
 
 function formatLineTotal(line){
@@ -1539,11 +2343,42 @@ function renderProjectDashboard(){
     summary.className = 'project-row-meta';
     const lineCount = projectLines.length;
     summary.textContent = `Linjer: ${lineCount} | Totalsum linjer: ${fmtNO.format(projectTotal)} NOK`;
+    const marginBadge = document.createElement('p');
+    marginBadge.className = 'project-margin-badge';
+    marginBadge.textContent = formatProjectMarginBadgeText(project);
+    const marginStats = getProjectMaterialMarginStats(project);
+    if (marginStats.uniqueCount > 1){
+      marginBadge.classList.add('is-mixed');
+    }
+    if (shouldUseWarningForProjectMargin(marginStats)){
+      marginBadge.classList.add('is-warning');
+    }
+
+    const setMarginBtn = document.createElement('button');
+    setMarginBtn.type = 'button';
+    setMarginBtn.className = 'btn alt project-margin-btn';
+    setMarginBtn.dataset.projectSetMargin = project.id;
+    setMarginBtn.textContent = 'Endre';
+    setMarginBtn.disabled = !projectLines.length;
+
+    const marginRow = document.createElement('div');
+    marginRow.className = 'project-margin-row';
+    marginRow.appendChild(marginBadge);
+    marginRow.appendChild(setMarginBtn);
+
     titleWrap.appendChild(title);
     titleWrap.appendChild(customer);
     titleWrap.appendChild(contact);
     titleWrap.appendChild(created);
     titleWrap.appendChild(summary);
+    titleWrap.appendChild(marginRow);
+    const projectAddonConfig = getProjectSelectedAddonConfig(project);
+    const projectAddonControl = buildAddonSelectorControl(projectAddonConfig, {
+      className: 'project-inline-selectors',
+      scope: 'project',
+      projectId: project.id
+    });
+    titleWrap.appendChild(projectAddonControl);
 
     const actions = document.createElement('div');
     actions.className = 'project-row-actions';
@@ -1601,11 +2436,7 @@ function renderProjectDashboard(){
     const linesWrapper = document.createElement('div');
     linesWrapper.className = 'project-detail-lines';
     const lines = [...projectLines];
-    lines.sort((a,b)=>{
-      const aTime = new Date(a.updatedAt || a.createdAt || 0).getTime();
-      const bTime = new Date(b.updatedAt || b.createdAt || 0).getTime();
-      return bTime - aTime;
-    });
+    lines.sort((a,b)=>compareLinesForSort(a, b, projectState.lineSort));
     if (!lines.length){
       const emptyLine = document.createElement('p');
       emptyLine.className = 'project-line-empty';
@@ -1615,6 +2446,8 @@ function renderProjectDashboard(){
       lines.forEach(line=>{
         const lineWrap = document.createElement('div');
         lineWrap.className = 'project-line-item';
+        const lineMain = document.createElement('div');
+        lineMain.className = 'project-line-main';
 
         const lineBtn = document.createElement('button');
         lineBtn.type = 'button';
@@ -1642,6 +2475,25 @@ function renderProjectDashboard(){
         lineBtn.appendChild(infoSpan);
         lineBtn.appendChild(totalSpan);
         lineBtn.appendChild(updatedSpan);
+        const lineAddonControl = buildAddonSelectorControl(
+          getSelectedAddonConfig(line, projectAddonConfig),
+          {
+            className: 'line-addon-selectors',
+            scope: 'line',
+            projectId: project.id,
+            lineId: line.id
+          }
+        );
+
+        const lineActionButtons = document.createElement('div');
+        lineActionButtons.className = 'line-action-buttons';
+
+        const lineEditBtn = document.createElement('button');
+        lineEditBtn.type = 'button';
+        lineEditBtn.className = 'btn alt line-edit-btn';
+        lineEditBtn.dataset.lineEdit = line.id;
+        lineEditBtn.dataset.projectId = project.id;
+        lineEditBtn.textContent = 'Endre';
 
         const lineDeleteBtn = document.createElement('button');
         lineDeleteBtn.type = 'button';
@@ -1650,8 +2502,12 @@ function renderProjectDashboard(){
         lineDeleteBtn.dataset.projectId = project.id;
         lineDeleteBtn.textContent = 'Slett';
 
-        lineWrap.appendChild(lineBtn);
-        lineWrap.appendChild(lineDeleteBtn);
+        lineMain.appendChild(lineBtn);
+        lineMain.appendChild(lineAddonControl);
+        lineWrap.appendChild(lineMain);
+        lineActionButtons.appendChild(lineEditBtn);
+        lineActionButtons.appendChild(lineDeleteBtn);
+        lineWrap.appendChild(lineActionButtons);
         linesWrapper.appendChild(lineWrap);
       });
     }
@@ -1663,14 +2519,35 @@ function renderProjectDashboard(){
   listEl.appendChild(frag);
 }
 
-function initProjectDashboard(){
+async function initProjectDashboard(){
   projectState.projects = loadProjectsFromStorage();
+  applyDashboardSortModesFromStorage();
   sortProjects();
   updateProjectHistories();
+  await syncProjectsForCurrentUser();
   if (hasDashboardUI()){
     showDashboardView({ clearSelection: true });
+    applyDashboardQueryContext();
   }
   updateProjectMetaDisplay();
+}
+
+function applyDashboardQueryContext(){
+  if (!hasDashboardUI()) return;
+  const params = new URLSearchParams(window.location.search);
+  const projectId = params.get('project');
+  if (!projectId) return;
+  const project = getProjectById(projectId);
+  if (!project) return;
+  setActiveProject(project);
+  projectState.expandedProjectId = project.id;
+  renderProjectDashboard();
+
+  if (typeof history !== 'undefined' && history.replaceState){
+    const cleanUrl = new URL(window.location.href);
+    cleanUrl.search = '';
+    history.replaceState({}, '', cleanUrl.toString());
+  }
 }
 
 function applyCalculatorQueryContext(){
@@ -1689,6 +2566,7 @@ function applyCalculatorQueryContext(){
     openProjectLine(project.id, lineId);
   } else if (newLine){
     resetCalculatorForm({ preserveProject: true });
+    applyProjectAddonCheckboxesToCalculator(project);
     const statusEl = $('status');
     if (statusEl) statusEl.textContent = 'Oppgi linjenummer for ny linje.';
     const lineInput = $('lineNumberInput');
@@ -1735,6 +2613,7 @@ function startNewLineForProject(projectId){
     renderProjectDashboard();
   }
   resetCalculatorForm({ preserveProject: true });
+  applyProjectAddonCheckboxesToCalculator(project);
   showCalculatorView();
   const lineInput = $('lineNumberInput');
   if (lineInput){
@@ -1895,6 +2774,7 @@ function applyInputsToCalculator(input){
 function applySavedTotalsToUI(line){
   if (!line || !line.totals) return;
   const totals = line.totals;
+  applySelectedAddonCheckboxes(line);
   const savedMarginRate = resolveMarginRateFromData({ totals, input: line.inputs });
   const savedMontasjeMarginRate = resolveDgRate(line.inputs?.montasjeMarginRate, totals?.montasjeMarginRate, DEFAULT_MARGIN_RATE);
   const savedEngineeringMarginRate = resolveDgRate(line.inputs?.engineeringMarginRate, totals?.engineeringMarginRate, DEFAULT_MARGIN_RATE);
@@ -2041,6 +2921,7 @@ function openProjectLine(projectId, lineId){
   if (lineInput){
     lineInput.value = line.lineNumber || '';
   }
+  applySelectedAddonCheckboxes(line);
   if (line.totals){
     applySavedTotalsToUI(line);
     const statusEl = $('status');
@@ -2072,6 +2953,25 @@ function showDashboardView(options = {}){
   renderProjectDashboard();
 }
 
+function showProjectOverview(projectId){
+  const project = projectId ? getProjectById(projectId) : null;
+  if (project){
+    setActiveProject(project);
+    projectState.expandedProjectId = project.id;
+  } else {
+    projectState.expandedProjectId = null;
+  }
+  if (!hasDashboardUI()){
+    if (project){
+      goToDashboard({ project: project.id });
+    } else {
+      goToDashboard();
+    }
+    return;
+  }
+  showDashboardView({ clearSelection: !project });
+}
+
 function showCalculatorView(){
   if (!hasCalculatorUI()){
     if (projectState.currentProjectId){
@@ -2090,7 +2990,7 @@ function saveCurrentLineToProject(){
   if (!hasActiveProject()){
     const statusEl = $('status');
     if (statusEl) statusEl.textContent = 'Opprett nytt prosjekt for \u00E5 lagre linjen.';
-    openProjectModal({ mode: 'create' });
+    openProjectModal({ mode: 'create', saveLineAfterCreate: true });
     return;
   }
   if (!lastCalc){
@@ -2109,11 +3009,7 @@ function saveCurrentLineToProject(){
   const project = getProjectById(projectState.currentProjectId);
   if (!project) return;
   const now = new Date().toISOString();
-  const selectedAddonFlags = {
-    includeMontasje: Boolean($('includeMontasje')?.checked),
-    includeEngineering: Boolean($('includeEngineering')?.checked),
-    includeOppheng: Boolean($('includeOppheng')?.checked)
-  };
+  const selectedAddonFlags = getOfferAddonCheckboxValuesFromUI();
   const selectedAddonTotal = round2(calculateSelectedAddonTotal(lastCalc).total);
   const totalsSnapshot = deepClone(lastCalc) || {};
   totalsSnapshot.selectedAddonTotal = selectedAddonTotal;
@@ -2143,7 +3039,6 @@ function saveCurrentLineToProject(){
   }
   project.updatedAt = now;
   saveProjectsToStorage();
-  renderProjectDashboard();
   setActiveProject(project);
   projectState.currentLineNumber = '';
   if (lineInput){
@@ -2151,6 +3046,7 @@ function saveCurrentLineToProject(){
   }
   const statusEl = $('status');
   if (statusEl) statusEl.textContent = message;
+  showProjectOverview(project.id);
 }
 
 function resetCalculatorForm(options = {}){
@@ -2205,9 +3101,22 @@ function resetCalculatorForm(options = {}){
   const includeMontasje = $('includeMontasje');
   const includeEngineering = $('includeEngineering');
   const includeOppheng = $('includeOppheng');
+  const showMontasje = $('showMontasje');
+  const showEngineering = $('showEngineering');
+  const showOppheng = $('showOppheng');
   if (includeMontasje) includeMontasje.checked = true;
   if (includeEngineering) includeEngineering.checked = true;
   if (includeOppheng) includeOppheng.checked = true;
+  if (showMontasje) showMontasje.checked = false;
+  if (showEngineering) showEngineering.checked = false;
+  if (showOppheng) showOppheng.checked = false;
+  applyOfferAddonCheckboxConstraints();
+  if (preserveProject && projectState.currentProjectId){
+    const project = getProjectById(projectState.currentProjectId);
+    if (project){
+      applyProjectAddonCheckboxesToCalculator(project);
+    }
+  }
   refreshUIBySeries();
   setCurrentMarginRate(DEFAULT_MARGIN_RATE);
   setCurrentMontasjeMarginRate(DEFAULT_MARGIN_RATE);
@@ -2244,13 +3153,21 @@ function submitProjectModal(){
     updateProjectSubmitState();
     return;
   }
-  if (projectModalState.mode === 'edit' && projectModalState.projectId){
+  const wasEditMode = projectModalState.mode === 'edit';
+  const shouldSaveLineAfterCreate = !wasEditMode && projectModalState.saveLineAfterCreate;
+  if (wasEditMode && projectModalState.projectId){
     persistProjectInfo(projectName, customerName, contactPerson, { projectId: projectModalState.projectId });
   } else {
     persistProjectInfo(projectName, customerName, contactPerson);
-    showDashboardView();
   }
   closeProjectModal();
+  if (shouldSaveLineAfterCreate){
+    saveCurrentLineToProject();
+    return;
+  }
+  if (!wasEditMode){
+    showProjectOverview(projectState.currentProjectId);
+  }
 }
 
 function cancelProjectModal(){
@@ -2274,9 +3191,52 @@ if (projectModal){
   });
 }
 
+const projectMarginCancelBtn = $('projectMarginCancel');
+if (projectMarginCancelBtn){
+  projectMarginCancelBtn.addEventListener('click', closeProjectMarginModal);
+}
+const projectMarginSubmitBtn = $('projectMarginSubmit');
+if (projectMarginSubmitBtn){
+  projectMarginSubmitBtn.addEventListener('click', submitProjectMarginModal);
+}
+const projectMarginPercentInput = $('projectMarginPercentInput');
+if (projectMarginPercentInput){
+  projectMarginPercentInput.addEventListener('keydown', evt=>{
+    if (evt.key === 'Enter'){
+      evt.preventDefault();
+      submitProjectMarginModal();
+    } else if (evt.key === 'Escape'){
+      evt.preventDefault();
+      closeProjectMarginModal();
+    }
+  });
+}
+const projectMarginModal = $('projectMarginModal');
+if (projectMarginModal){
+  projectMarginModal.addEventListener('click', evt=>{
+    if (evt.target === projectMarginModal){
+      closeProjectMarginModal();
+    }
+  });
+}
+
 const newProjectBtn = $('newProjectBtn');
 if (newProjectBtn){
   newProjectBtn.addEventListener('click', ()=>openProjectModal({ mode: 'create' }));
+}
+
+const projectSortSelect = $('projectSortSelect');
+if (projectSortSelect){
+  projectSortSelect.addEventListener('change', ()=>{
+    setProjectSortMode(projectSortSelect.value);
+  });
+}
+
+const lineSortSelect = $('lineSortSelect');
+if (lineSortSelect){
+  lineSortSelect.addEventListener('change', ()=>{
+    setLineSortMode(lineSortSelect.value);
+  });
 }
 
 const projectListEl = $('projectList');
@@ -2312,8 +3272,30 @@ if (projectListEl){
       requestGenerateProjectOffer(target.dataset.projectGenerateOffer, target);
       return;
     }
+    if (target.dataset.projectSetMargin){
+      promptAndApplyProjectMarginRate(target.dataset.projectSetMargin);
+      return;
+    }
     if (target.dataset.action === 'create-project'){
       openProjectModal({ mode: 'create' });
+    }
+  });
+  projectListEl.addEventListener('change', evt=>{
+    const target = evt.target;
+    if (!(target instanceof HTMLInputElement)) return;
+    if (target.dataset.lineAddon){
+      const projectId = target.dataset.projectId || '';
+      const lineId = target.dataset.lineId || '';
+      const field = target.dataset.addonField || '';
+      if (!projectId || !lineId || !field) return;
+      updateLineSelectedAddonConfig(projectId, lineId, { [field]: target.checked });
+      return;
+    }
+    if (target.dataset.projectAddon){
+      const projectId = target.dataset.projectId || '';
+      const field = target.dataset.addonField || '';
+      if (!projectId || !field) return;
+      updateProjectSelectedAddonConfig(projectId, { [field]: target.checked });
     }
   });
 }
@@ -2348,8 +3330,17 @@ if (resetBtn){
 ['includeMontasje','includeEngineering','includeOppheng'].forEach(id=>{
   const checkbox = $(id);
   if (!checkbox) return;
-  checkbox.addEventListener('change', updateSelectedAddonTotalUI);
+  checkbox.addEventListener('change', ()=>{
+    applyOfferAddonCheckboxConstraints();
+    updateSelectedAddonTotalUI();
+  });
 });
+['showMontasje','showEngineering','showOppheng'].forEach(id=>{
+  const checkbox = $(id);
+  if (!checkbox) return;
+  checkbox.addEventListener('change', applyOfferAddonCheckboxConstraints);
+});
+applyOfferAddonCheckboxConstraints();
 updateSelectedAddonTotalUI();
 
 const marginCancelBtn = $('marginCancel');
@@ -2445,6 +3436,11 @@ document.addEventListener('keydown', evt=>{
     const marginModalEl = $('marginModal');
     if (marginModalEl && marginModalEl.style.display === 'flex'){
       closeMarginModal();
+      return;
+    }
+    const projectMarginModalEl = $('projectMarginModal');
+    if (projectMarginModalEl && projectMarginModalEl.style.display === 'flex'){
+      closeProjectMarginModal();
       return;
     }
     const projectModalEl = $('projectModal');
@@ -3527,7 +4523,7 @@ function updateUsdRateFromMarket(snapshot){
   markDirty();
 }
 window.addEventListener('DOMContentLoaded', async ()=>{
-  initProjectDashboard();
+  await initProjectDashboard();
   initMarketDataTicker();
   if (!hasCalculatorUI()){
     return;

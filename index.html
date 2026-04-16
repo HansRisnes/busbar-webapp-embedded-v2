@@ -31,9 +31,10 @@
     <div class="header-top">
       <h1>Busbar Priskalkulator</h1>
       <div id="authControls" class="auth-controls">
-        <button id="loginBtn" class="btn">Logg på</button>
         <span id="authUser" class="auth-user muted-text" hidden></span>
+        <button id="loginBtn" class="btn">Logg på</button>
         <button id="logoutBtn" class="btn alt" hidden>Logg av</button>
+        <a href="admin.html" id="adminPageBtn" class="btn alt nav-page-btn" hidden>Admin</a>
       </div>
     </div>
     <div class="market-bar" id="marketTicker" aria-live="polite">
@@ -75,6 +76,26 @@
         </div>
         <div class="dashboard-actions">
           <button id="newProjectBtn" type="button" class="btn">Opprett nytt prosjekt</button>
+          <div class="dashboard-sort-row">
+            <div class="dashboard-sort-controls">
+              <label for="projectSortSelect">Sorter prosjekter</label>
+              <select id="projectSortSelect">
+                <option value="date_newest">Nyest først</option>
+                <option value="date_oldest">Eldst først</option>
+                <option value="alpha_asc">Alfabetisk (A-Å)</option>
+                <option value="alpha_desc">Alfabetisk (Å-A)</option>
+              </select>
+            </div>
+            <div class="dashboard-sort-controls">
+              <label for="lineSortSelect">Sorter linjer</label>
+              <select id="lineSortSelect">
+                <option value="date_newest">Nyest først</option>
+                <option value="date_oldest">Eldst først</option>
+                <option value="alpha_asc">Alfabetisk (A-Å)</option>
+                <option value="alpha_desc">Alfabetisk (Å-A)</option>
+              </select>
+            </div>
+          </div>
         </div>
       </div>
       <div id="projectList" class="project-list" aria-live="polite">
@@ -101,7 +122,7 @@
     <div class="modal">
       <h3 id="loginTitle">Logg på</h3>
       <form class="login-form" onsubmit="return false;" autocomplete="off">
-        <label for="loginUsername">Brukernavn (valgfritt)
+        <label for="loginUsername">Brukernavn (e-post)
           <input id="loginUsername" type="text" inputmode="text" autocomplete="username">
         </label>
         <label for="loginPassword">Passord
@@ -142,6 +163,23 @@
         <div class="actions">
           <button id="projectCancel" type="button" class="btn alt">Avbryt</button>
           <button id="projectSubmit" type="button" class="btn" disabled>Fortsett</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id="projectMarginModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="projectMarginTitle">
+    <div class="modal">
+      <h3 id="projectMarginTitle">Sett prosjekt-DG</h3>
+      <form class="project-form" onsubmit="return false;" autocomplete="off">
+        <p id="projectMarginCurrent" class="muted-text">Nåværende DG vises her.</p>
+        <label for="projectMarginPercentInput">DG (%)
+          <input id="projectMarginPercentInput" type="text" inputmode="decimal" placeholder="Eks. 20" required>
+        </label>
+        <p id="projectMarginError" class="login-error project-error" role="alert"></p>
+        <div class="actions">
+          <button id="projectMarginCancel" type="button" class="btn alt">Avbryt</button>
+          <button id="projectMarginSubmit" type="button" class="btn">Lagre</button>
         </div>
       </form>
     </div>

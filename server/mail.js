@@ -14,8 +14,35 @@ const OFFER_TEMPLATE_FILE = path.resolve(
   'tilbud-stromskinner-template.docx'
 );
 const OFFER_COUNTER_FILE = path.resolve(__dirname, '..', 'data', 'offer-sequence.json');
+const OFFER_PROJECT_NUMBERS_FILE = path.resolve(
+  __dirname,
+  '..',
+  'data',
+  'offer-project-numbers.json'
+);
+const OFFER_REVISIONS_FILE = path.resolve(
+  __dirname,
+  '..',
+  'data',
+  'offer-revisions.json'
+);
+const PROJECT_ARCHIVE_FILE = path.resolve(
+  __dirname,
+  '..',
+  'data',
+  'project-archive.json'
+);
 const OFFER_LINE_BLOCK_START_TOKEN = '__BUSBAR_LINE_BLOCK_START__';
 const OFFER_LINE_BLOCK_END_TOKEN = '__BUSBAR_LINE_BLOCK_END__';
+const OFFER_FIRE_BLOCK_START_TOKEN = '__BUSBAR_FIRE_BLOCK_START__';
+const OFFER_FIRE_BLOCK_END_TOKEN = '__BUSBAR_FIRE_BLOCK_END__';
+const OFFER_OPPHENG_BLOCK_START_TOKEN = '__BUSBAR_OPPHENG_BLOCK_START__';
+const OFFER_OPPHENG_BLOCK_END_TOKEN = '__BUSBAR_OPPHENG_BLOCK_END__';
+const OFFER_PRICE_SOURCE_FILES = [
+  path.resolve(__dirname, '..', 'data', 'busbar-webapp-embedded-v2.csv'),
+  path.resolve(__dirname, '..', 'data', 'busbar-webapp-embedded-v2.1.csv'),
+  path.resolve(__dirname, '..', 'data', 'busbar-webapp-embedded-v2.2.csv')
+];
 const MARKET_HTTP_TIMEOUT_MS = Number(process.env.MARKET_HTTP_TIMEOUT_MS || 7000);
 const MARKET_LME_URL =
   process.env.MARKET_LME_URL ||
@@ -65,23 +92,35 @@ const marketScheduleState = {
 
 let marketCache = { payload: null };
 let offerNumberLock = Promise.resolve();
+let projectArchiveLock = Promise.resolve();
+let fireBarrierPriceIndexPromise = null;
+let marketRefreshInFlight = null;
 
 fs.access(MARKET_DATA_FILE).catch(err=>{
   console.warn(`[market-data] Datafil utilgjengelig (${MARKET_DATA_FILE}): ${err.message}`);
 });
 
 const app = express();
-app.use(express.json({ limit: '2mb' }));
+app.use(express.json({ limit: '10mb' }));
 
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   if (req.method === 'OPTIONS') {
     return res.sendStatus(204);
   }
   return next();
 });
+
+const ADMIN_USERNAME = safeString(process.env.ADMIN_USERNAME || 'admin');
+const ADMIN_PASSWORD = safeString(process.env.ADMIN_PASSWORD || 'change-me-admin');
+
+if (!process.env.ADMIN_USERNAME || !process.env.ADMIN_PASSWORD) {
+  console.warn(
+    '[admin] ADMIN_USERNAME eller ADMIN_PASSWORD mangler i miljøvariabler. Bruker midlertidige standardverdier.'
+  );
+}
 
 const requiredEnv = [
   'OAUTH_TENANT_ID',
@@ -197,44 +236,507 @@ async function writeJsonFile(filePath, value) {
   await fs.writeFile(filePath, JSON.stringify(value, null, 2), 'utf8');
 }
 
+function withProjectArchiveLock(task) {
+  const run = projectArchiveLock.then(() => task());
+  projectArchiveLock = run.catch(() => {});
+  return run;
+}
+
+function normalizeEmail(value) {
+  return safeString(value).toLowerCase();
+}
+
+function isValidEmail(value) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || ''));
+}
+
+function toIsoTimestamp(value, fallback = new Date().toISOString()) {
+  const raw = safeString(value);
+  if (!raw) return fallback;
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return fallback;
+  return parsed.toISOString();
+}
+
+function safeJsonClone(value, fallback) {
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch (_err) {
+    return fallback;
+  }
+}
+
+function generateRecordId(prefix = 'id') {
+  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(16).slice(2, 10)}`;
+}
+
+function normalizeLineRecord(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const now = new Date().toISOString();
+  const selectedAddonTotal = toFiniteNumber(raw.selectedAddonTotal);
+  const bom = Array.isArray(raw.bom) ? safeJsonClone(raw.bom, []) : [];
+  const inputs = (raw.inputs && typeof raw.inputs === 'object')
+    ? safeJsonClone(raw.inputs, {})
+    : {};
+  const totals = (raw.totals && typeof raw.totals === 'object')
+    ? safeJsonClone(raw.totals, {})
+    : {};
+  const selectedAddonConfig = (raw.selectedAddonConfig && typeof raw.selectedAddonConfig === 'object')
+    ? safeJsonClone(raw.selectedAddonConfig, {})
+    : {};
+  return {
+    id: safeString(raw.id) || generateRecordId('line'),
+    lineNumber: safeString(raw.lineNumber),
+    createdAt: toIsoTimestamp(raw.createdAt, now),
+    updatedAt: toIsoTimestamp(raw.updatedAt || raw.createdAt, now),
+    inputs,
+    totals,
+    bom,
+    selectedAddonConfig,
+    selectedAddonTotal: Number.isFinite(selectedAddonTotal) ? round2(selectedAddonTotal) : null
+  };
+}
+
+function normalizeProjectRecord(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const now = new Date().toISOString();
+  const linesRaw = Array.isArray(raw.lines) ? raw.lines : [];
+  const lines = linesRaw.map(normalizeLineRecord).filter(Boolean);
+  const selectedAddonConfig = (raw.selectedAddonConfig && typeof raw.selectedAddonConfig === 'object')
+    ? safeJsonClone(raw.selectedAddonConfig, {})
+    : {};
+  return {
+    id: safeString(raw.id) || generateRecordId('proj'),
+    name: safeString(raw.name),
+    customer: safeString(raw.customer),
+    contactPerson: safeString(raw.contactPerson || raw.contact),
+    createdAt: toIsoTimestamp(raw.createdAt, now),
+    updatedAt: toIsoTimestamp(raw.updatedAt || raw.createdAt, now),
+    selectedAddonConfig,
+    lines
+  };
+}
+
+function normalizeStoredUserRecord(email, raw) {
+  const now = new Date().toISOString();
+  const projectsRaw = Array.isArray(raw?.projects) ? raw.projects : [];
+  const projects = projectsRaw.map(normalizeProjectRecord).filter(Boolean);
+  return {
+    email,
+    updatedAt: toIsoTimestamp(raw?.updatedAt, now),
+    projects
+  };
+}
+
+async function readProjectArchive() {
+  const stored = await readJsonFile(PROJECT_ARCHIVE_FILE, { users: {} });
+  const usersRaw = (stored && typeof stored === 'object' && stored.users && typeof stored.users === 'object')
+    ? stored.users
+    : {};
+  const users = {};
+  Object.entries(usersRaw).forEach(([key, value]) => {
+    const email = normalizeEmail(key || value?.email);
+    if (!isValidEmail(email)) return;
+    users[email] = normalizeStoredUserRecord(email, value);
+  });
+  return { users };
+}
+
+async function writeProjectArchive(state) {
+  const users = (state && typeof state === 'object' && state.users && typeof state.users === 'object')
+    ? state.users
+    : {};
+  await writeJsonFile(PROJECT_ARCHIVE_FILE, { users });
+}
+
+function parseBasicAuthHeader(headerValue) {
+  const header = String(headerValue || '');
+  if (!header.toLowerCase().startsWith('basic ')) return null;
+  const encoded = header.slice(6).trim();
+  if (!encoded) return null;
+  try {
+    const decoded = Buffer.from(encoded, 'base64').toString('utf8');
+    const separatorIndex = decoded.indexOf(':');
+    if (separatorIndex < 0) return null;
+    return {
+      username: decoded.slice(0, separatorIndex),
+      password: decoded.slice(separatorIndex + 1)
+    };
+  } catch (_err) {
+    return null;
+  }
+}
+
+function requireAdminAuth(req, res, next) {
+  const auth = parseBasicAuthHeader(req.headers.authorization);
+  if (!auth || auth.username !== ADMIN_USERNAME || auth.password !== ADMIN_PASSWORD) {
+    return res.status(401).json({ error: 'Ugyldig admin-innlogging' });
+  }
+  return next();
+}
+
+function addDays(date, days) {
+  const base = date instanceof Date ? date : new Date(date);
+  if (Number.isNaN(base.getTime())) return new Date();
+  const copy = new Date(base);
+  copy.setDate(copy.getDate() + Number(days || 0));
+  return copy;
+}
+
+function allocateOfferNumberFromState(state, date = new Date()) {
+  const nextState = (state && typeof state === 'object') ? state : {};
+  const years = (nextState.years && typeof nextState.years === 'object')
+    ? nextState.years
+    : {};
+  const year = String(getOfferYear(date));
+  const previous = Number(years[year]);
+  const next = (Number.isInteger(previous) && previous >= 1000) ? previous + 1 : 1001;
+  years[year] = next;
+  nextState.years = years;
+  return `${year}-${next}`;
+}
+
 async function allocateOfferNumber(date = new Date()) {
   return withOfferNumberLock(async ()=>{
     const state = await readJsonFile(OFFER_COUNTER_FILE, { years: {} });
-    const years = (state && typeof state === 'object' && state.years && typeof state.years === 'object')
-      ? state.years
-      : {};
-    const year = String(getOfferYear(date));
-    const previous = Number(years[year]);
-    const next = (Number.isInteger(previous) && previous >= 1000) ? previous + 1 : 1001;
-    years[year] = next;
-    await writeJsonFile(OFFER_COUNTER_FILE, { years });
-    return `${year}-${next}`;
+    const offerNumber = allocateOfferNumberFromState(state, date);
+    await writeJsonFile(OFFER_COUNTER_FILE, state);
+    return offerNumber;
   });
 }
 
-function resolveLineSelectedAddonTotal(line) {
-  const direct = toFiniteNumber(line?.selectedAddonTotal ?? line?.totals?.selectedAddonTotal);
-  if (Number.isFinite(direct)) return round2(direct);
+function resolveProjectOfferKey(project) {
+  const explicitId = safeString(project?.id);
+  if (explicitId) return `id:${explicitId}`;
+  const name = safeString(project?.name).toLowerCase();
+  const customer = safeString(project?.customer).toLowerCase();
+  const contact = safeString(project?.contactPerson || project?.contact).toLowerCase();
+  return `meta:${name}|${customer}|${contact}` || 'meta:unknown';
+}
 
+async function allocateOfferIdentity(project, date = new Date()) {
+  return withOfferNumberLock(async ()=>{
+    const [counterState, projectNumbersRaw, revisionsRaw] = await Promise.all([
+      readJsonFile(OFFER_COUNTER_FILE, { years: {} }),
+      readJsonFile(OFFER_PROJECT_NUMBERS_FILE, {}),
+      readJsonFile(OFFER_REVISIONS_FILE, {})
+    ]);
+
+    const projectNumbers = (projectNumbersRaw && typeof projectNumbersRaw === 'object')
+      ? projectNumbersRaw
+      : {};
+    const revisions = (revisionsRaw && typeof revisionsRaw === 'object')
+      ? revisionsRaw
+      : {};
+    const key = resolveProjectOfferKey(project);
+
+    let offerNumber = safeString(projectNumbers[key]);
+    if (!/^\d{4}-\d+$/.test(offerNumber)) {
+      offerNumber = allocateOfferNumberFromState(counterState, date);
+      projectNumbers[key] = offerNumber;
+    }
+
+    const previousRevision = Number(revisions[key]);
+    const revision = (Number.isInteger(previousRevision) && previousRevision >= 0)
+      ? previousRevision + 1
+      : 0;
+    revisions[key] = revision;
+
+    await Promise.all([
+      writeJsonFile(OFFER_COUNTER_FILE, counterState),
+      writeJsonFile(OFFER_PROJECT_NUMBERS_FILE, projectNumbers),
+      writeJsonFile(OFFER_REVISIONS_FILE, revisions)
+    ]);
+
+    return { offerNumber, revision };
+  });
+}
+
+function resolveSelectedAddonFlag(value, fallback = true) {
+  if (typeof value === 'boolean') return value;
+  if (value === 1 || value === '1' || value === 'true' || value === 'TRUE') return true;
+  if (value === 0 || value === '0' || value === 'false' || value === 'FALSE') return false;
+  return fallback;
+}
+
+function resolveLineSelectedAddonConfig(line, lineTotals = {}) {
+  const raw = line?.selectedAddonConfig || lineTotals?.selectedAddonConfig || null;
+  const includeMontasje = resolveSelectedAddonFlag(raw?.includeMontasje, true);
+  const includeEngineering = resolveSelectedAddonFlag(raw?.includeEngineering, true);
+  const includeOppheng = resolveSelectedAddonFlag(raw?.includeOppheng, true);
+  const showMontasje = resolveSelectedAddonFlag(
+    raw?.showMontasje,
+    resolveSelectedAddonFlag(raw?.includeMontasje, false)
+  );
+  const showEngineering = resolveSelectedAddonFlag(
+    raw?.showEngineering,
+    resolveSelectedAddonFlag(raw?.includeEngineering, false)
+  );
+  const showOppheng = resolveSelectedAddonFlag(
+    raw?.showOppheng,
+    resolveSelectedAddonFlag(raw?.includeOppheng, false)
+  );
+  return {
+    includeMontasje,
+    includeEngineering,
+    includeOppheng,
+    showMontasje: includeMontasje && showMontasje,
+    showEngineering: includeEngineering && showEngineering,
+    showOppheng: includeOppheng && showOppheng
+  };
+}
+
+function formatNoCurrencyWithKr(value) {
+  const formatted = formatNoCurrency(value);
+  return formatted ? `kr. ${formatted}` : '';
+}
+
+function parseCsvLine(line) {
+  const values = [];
+  let current = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        current += '"';
+        i += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+    if (ch === ',' && !inQuotes) {
+      values.push(current);
+      current = '';
+      continue;
+    }
+    current += ch;
+  }
+  values.push(current);
+  return values;
+}
+
+function normalizeSeriesForFireLookup(rawSeries) {
+  const normalized = safeString(rawSeries).toUpperCase().replace(/\s+/g, '');
+  if (!normalized) return '';
+  if (normalized.includes('XCP')) return 'XCP-S';
+  if (normalized.includes('XCM')) return 'XCM';
+  if (normalized.includes('RCP')) return 'RCP';
+  return normalized;
+}
+
+function extractAmpFromFireBarrierDesc(desc) {
+  const raw = safeString(desc).toUpperCase();
+  const explicitAmp = raw.match(/(\d{2,4})\s*A\b/);
+  if (explicitAmp) return Number(explicitAmp[1]);
+
+  const tagMatch = raw.match(/\b(3XB160|2XB210|2XB190|2XB160|B210|B190|B160|H470|H380|H300|H245|H200|H160)\b/);
+  if (!tagMatch) return NaN;
+  const map = {
+    B160: 1250,
+    B190: 1600,
+    B210: 2000,
+    '2XB160': 2500,
+    '2XB190': 3200,
+    '2XB210': 4000,
+    '3XB160': 5000,
+    H160: 1250,
+    H200: 1600,
+    H245: 2000,
+    H300: 2500,
+    H380: 3200,
+    H470: 4000
+  };
+  return Number(map[tagMatch[1]]);
+}
+
+function detectFireBarrierType(desc) {
+  const raw = safeString(desc).toLowerCase();
+  const hasExternal = /(external|ext\.|utvendig|ytter)/.test(raw);
+  const hasInternal = /(internal|int\.|innvendig|inner)/.test(raw);
+  if (hasExternal && !hasInternal) return 'external';
+  if (hasInternal && !hasExternal) return 'internal';
+  return 'direct';
+}
+
+function resolveFireBarrierUnitFromBom(line) {
+  const bom = Array.isArray(line?.bom) ? line.bom : [];
+  if (!bom.length) return NaN;
+
+  let direct = NaN;
+  let external = NaN;
+  let internal = NaN;
+  bom.forEach(entry=>{
+    const type = safeString(entry?.type).toLowerCase();
+    if (!type.includes('fire_barrier')) return;
+    const unit = toFiniteNumber(entry?.enhet ?? entry?.unit ?? entry?.unit_price);
+    if (!Number.isFinite(unit)) return;
+    if (type.includes('_external')) {
+      external = Number.isFinite(external) ? external + unit : unit;
+      return;
+    }
+    if (type.includes('_internal')) {
+      internal = Number.isFinite(internal) ? internal + unit : unit;
+      return;
+    }
+    direct = unit;
+  });
+
+  if (Number.isFinite(direct) && direct > 0) return direct;
+  if (Number.isFinite(external) || Number.isFinite(internal)) {
+    return round2((Number.isFinite(external) ? external : 0) + (Number.isFinite(internal) ? internal : 0));
+  }
+  return NaN;
+}
+
+async function loadFireBarrierPriceIndex() {
+  const index = {};
+  for (const filePath of OFFER_PRICE_SOURCE_FILES) {
+    let raw;
+    try {
+      raw = await fs.readFile(filePath, 'utf8');
+    } catch (err) {
+      if (err && err.code === 'ENOENT') continue;
+      console.warn(`[offer-template] Kunne ikke lese prisfil (${filePath}): ${err.message}`);
+      continue;
+    }
+
+    const rows = raw.split(/\r?\n/).filter(Boolean);
+    if (rows.length < 2) continue;
+    const header = parseCsvLine(rows[0]).map(cell=>safeString(cell).toLowerCase());
+    const descIdx = header.indexOf('desc_text');
+    const priceIdx = header.indexOf('price');
+    if (descIdx < 0 || priceIdx < 0) continue;
+
+    for (let i = 1; i < rows.length; i += 1) {
+      const columns = parseCsvLine(rows[i]);
+      const desc = columns[descIdx] || '';
+      if (!/fire\s*barri(?:er|e)\b|brann/i.test(desc)) continue;
+
+      const amp = extractAmpFromFireBarrierDesc(desc);
+      if (!Number.isFinite(amp)) continue;
+
+      const price = toFiniteNumber(columns[priceIdx]);
+      if (!Number.isFinite(price)) continue;
+
+      const series = normalizeSeriesForFireLookup(desc);
+      if (!series) continue;
+      const type = detectFireBarrierType(desc);
+      const ampKey = String(Math.round(amp));
+      if (!index[series]) index[series] = {};
+      if (!index[series][ampKey]) index[series][ampKey] = {};
+
+      const previous = toFiniteNumber(index[series][ampKey][type]);
+      if (!Number.isFinite(previous) || previous <= 0 || (price > 0 && price < previous)) {
+        index[series][ampKey][type] = round2(price);
+      }
+    }
+  }
+  return index;
+}
+
+async function getFireBarrierPriceIndex() {
+  if (!fireBarrierPriceIndexPromise) {
+    fireBarrierPriceIndexPromise = loadFireBarrierPriceIndex().catch(err=>{
+      fireBarrierPriceIndexPromise = null;
+      throw err;
+    });
+  }
+  return fireBarrierPriceIndexPromise;
+}
+
+function resolveFireBarrierUnitFromPriceIndex(priceIndex, series, amp) {
+  const seriesKey = normalizeSeriesForFireLookup(series);
+  const ampNum = toFiniteNumber(amp);
+  if (!seriesKey || !Number.isFinite(ampNum)) return NaN;
+  const ampKey = String(Math.round(ampNum));
+  const row = priceIndex?.[seriesKey]?.[ampKey];
+  if (!row || typeof row !== 'object') return NaN;
+
+  const direct = toFiniteNumber(row.direct);
+  if (Number.isFinite(direct) && direct > 0) return direct;
+
+  const external = toFiniteNumber(row.external);
+  const internal = toFiniteNumber(row.internal);
+  if (Number.isFinite(external) || Number.isFinite(internal)) {
+    return round2((Number.isFinite(external) ? external : 0) + (Number.isFinite(internal) ? internal : 0));
+  }
+  return NaN;
+}
+
+function resolveFireBarrierUnitPrice(line, priceIndex, input) {
+  const fromBom = resolveFireBarrierUnitFromBom(line);
+  if (Number.isFinite(fromBom) && fromBom > 0) return fromBom;
+  const amp = toFiniteNumber(input?.ampere ?? input?.amp);
+  const fromIndex = resolveFireBarrierUnitFromPriceIndex(priceIndex, input?.series, amp);
+  if (Number.isFinite(fromIndex) && fromIndex > 0) return fromIndex;
+  return NaN;
+}
+
+function resolveLineSelectedAddonTotal(line) {
   const lineTotals = (line && typeof line === 'object' && line.totals && typeof line.totals === 'object')
     ? line.totals
     : {};
   const baseTotal = toFiniteNumber(lineTotals.totalExMontasje);
-  if (!Number.isFinite(baseTotal)) return NaN;
+  if (!Number.isFinite(baseTotal)) {
+    const direct = toFiniteNumber(line?.selectedAddonTotal ?? line?.totals?.selectedAddonTotal);
+    return Number.isFinite(direct) ? round2(direct) : NaN;
+  }
 
-  const savedFlags = line?.selectedAddonConfig || lineTotals.selectedAddonConfig || null;
-  const includeMontasje = savedFlags ? Boolean(savedFlags.includeMontasje) : true;
-  const includeEngineering = savedFlags ? Boolean(savedFlags.includeEngineering) : true;
-  const includeOppheng = savedFlags ? Boolean(savedFlags.includeOppheng) : true;
+  const selectedFlags = resolveLineSelectedAddonConfig(line, lineTotals);
+  const includeMontasje = selectedFlags.includeMontasje;
+  const includeEngineering = selectedFlags.includeEngineering;
+  const includeOppheng = selectedFlags.includeOppheng;
   const montasjeTotal = toFiniteNumber(lineTotals.totalInclMontasje);
   const engineeringTotal = toFiniteNumber(lineTotals.totalInclEngineering);
-  const opphengTotal = toFiniteNumber(lineTotals.total);
+  const opphengTotal = toFiniteNumber(lineTotals.totalInclOppheng ?? lineTotals.total);
 
   let total = baseTotal;
   if (includeMontasje && Number.isFinite(montasjeTotal)) total += montasjeTotal;
   if (includeEngineering && Number.isFinite(engineeringTotal)) total += engineeringTotal;
   if (includeOppheng && Number.isFinite(opphengTotal)) total += opphengTotal;
   return round2(total);
+}
+
+function resolveLineMainVisibleTotal(line) {
+  const lineTotals = (line && typeof line === 'object' && line.totals && typeof line.totals === 'object')
+    ? line.totals
+    : {};
+  const baseTotal = toFiniteNumber(lineTotals.totalExMontasje);
+  if (!Number.isFinite(baseTotal)) return NaN;
+
+  const selectedFlags = resolveLineSelectedAddonConfig(line, lineTotals);
+  const includeMontasje = selectedFlags.includeMontasje;
+  const includeEngineering = selectedFlags.includeEngineering;
+  const includeOppheng = selectedFlags.includeOppheng;
+  const showMontasje = includeMontasje && selectedFlags.showMontasje;
+  const showEngineering = includeEngineering && selectedFlags.showEngineering;
+  const showOppheng = includeOppheng && selectedFlags.showOppheng;
+
+  const montasjeTotal = toFiniteNumber(lineTotals.totalInclMontasje);
+  const engineeringTotal = toFiniteNumber(lineTotals.totalInclEngineering);
+  const opphengTotal = toFiniteNumber(lineTotals.totalInclOppheng ?? lineTotals.total);
+
+  let total = baseTotal;
+  if (includeMontasje && !showMontasje && Number.isFinite(montasjeTotal)) total += montasjeTotal;
+  if (includeEngineering && !showEngineering && Number.isFinite(engineeringTotal)) total += engineeringTotal;
+  if (includeOppheng && !showOppheng && Number.isFinite(opphengTotal)) total += opphengTotal;
+  return round2(total);
+}
+
+function resolveLineOfferAmounts(line) {
+  const includedTotal = resolveLineSelectedAddonTotal(line);
+  const mainVisibleTotal = resolveLineMainVisibleTotal(line);
+  let visibleAddonsTotal = NaN;
+  if (Number.isFinite(includedTotal) && Number.isFinite(mainVisibleTotal)) {
+    visibleAddonsTotal = round2(includedTotal - mainVisibleTotal);
+  }
+  return {
+    includedTotal,
+    mainVisibleTotal,
+    visibleAddonsTotal
+  };
 }
 
 function aggregateProjectOfferTotals(project) {
@@ -255,7 +757,10 @@ function aggregateProjectOfferTotals(project) {
     totalInclEngineering: 0,
     oppheng: 0,
     opphengCount: 0,
-    selectedAddonTotal: 0
+    selectedAddonTotal: 0,
+    offerIncludedTotal: 0,
+    offerMainVisibleTotal: 0,
+    offerVisibleAddonsTotal: 0
   };
 
   lines.forEach(line=>{
@@ -281,7 +786,11 @@ function aggregateProjectOfferTotals(project) {
     add('totalInclEngineering', lineTotals.totalInclEngineering);
     add('oppheng', lineTotals?.oppheng?.cost ?? lineTotals.total);
     add('opphengCount', lineTotals?.oppheng?.pieceCount);
-    add('selectedAddonTotal', resolveLineSelectedAddonTotal(line));
+    const lineOfferAmounts = resolveLineOfferAmounts(line);
+    add('selectedAddonTotal', lineOfferAmounts.includedTotal);
+    add('offerIncludedTotal', lineOfferAmounts.includedTotal);
+    add('offerMainVisibleTotal', lineOfferAmounts.mainVisibleTotal);
+    add('offerVisibleAddonsTotal', lineOfferAmounts.visibleAddonsTotal);
   });
 
   return {
@@ -365,18 +874,39 @@ function collectProjectInputSummary(lines) {
   };
 }
 
-function buildOfferPlaceholderValues(project, offerNumber, offerDate) {
+function buildOfferPlaceholderValues(project, offerNumber, offerDate, revision = 0) {
   const safeProject = (project && typeof project === 'object') ? project : {};
   const projectName = safeString(safeProject.name);
   const customer = safeString(safeProject.customer);
   const contactPerson = safeString(safeProject.contactPerson || safeProject.contact);
   const { lines, totals } = aggregateProjectOfferTotals(safeProject);
+  const offerIncludedTotal = Number.isFinite(toFiniteNumber(totals.offerIncludedTotal))
+    ? totals.offerIncludedTotal
+    : (
+      Number.isFinite(toFiniteNumber(totals.selectedAddonTotal))
+        ? totals.selectedAddonTotal
+        : totals.totalExMontasje
+    );
+  const offerMainVisibleTotal = Number.isFinite(toFiniteNumber(totals.offerMainVisibleTotal))
+    ? totals.offerMainVisibleTotal
+    : totals.totalExMontasje;
+  const offerVisibleAddonsTotal = Number.isFinite(toFiniteNumber(totals.offerVisibleAddonsTotal))
+    ? totals.offerVisibleAddonsTotal
+    : (
+      Number.isFinite(toFiniteNumber(offerIncludedTotal)) && Number.isFinite(toFiniteNumber(offerMainVisibleTotal))
+        ? round2(offerIncludedTotal - offerMainVisibleTotal)
+        : NaN
+    );
   const inputSummary = collectProjectInputSummary(lines);
+  const offerDatePlus30 = addDays(offerDate, 30);
+  const revisionNumber = Number.isInteger(Number(revision)) ? Number(revision) : 0;
 
   const placeholders = {
     tilbud_nr: offerNumber,
     tilbudsdato: formatOfferDate(offerDate),
     dato: formatOfferDate(offerDate),
+    dato30: formatOfferDate(offerDatePlus30),
+    revisjon: String(revisionNumber),
     prosjektnavn: projectName,
     prosjekt: projectName,
     kunde: customer,
@@ -386,6 +916,10 @@ function buildOfferPlaceholderValues(project, offerNumber, offerDate) {
     linjer_start: '',
     lse: '',
     linjer_slutt: '',
+    bss: '',
+    bse: '',
+    oss: '',
+    ose: '',
     line_number: inputSummary.lineNumbers,
     linjenummer: inputSummary.lineNumbers,
     antall_linjer: String(lines.length),
@@ -399,10 +933,18 @@ function buildOfferPlaceholderValues(project, offerNumber, offerDate) {
     ste: inputSummary.startElements,
     sle: inputSummary.sluttElements,
     bre: inputSummary.brannElementTotal,
+    brt: '',
+    brp: '',
     stv: formatNoCurrency(totals.selectedAddonTotal),
     tmo: formatNoCurrency(totals.totalInclMontasje),
     tin: formatNoCurrency(totals.totalInclEngineering),
-    top: formatNoCurrency(totals.oppheng),
+    mtl: '',
+    mtp: '',
+    itl: '',
+    itp: '',
+    tol: '',
+    top: '',
+    tod: '',
     ttm: formatNoIntegerUp(totals.montasjeHours),
     tti: formatNoIntegerUp(totals.engineeringHours),
     aop: formatNoInteger(totals.opphengCount),
@@ -414,7 +956,13 @@ function buildOfferPlaceholderValues(project, offerNumber, offerDate) {
     subtotal_nok: formatNoCurrency(totals.subtotal),
     frakt_nok: formatNoCurrency(totals.freight),
     freight_nok: formatNoCurrency(totals.freight),
-    total_ex_montasje_nok: formatNoCurrency(totals.totalExMontasje),
+    total_ex_montasje_nok: formatNoCurrency(offerIncludedTotal),
+    total_ex_montasje_hoved_nok: formatNoCurrency(offerMainVisibleTotal),
+    total_ex_montasje_total_nok: formatNoCurrency(offerIncludedTotal),
+    total_ex_montasje_tilvalg_nok: formatNoCurrency(offerVisibleAddonsTotal),
+    offer_main_nok: formatNoCurrency(offerMainVisibleTotal),
+    offer_total_nok: formatNoCurrency(offerIncludedTotal),
+    offer_tilvalg_nok: formatNoCurrency(offerVisibleAddonsTotal),
     montasje_nok: formatNoCurrency(totals.montasje),
     montasje_margin_nok: formatNoCurrency(totals.montasjeMargin),
     total_incl_montasje_nok: formatNoCurrency(totals.totalInclMontasje),
@@ -422,31 +970,59 @@ function buildOfferPlaceholderValues(project, offerNumber, offerDate) {
     engineering_margin_nok: formatNoCurrency(totals.engineeringMargin),
     total_incl_engineering_nok: formatNoCurrency(totals.totalInclEngineering),
     oppheng_nok: formatNoCurrency(totals.oppheng),
-    selected_addon_total_nok: formatNoCurrency(totals.selectedAddonTotal),
-    total_valgte_nok: formatNoCurrency(totals.selectedAddonTotal)
+    selected_addon_total_nok: formatNoCurrency(offerIncludedTotal),
+    total_valgte_nok: formatNoCurrency(offerIncludedTotal)
   };
 
   return placeholders;
 }
 
-function buildOfferLinePlaceholderValues(project) {
+async function buildOfferLinePlaceholderValues(project) {
   const lines = Array.isArray(project?.lines) ? project.lines : [];
-  return lines.map((line, index)=>{
+  const fireBarrierPriceIndex = await getFireBarrierPriceIndex().catch(err=>{
+    console.warn(`[offer-template] Klarte ikke laste brannpriser: ${err.message}`);
+    return {};
+  });
+  const linePlaceholderSets = [];
+  const firePlaceholderSets = [];
+  const opphengPlaceholderSets = [];
+
+  lines.forEach((line, index)=>{
     const input = (line && typeof line === 'object' && line.inputs && typeof line.inputs === 'object')
       ? line.inputs
       : {};
     const lineTotals = (line && typeof line === 'object' && line.totals && typeof line.totals === 'object')
       ? line.totals
       : {};
+    const selectedAddonConfig = resolveLineSelectedAddonConfig(line, lineTotals);
+    const lineOfferAmounts = resolveLineOfferAmounts(line);
+    const showMontasje = selectedAddonConfig.includeMontasje && selectedAddonConfig.showMontasje;
+    const showEngineering = selectedAddonConfig.includeEngineering && selectedAddonConfig.showEngineering;
+    const showOppheng = selectedAddonConfig.includeOppheng && selectedAddonConfig.showOppheng;
 
     const ampNum = toFiniteNumber(input.ampere ?? input.amp);
     const amp = Number.isFinite(ampNum)
       ? String(Math.round(ampNum))
       : safeString(input.ampere ?? input.amp);
+    const lineNumber = safeString(line?.lineNumber || String(index + 1));
+    const brannQtyNum = toFiniteNumber(input.fbQty ?? input.fireBarrierQty);
+    const brannQty = Number.isFinite(brannQtyNum) ? brannQtyNum : 0;
+    const hasBrannElements = brannQty > 0;
 
-    return {
-      lnr: safeString(line?.lineNumber || String(index + 1)),
-      linjenummer: safeString(line?.lineNumber || String(index + 1)),
+    const montasjePrice = formatNoCurrencyWithKr(lineTotals.totalInclMontasje);
+    const engineeringPrice = formatNoCurrencyWithKr(lineTotals.totalInclEngineering);
+    const opphengCost = lineTotals?.oppheng?.cost ?? lineTotals.totalInclOppheng ?? lineTotals.total;
+    const opphengPrice = formatNoCurrencyWithKr(opphengCost);
+    const opphengCount = formatNoInteger(lineTotals?.oppheng?.pieceCount);
+    const opphengDetail = opphengCount ? `- ${opphengCount} stk. Oppheng` : '';
+    const montasjeHoursValue = formatNoIntegerUp(lineTotals?.montasje?.totalHours);
+    const engineeringHoursValue = formatNoIntegerUp(lineTotals?.engineering?.totalHours);
+    const montasjeHoursLabel = montasjeHoursValue ? `${montasjeHoursValue} timer totalt` : '';
+    const engineeringHoursLabel = engineeringHoursValue ? `${engineeringHoursValue} timer totalt` : '';
+
+    linePlaceholderSets.push({
+      lnr: lineNumber,
+      linjenummer: lineNumber,
       sys: safeString(input.series),
       mtr: formatNoInteger(input.meter),
       vvk: formatNoInteger(input.v90_v ?? input.v90v),
@@ -456,19 +1032,66 @@ function buildOfferLinePlaceholderValues(project) {
       ste: normalizeElementLabel(input.startEl),
       sle: normalizeElementLabel(input.sluttEl),
       avb: formatNoInteger(input.boxQty),
-      bre: formatNoInteger(input.fbQty ?? input.fireBarrierQty),
-      stv: formatNoCurrency(resolveLineSelectedAddonTotal(line)),
+      bre: hasBrannElements
+        ? `${formatNoInteger(brannQty)} stk. Branngjennomforing EI 60/90/120`
+        : '',
+      total_ex_montasje_nok: formatNoCurrency(lineOfferAmounts.mainVisibleTotal),
+      stv: formatNoCurrency(lineOfferAmounts.mainVisibleTotal),
+      stv_hoved: formatNoCurrency(lineOfferAmounts.mainVisibleTotal),
+      stv_total: formatNoCurrency(lineOfferAmounts.includedTotal),
+      stv_tilvalg: formatNoCurrency(lineOfferAmounts.visibleAddonsTotal),
+      line_main_nok: formatNoCurrency(lineOfferAmounts.mainVisibleTotal),
+      line_total_nok: formatNoCurrency(lineOfferAmounts.includedTotal),
+      line_tilvalg_nok: formatNoCurrency(lineOfferAmounts.visibleAddonsTotal),
       tmo: formatNoCurrency(lineTotals.totalInclMontasje),
       tin: formatNoCurrency(lineTotals.totalInclEngineering),
-      top: formatNoCurrency(lineTotals?.oppheng?.cost ?? lineTotals.total),
-      ttm: formatNoIntegerUp(lineTotals?.montasje?.totalHours),
-      tti: formatNoIntegerUp(lineTotals?.engineering?.totalHours),
+      mtl: showMontasje ? 'Montasje' : '',
+      mtp: showMontasje ? montasjePrice : '',
+      ttm: showMontasje ? montasjeHoursLabel : '',
+      itl: showEngineering ? 'Ingenior' : '',
+      itp: showEngineering ? engineeringPrice : '',
+      tti: showEngineering ? engineeringHoursLabel : '',
+      tol: showOppheng ? 'Opphengsmateriell' : '',
+      top: showOppheng ? opphengPrice : '',
+      tod: showOppheng ? opphengDetail : '',
       aop: formatNoInteger(lineTotals?.oppheng?.pieceCount),
-      timer_totalt_montasje: formatNoIntegerUp(lineTotals?.montasje?.totalHours),
-      timer_totalt_ingenior: formatNoIntegerUp(lineTotals?.engineering?.totalHours),
-      antall_oppheng: formatNoInteger(lineTotals?.oppheng?.pieceCount)
-    };
+      timer_totalt_montasje: showMontasje ? montasjeHoursValue : '',
+      timer_totalt_ingenior: showEngineering ? engineeringHoursValue : '',
+      antall_oppheng: formatNoInteger(lineTotals?.oppheng?.pieceCount),
+      brt: '',
+      brp: '',
+      bss: '',
+      bse: '',
+      oss: '',
+      ose: ''
+    });
+
+    if (!selectedAddonConfig.includeOppheng && (opphengPrice || opphengDetail)) {
+      opphengPlaceholderSets.push({
+        lnr: lineNumber,
+        tol: 'Opphengsmateriell',
+        top: opphengPrice,
+        tod: opphengDetail
+      });
+    }
+
+    if (!hasBrannElements) {
+      const fireUnitPrice = resolveFireBarrierUnitPrice(line, fireBarrierPriceIndex, input);
+      const fireOfferPrice = Number.isFinite(fireUnitPrice) ? round2(fireUnitPrice / 0.8) : NaN;
+      const fireAmpSuffix = amp ? ` - ${amp}A` : '';
+      firePlaceholderSets.push({
+        lnr: lineNumber,
+        brt: `Branngjennomforing EI 60/90/120${fireAmpSuffix}`,
+        brp: formatNoCurrency(fireOfferPrice)
+      });
+    }
   });
+
+  return {
+    linePlaceholderSets,
+    firePlaceholderSets,
+    opphengPlaceholderSets
+  };
 }
 
 function replacePlaceholdersInXml(xml, placeholders) {
@@ -542,46 +1165,105 @@ function replacePlaceholdersInXml(xml, placeholders) {
   return output;
 }
 
-function expandLineRepeatBlocks(xml, linePlaceholderSets) {
-  const markerReplaced = replacePlaceholdersInXml(xml, {
-    linjer_start: OFFER_LINE_BLOCK_START_TOKEN,
-    lss: OFFER_LINE_BLOCK_START_TOKEN,
-    linjer_slutt: OFFER_LINE_BLOCK_END_TOKEN,
-    lse: OFFER_LINE_BLOCK_END_TOKEN
+function expandRepeatBlock(xml, options) {
+  const {
+    startAliases,
+    endAliases,
+    startToken,
+    endToken,
+    placeholderSets
+  } = options;
+  const normalizedStartAliases = Array.isArray(startAliases) ? startAliases : [];
+  const normalizedEndAliases = Array.isArray(endAliases) ? endAliases : [];
+  if (!normalizedStartAliases.length || !normalizedEndAliases.length) return String(xml);
+
+  const markerPlaceholders = {};
+  normalizedStartAliases.forEach(alias=>{
+    markerPlaceholders[alias] = startToken;
   });
+  normalizedEndAliases.forEach(alias=>{
+    markerPlaceholders[alias] = endToken;
+  });
+  const markerReplaced = replacePlaceholdersInXml(xml, markerPlaceholders);
 
   const tokenPattern = new RegExp(
-    `${escapeRegex(OFFER_LINE_BLOCK_START_TOKEN)}([\\s\\S]*?)${escapeRegex(OFFER_LINE_BLOCK_END_TOKEN)}`,
+    `${escapeRegex(startToken)}([\\s\\S]*?)${escapeRegex(endToken)}`,
     'g'
   );
-  const rawPattern = /\{\{\s*(?:lss|linjer_start)\s*\}\}([\s\S]*?)\{\{\s*(?:lse|linjer_slutt)\s*\}\}/g;
+  const rawStart = normalizedStartAliases.map(alias=>escapeRegex(alias)).join('|');
+  const rawEnd = normalizedEndAliases.map(alias=>escapeRegex(alias)).join('|');
+  const rawPattern = new RegExp(
+    `\\{\\{\\s*(?:${rawStart})\\s*\\}\\}([\\s\\S]*?)\\{\\{\\s*(?:${rawEnd})\\s*\\}\\}`,
+    'g'
+  );
+
   const renderBlock = (blockTemplate)=>{
-    if (!Array.isArray(linePlaceholderSets) || linePlaceholderSets.length === 0) return '';
-    return linePlaceholderSets
-      .map(linePlaceholders => replacePlaceholdersInXml(blockTemplate, linePlaceholders))
+    if (!Array.isArray(placeholderSets) || placeholderSets.length === 0) return '';
+    return placeholderSets
+      .map(placeholders=>replacePlaceholdersInXml(blockTemplate, placeholders))
       .join('');
   };
 
   let expanded = markerReplaced.replace(tokenPattern, (_match, blockTemplate)=>renderBlock(blockTemplate));
   expanded = expanded.replace(rawPattern, (_match, blockTemplate)=>renderBlock(blockTemplate));
 
-  // Remove any leftover markers so they are never visible in output.
-  expanded = replacePlaceholdersInXml(expanded, {
-    linjer_start: '',
-    lss: '',
-    linjer_slutt: '',
-    lse: ''
+  const clearPlaceholders = {};
+  normalizedStartAliases.forEach(alias=>{
+    clearPlaceholders[alias] = '';
   });
+  normalizedEndAliases.forEach(alias=>{
+    clearPlaceholders[alias] = '';
+  });
+  expanded = replacePlaceholdersInXml(expanded, clearPlaceholders);
+
+  const markerRegex = new RegExp(
+    `\\{\\{\\s*(?:${rawStart}|${rawEnd})\\s*\\}\\}`,
+    'g'
+  );
   return expanded
-    .split(OFFER_LINE_BLOCK_START_TOKEN).join('')
-    .split(OFFER_LINE_BLOCK_END_TOKEN).join('')
-    .replace(/\{\{\s*(?:lss|linjer_start|lse|linjer_slutt)\s*\}\}/g, '');
+    .split(startToken).join('')
+    .split(endToken).join('')
+    .replace(markerRegex, '');
 }
 
-async function generateOfferDocxBuffer(project, offerNumber, offerDate) {
+function expandLineRepeatBlocks(xml, linePlaceholderSets) {
+  return expandRepeatBlock(xml, {
+    startAliases: ['lss', 'linjer_start'],
+    endAliases: ['lse', 'linjer_slutt'],
+    startToken: OFFER_LINE_BLOCK_START_TOKEN,
+    endToken: OFFER_LINE_BLOCK_END_TOKEN,
+    placeholderSets: linePlaceholderSets
+  });
+}
+
+function expandFireRepeatBlocks(xml, firePlaceholderSets) {
+  return expandRepeatBlock(xml, {
+    startAliases: ['bss'],
+    endAliases: ['bse'],
+    startToken: OFFER_FIRE_BLOCK_START_TOKEN,
+    endToken: OFFER_FIRE_BLOCK_END_TOKEN,
+    placeholderSets: firePlaceholderSets
+  });
+}
+
+function expandOpphengRepeatBlocks(xml, opphengPlaceholderSets) {
+  return expandRepeatBlock(xml, {
+    startAliases: ['oss'],
+    endAliases: ['ose'],
+    startToken: OFFER_OPPHENG_BLOCK_START_TOKEN,
+    endToken: OFFER_OPPHENG_BLOCK_END_TOKEN,
+    placeholderSets: opphengPlaceholderSets
+  });
+}
+
+async function generateOfferDocxBuffer(project, offerNumber, offerDate, revision = 0) {
   await fs.access(OFFER_TEMPLATE_FILE);
-  const placeholders = buildOfferPlaceholderValues(project, offerNumber, offerDate);
-  const linePlaceholderSets = buildOfferLinePlaceholderValues(project);
+  const placeholders = buildOfferPlaceholderValues(project, offerNumber, offerDate, revision);
+  const {
+    linePlaceholderSets,
+    firePlaceholderSets,
+    opphengPlaceholderSets
+  } = await buildOfferLinePlaceholderValues(project);
   const zip = new AdmZip(OFFER_TEMPLATE_FILE);
   const entries = zip.getEntries().filter(entry=>
     !entry.isDirectory &&
@@ -592,7 +1274,9 @@ async function generateOfferDocxBuffer(project, offerNumber, offerDate) {
   entries.forEach(entry=>{
     const xml = entry.getData().toString('utf8');
     const withExpandedLineBlocks = expandLineRepeatBlocks(xml, linePlaceholderSets);
-    const replaced = replacePlaceholdersInXml(withExpandedLineBlocks, placeholders);
+    const withExpandedFireBlocks = expandFireRepeatBlocks(withExpandedLineBlocks, firePlaceholderSets);
+    const withExpandedOpphengBlocks = expandOpphengRepeatBlocks(withExpandedFireBlocks, opphengPlaceholderSets);
+    const replaced = replacePlaceholdersInXml(withExpandedOpphengBlocks, placeholders);
     if (replaced !== xml) {
       zip.updateFile(entry.entryName, Buffer.from(replaced, 'utf8'));
     }
@@ -821,6 +1505,32 @@ function normalizeMarketPayload(rawPayload) {
   };
 }
 
+function toDateKeyInTimezone(dateValue, timeZone = MARKET_TIMEZONE) {
+  const date = dateValue instanceof Date ? dateValue : new Date(dateValue);
+  if (Number.isNaN(date.getTime())) return '';
+  try {
+    return new Intl.DateTimeFormat('en-CA', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      timeZone
+    }).format(date);
+  } catch (_err) {
+    return date.toISOString().slice(0, 10);
+  }
+}
+
+function isMarketDataStaleForToday(now = new Date()) {
+  const lastSuccessIso = normalizeIsoTimestamp(
+    marketScheduleState.lastSuccessAt || marketCache.payload?.updatedAt || ''
+  );
+  if (!lastSuccessIso) return true;
+  const todayKey = toDateKeyInTimezone(now, MARKET_TIMEZONE);
+  const lastKey = toDateKeyInTimezone(lastSuccessIso, MARKET_TIMEZONE);
+  if (!todayKey || !lastKey) return true;
+  return todayKey !== lastKey;
+}
+
 function buildScheduleMeta() {
   return {
     type: 'daily',
@@ -920,18 +1630,28 @@ async function refreshMarketDataNow(reason = 'manual') {
 }
 
 async function runScheduledMarketRefresh(reason) {
-  marketScheduleState.lastAttemptAt = new Date().toISOString();
-  try {
-    await refreshMarketDataNow(reason);
-    console.log(`[market-data] Oppdatert automatisk (${reason})`);
-    return true;
-  } catch (err) {
-    const details = err?.message || String(err);
-    marketScheduleState.lastError = `${new Date().toISOString()} ${details}`;
-    marketScheduleState.status = 'error';
-    console.error(`[market-data] Automatisk oppdatering feilet (${reason})`, err);
-    return false;
+  if (marketRefreshInFlight) {
+    return marketRefreshInFlight;
   }
+
+  marketScheduleState.lastAttemptAt = new Date().toISOString();
+  marketRefreshInFlight = (async ()=>{
+    try {
+      await refreshMarketDataNow(reason);
+      console.log(`[market-data] Oppdatert automatisk (${reason})`);
+      return true;
+    } catch (err) {
+      const details = err?.message || String(err);
+      marketScheduleState.lastError = `${new Date().toISOString()} ${details}`;
+      marketScheduleState.status = 'error';
+      console.error(`[market-data] Automatisk oppdatering feilet (${reason})`, err);
+      return false;
+    } finally {
+      marketRefreshInFlight = null;
+    }
+  })();
+
+  return marketRefreshInFlight;
 }
 
 function scheduleMarketRefreshAt(targetDate, reason) {
@@ -968,6 +1688,16 @@ async function handleScheduledMarketRefresh(reason) {
 
   marketScheduleState.retryCount += 1;
   scheduleRetryMarketRefresh();
+}
+
+async function refreshMarketDataIfStale(reason = 'on-demand') {
+  if (!isMarketDataStaleForToday(new Date())) {
+    return false;
+  }
+
+  console.log('[market-data] Data er eldre enn dagens dato, trigget automatisk oppdatering');
+  await handleScheduledMarketRefresh(reason);
+  return true;
 }
 
 async function ensureMarketDataLoaded() {
@@ -1069,10 +1799,119 @@ async function sendMail({ subject, html }) {
 app.get('/api/market-data', async (req, res) => {
   try {
     await ensureMarketDataLoaded();
+    await refreshMarketDataIfStale('on-demand-stale');
     res.json(currentMarketPayloadForResponse());
   } catch (err) {
     console.error('Markedsdata feilet', err);
     res.status(502).json({ error: 'Kunne ikke hente markedsdata' });
+  }
+});
+
+app.get('/api/user-projects', async (req, res) => {
+  try {
+    const email = normalizeEmail(req.query?.email);
+    if (!isValidEmail(email)) {
+      return res.status(400).json({ error: 'Ugyldig e-post' });
+    }
+    const archive = await readProjectArchive();
+    const userRecord = archive.users[email] || {
+      email,
+      updatedAt: null,
+      projects: []
+    };
+    return res.json({
+      email,
+      updatedAt: userRecord.updatedAt,
+      projects: userRecord.projects
+    });
+  } catch (err) {
+    console.error('Henting av brukerprosjekter feilet', err);
+    return res.status(500).json({ error: 'Kunne ikke hente prosjekter' });
+  }
+});
+
+app.post('/api/user-projects/sync', async (req, res) => {
+  try {
+    const email = normalizeEmail(req.body?.email);
+    if (!isValidEmail(email)) {
+      return res.status(400).json({ error: 'Ugyldig e-post' });
+    }
+    if (!Array.isArray(req.body?.projects)) {
+      return res.status(400).json({ error: 'Mangler prosjekter' });
+    }
+    if (req.body.projects.length > 2000) {
+      return res.status(413).json({ error: 'For mange prosjekter i én synk' });
+    }
+
+    const normalizedProjects = req.body.projects
+      .map(normalizeProjectRecord)
+      .filter(Boolean);
+    const updatedAt = new Date().toISOString();
+
+    const nextUserRecord = await withProjectArchiveLock(async () => {
+      const archive = await readProjectArchive();
+      archive.users[email] = {
+        email,
+        updatedAt,
+        projects: normalizedProjects
+      };
+      await writeProjectArchive(archive);
+      return archive.users[email];
+    });
+
+    return res.json({
+      email: nextUserRecord.email,
+      updatedAt: nextUserRecord.updatedAt,
+      projects: nextUserRecord.projects
+    });
+  } catch (err) {
+    console.error('Synk av brukerprosjekter feilet', err);
+    return res.status(500).json({ error: 'Kunne ikke synkronisere prosjekter' });
+  }
+});
+
+app.get('/api/admin/project-overview', requireAdminAuth, async (req, res) => {
+  try {
+    const archive = await readProjectArchive();
+    const users = Object.values(archive.users).map(user => {
+      const projects = Array.isArray(user.projects) ? user.projects : [];
+      const projectsWithCounts = projects.map(project => ({
+        ...project,
+        lineCount: Array.isArray(project.lines) ? project.lines.length : 0
+      }));
+      const lineCount = projectsWithCounts.reduce((sum, project) => {
+        return sum + Number(project.lineCount || 0);
+      }, 0);
+      return {
+        email: user.email,
+        updatedAt: user.updatedAt,
+        projectCount: projectsWithCounts.length,
+        lineCount,
+        projects: projectsWithCounts
+      };
+    });
+
+    users.sort((a, b) => {
+      const aTime = new Date(a.updatedAt || 0).getTime();
+      const bTime = new Date(b.updatedAt || 0).getTime();
+      return bTime - aTime;
+    });
+
+    const totals = users.reduce((acc, user) => {
+      acc.userCount += 1;
+      acc.projectCount += Number(user.projectCount || 0);
+      acc.lineCount += Number(user.lineCount || 0);
+      return acc;
+    }, { userCount: 0, projectCount: 0, lineCount: 0 });
+
+    return res.json({
+      generatedAt: new Date().toISOString(),
+      totals,
+      users
+    });
+  } catch (err) {
+    console.error('Henting av admin-oversikt feilet', err);
+    return res.status(500).json({ error: 'Kunne ikke hente admin-oversikt' });
   }
 });
 
@@ -1140,14 +1979,15 @@ app.post('/api/generate-offer', async (req, res) => {
     }
 
     const now = new Date();
-    const offerNumber = await allocateOfferNumber(now);
-    const buffer = await generateOfferDocxBuffer(project, offerNumber, now);
+    const { offerNumber, revision } = await allocateOfferIdentity(project, now);
+    const buffer = await generateOfferDocxBuffer(project, offerNumber, now, revision);
     const projectName = sanitizeFileName(project.name || 'prosjekt');
-    const fileName = `Tilbud-${projectName}-${offerNumber}.docx`;
+    const fileName = `Tilbud-${projectName}-${offerNumber}-rev${revision}.docx`;
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
     res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
     res.setHeader('X-Offer-Number', offerNumber);
+    res.setHeader('X-Offer-Revision', String(revision));
     res.status(200).send(buffer);
   } catch (err) {
     console.error('Tilbudsgenerering feilet', err);

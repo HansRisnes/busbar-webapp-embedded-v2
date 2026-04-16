@@ -68,9 +68,10 @@ input[type="number"]::-webkit-inner-spin-button{
     <div class="header-top">
       <h1>Busbar Priskalkulator</h1>
       <div id="authControls" class="auth-controls">
-        <button id="loginBtn" class="btn">Logg på</button>
         <span id="authUser" class="auth-user muted-text" hidden></span>
+        <button id="loginBtn" class="btn">Logg på</button>
         <button id="logoutBtn" class="btn alt" hidden>Logg av</button>
+        <a href="admin.html" id="adminPageBtn" class="btn alt nav-page-btn" hidden>Admin</a>
       </div>
     </div>
     <div class="market-bar" id="marketTicker" aria-live="polite">
@@ -352,12 +353,19 @@ input[type="number"]::-webkit-inner-spin-button{
         </div>
       </div>
       <div class="totals-line totals-selectors">
-        <div class="addon-selectors" role="group" aria-label="Velg tillegg i totalsum">
+        <div class="addon-selectors" role="group" aria-label="Inkluder i tilbud">
+          <span class="addon-selectors-title"><strong>Inkluder i tilbud:</strong></span>
           <label><input id="includeMontasje" type="checkbox" checked> Montasje</label>
           <label><input id="includeEngineering" type="checkbox" checked> Ingeniør</label>
-          <label><input id="includeOppheng" type="checkbox" checked> Opphengsmateriell + DG</label>
+          <label><input id="includeOppheng" type="checkbox" checked> Opphengsmateriell</label>
         </div>
-        <div class="total-item addon-total aligned-total-right"><strong>Totalsum valgte:</strong> <span id="selectedAddonTotal">0,00</span> NOK eks. mva</div>
+        <div class="addon-selectors" role="group" aria-label="Synliggjør pris">
+          <span class="addon-selectors-title"><strong>Synliggjør pris:</strong></span>
+          <label><input id="showMontasje" type="checkbox"> Montasje</label>
+          <label><input id="showEngineering" type="checkbox"> Ingeniør</label>
+          <label><input id="showOppheng" type="checkbox"> Opphengsmateriell</label>
+        </div>
+        <div class="total-item addon-total aligned-total-right"><strong>Totalsum inkludert i tilbud:</strong> <span id="selectedAddonTotal">0,00</span> NOK eks. mva</div>
       </div>
     </div>
     <h3>BOM</h3>
@@ -407,7 +415,7 @@ input[type="number"]::-webkit-inner-spin-button{
     <div class="modal">
       <h3 id="loginTitle">Logg på</h3>
       <form class="login-form" onsubmit="return false;" autocomplete="off">
-        <label for="loginUsername">Brukernavn (valgfritt)
+        <label for="loginUsername">Brukernavn (e-post)
           <input id="loginUsername" type="text" inputmode="text" autocomplete="username">
         </label>
         <label for="loginPassword">Passord
