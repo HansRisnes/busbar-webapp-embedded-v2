@@ -1,5 +1,17 @@
 # BUSBAR-WEBAPP-EMBEDDED-V2
 
+## Aktiv filstruktur (viktig)
+
+Frontend som skal vedlikeholdes ligger i repo-roten:
+- `index.html`
+- `calculator.html`
+- `admin.html`
+- `app.js`
+- `admin.js`
+- `styles.css`
+
+Mappen `busbar-webapp-embedded-v2/` er legacy og skal ikke brukes som aktiv kilde.
+
 ## Legge endringer inn i GitHub-repoet
 
 1. **Sjekk status**

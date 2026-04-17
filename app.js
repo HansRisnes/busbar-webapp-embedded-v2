@@ -127,6 +127,11 @@ function normalizeApiBaseUrl(value){
   }
 }
 
+function isLocalDevelopmentHost(){
+  const host = String(window.location.hostname || '').toLowerCase();
+  return host === 'localhost' || host === '127.0.0.1' || host === '[::1]';
+}
+
 function resolveApiBaseUrl(){
   let fromStorage = '';
   try{
@@ -149,8 +154,7 @@ function resolveApiBaseUrl(){
   }
   if (normalized) return normalized;
 
-  const host = String(window.location.hostname || '').toLowerCase();
-  if (host.endsWith('github.io')){
+  if (isLocalDevelopmentHost()){
     return 'http://localhost:5500';
   }
 

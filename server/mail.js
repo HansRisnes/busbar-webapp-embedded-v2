@@ -6,32 +6,28 @@ const nodemailer = require('nodemailer');
 const AdmZip = require('adm-zip');
 const { ClientSecretCredential } = require('@azure/identity');
 
-const DEFAULT_MARKET_FILE = path.resolve(__dirname, '..', 'data', 'market-data.json');
+const STATIC_DATA_DIR = path.resolve(__dirname, '..', 'data');
+const RUNTIME_DATA_DIR = (() => {
+  const raw = String(process.env.DATA_DIR || '').trim();
+  if (!raw) return STATIC_DATA_DIR;
+  return path.resolve(raw);
+})();
+const PRICE_DATA_DIR = (() => {
+  const raw = String(process.env.PRICE_DATA_DIR || '').trim();
+  if (!raw) return STATIC_DATA_DIR;
+  return path.resolve(raw);
+})();
+const DEFAULT_MARKET_FILE = path.resolve(RUNTIME_DATA_DIR, 'market-data.json');
 const OFFER_TEMPLATE_FILE = path.resolve(
   __dirname,
   'templates',
   'tilbud',
   'tilbud-stromskinner-template.docx'
 );
-const OFFER_COUNTER_FILE = path.resolve(__dirname, '..', 'data', 'offer-sequence.json');
-const OFFER_PROJECT_NUMBERS_FILE = path.resolve(
-  __dirname,
-  '..',
-  'data',
-  'offer-project-numbers.json'
-);
-const OFFER_REVISIONS_FILE = path.resolve(
-  __dirname,
-  '..',
-  'data',
-  'offer-revisions.json'
-);
-const PROJECT_ARCHIVE_FILE = path.resolve(
-  __dirname,
-  '..',
-  'data',
-  'project-archive.json'
-);
+const OFFER_COUNTER_FILE = path.resolve(RUNTIME_DATA_DIR, 'offer-sequence.json');
+const OFFER_PROJECT_NUMBERS_FILE = path.resolve(RUNTIME_DATA_DIR, 'offer-project-numbers.json');
+const OFFER_REVISIONS_FILE = path.resolve(RUNTIME_DATA_DIR, 'offer-revisions.json');
+const PROJECT_ARCHIVE_FILE = path.resolve(RUNTIME_DATA_DIR, 'project-archive.json');
 const OFFER_LINE_BLOCK_START_TOKEN = '__BUSBAR_LINE_BLOCK_START__';
 const OFFER_LINE_BLOCK_END_TOKEN = '__BUSBAR_LINE_BLOCK_END__';
 const OFFER_FIRE_BLOCK_START_TOKEN = '__BUSBAR_FIRE_BLOCK_START__';
@@ -39,9 +35,9 @@ const OFFER_FIRE_BLOCK_END_TOKEN = '__BUSBAR_FIRE_BLOCK_END__';
 const OFFER_OPPHENG_BLOCK_START_TOKEN = '__BUSBAR_OPPHENG_BLOCK_START__';
 const OFFER_OPPHENG_BLOCK_END_TOKEN = '__BUSBAR_OPPHENG_BLOCK_END__';
 const OFFER_PRICE_SOURCE_FILES = [
-  path.resolve(__dirname, '..', 'data', 'busbar-webapp-embedded-v2.csv'),
-  path.resolve(__dirname, '..', 'data', 'busbar-webapp-embedded-v2.1.csv'),
-  path.resolve(__dirname, '..', 'data', 'busbar-webapp-embedded-v2.2.csv')
+  path.resolve(PRICE_DATA_DIR, 'busbar-webapp-embedded-v2.csv'),
+  path.resolve(PRICE_DATA_DIR, 'busbar-webapp-embedded-v2.1.csv'),
+  path.resolve(PRICE_DATA_DIR, 'busbar-webapp-embedded-v2.2.csv')
 ];
 const MARKET_HTTP_TIMEOUT_MS = Number(process.env.MARKET_HTTP_TIMEOUT_MS || 7000);
 const MARKET_LME_URL =
@@ -103,8 +99,55 @@ fs.access(MARKET_DATA_FILE).catch(err=>{
 const app = express();
 app.use(express.json({ limit: '10mb' }));
 
+const DEFAULT_CORS_ALLOWED_ORIGINS = [
+  'https://hansrisnes.github.io'
+];
+const DEFAULT_LOCAL_ORIGINS = [
+  'http://localhost:3000',
+  'http://127.0.0.1:3000',
+  'http://localhost:4173',
+  'http://127.0.0.1:4173',
+  'http://localhost:5173',
+  'http://127.0.0.1:5173',
+  'http://localhost:5500',
+  'http://127.0.0.1:5500'
+];
+
+function parseCsvEnv(value) {
+  return String(value || '')
+    .split(',')
+    .map(entry => entry.trim())
+    .filter(Boolean);
+}
+
+const corsAllowLocalhost = String(process.env.CORS_ALLOW_LOCALHOST || 'true').trim().toLowerCase() !== 'false';
+const configuredCorsOrigins = parseCsvEnv(process.env.CORS_ALLOWED_ORIGINS);
+const corsAllowedOrigins = new Set([
+  ...(configuredCorsOrigins.length ? configuredCorsOrigins : DEFAULT_CORS_ALLOWED_ORIGINS),
+  ...(corsAllowLocalhost ? DEFAULT_LOCAL_ORIGINS : [])
+]);
+const corsAllowAllOrigins = corsAllowedOrigins.has('*');
+
+function isCorsOriginAllowed(origin) {
+  if (!origin) return true;
+  if (corsAllowAllOrigins) return true;
+  return corsAllowedOrigins.has(origin);
+}
+
 app.use((req, res, next) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  const origin = String(req.headers.origin || '').trim();
+  const allowOrigin = !origin || isCorsOriginAllowed(origin);
+  if (!allowOrigin) {
+    if (req.method === 'OPTIONS') {
+      return res.status(403).json({ error: 'Origin er ikke tillatt av CORS' });
+    }
+    return res.status(403).json({ error: 'Origin er ikke tillatt av CORS' });
+  }
+
+  if (origin) {
+    res.setHeader('Access-Control-Allow-Origin', corsAllowAllOrigins ? '*' : origin);
+    res.setHeader('Vary', 'Origin');
+  }
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   if (req.method === 'OPTIONS') {
@@ -1796,6 +1839,16 @@ async function sendMail({ subject, html }) {
   });
 }
 
+app.get('/api/health', async (_req, res) => {
+  const now = new Date().toISOString();
+  return res.json({
+    ok: true,
+    service: 'busbar-api',
+    time: now,
+    runtimeDataDir: RUNTIME_DATA_DIR
+  });
+});
+
 app.get('/api/market-data', async (req, res) => {
   try {
     await ensureMarketDataLoaded();
@@ -2002,8 +2055,15 @@ const staticDir = path.resolve(__dirname, '..');
 app.use(express.static(staticDir));
 
 const port = Number(process.env.PORT) || 5500;
-app.listen(port, () => {
-  console.log(`Mail service lytter pa port ${port}`);
+const host = String(process.env.HOST || '0.0.0.0').trim() || '0.0.0.0';
+app.listen(port, host, () => {
+  console.log(`Mail service lytter pa ${host}:${port}`);
+  console.log(`[runtime-data] ${RUNTIME_DATA_DIR}`);
+  if (!corsAllowAllOrigins) {
+    console.log(`[cors] Tillatte origins: ${Array.from(corsAllowedOrigins).join(', ')}`);
+  } else {
+    console.log('[cors] Tillater alle origins (*)');
+  }
   initializeMarketDataAutomation().catch(err=>{
     console.error('[market-data] Init feilet', err);
     scheduleRetryMarketRefresh();

@@ -2,8 +2,203 @@
   "users": {
     "hans.jakob.risnes@busbar.no": {
       "email": "hans.jakob.risnes@busbar.no",
-      "updatedAt": "2026-04-16T11:47:52.220Z",
+      "updatedAt": "2026-04-16T13:31:34.907Z",
       "projects": [
+        {
+          "id": "486cbdb4-4316-4302-81e1-d80ce9eb7903",
+          "name": "Huset",
+          "customer": "Elektrikkeren",
+          "contactPerson": "Per",
+          "createdAt": "2026-04-16T13:30:35.286Z",
+          "updatedAt": "2026-04-16T13:31:34.098Z",
+          "selectedAddonConfig": {
+            "includeMontasje": true,
+            "includeEngineering": true,
+            "includeOppheng": true,
+            "showMontasje": true,
+            "showEngineering": true,
+            "showOppheng": true
+          },
+          "lines": [
+            {
+              "id": "c07f3bd6-7fab-4bb0-8c7a-8aa12904bc80",
+              "lineNumber": "1",
+              "createdAt": "2026-04-16T13:31:05.337Z",
+              "updatedAt": "2026-04-16T13:31:05.337Z",
+              "inputs": {
+                "series": "XCP-S",
+                "dist": false,
+                "meter": 23,
+                "v90_h": 2,
+                "v90_v": 2,
+                "ampere": 1600,
+                "ledere": "3F+N+PE",
+                "startEl": "board_feed",
+                "sluttEl": "crt_board_feed",
+                "fbQty": 0,
+                "boxQty": 0,
+                "boxSel": "",
+                "expansionYes": false,
+                "freightRate": 0.1,
+                "marginRate": 0.2,
+                "montasjeMarginRate": 0.2,
+                "engineeringMarginRate": 0.2,
+                "opphengMarginRate": 0.2,
+                "montasjeSettings": {
+                  "hourlyRate": 657.8,
+                  "opphengRate": 400
+                },
+                "engineeringSettings": {
+                  "hourlyRate": 929.9
+                }
+              },
+              "totals": {
+                "lineNumber": "1",
+                "timestamp": "2026-04-16T13:31:03.657Z",
+                "material": 79413.88,
+                "marginRate": 0.2,
+                "marginFactor": 0.8,
+                "margin": 19853.47,
+                "montasjeMarginRate": 0.2,
+                "montasjeMargin": 11840.4,
+                "engineeringMarginRate": 0.2,
+                "engineeringMargin": 1631.97,
+                "opphengMarginRate": 0.2,
+                "opphengMargin": 1200,
+                "subtotal": 99267.35,
+                "freightRate": 0.1,
+                "freight": 7941.39,
+                "totalExMontasje": 107208.74,
+                "totalInclMontasje": 59202,
+                "totalInclEngineering": 8159.87,
+                "totalInclOppheng": 6000,
+                "montasje": {
+                  "cost": 47361.6,
+                  "meters": 23,
+                  "angles": 4,
+                  "hourlyRate": 657.8,
+                  "totalHours": 72,
+                  "profile": {
+                    "maxAmp": 1600,
+                    "hoursPerMeter": 3,
+                    "hoursPerAngle": 0.75,
+                    "label": "800–1600A"
+                  },
+                  "hoursPerMeter": 3,
+                  "hoursPerAngle": 0.75,
+                  "amp": 1600
+                },
+                "engineering": {
+                  "cost": 6527.9,
+                  "meters": 23,
+                  "angles": 4,
+                  "hourlyRate": 929.9,
+                  "totalHours": 7.02,
+                  "hoursPerMeter": 0.3,
+                  "hoursPerTenAngles": 0.3
+                },
+                "oppheng": {
+                  "cost": 4800,
+                  "meters": 23,
+                  "pieceCount": 12,
+                  "ratePerPiece": 400,
+                  "defaultRate": 400,
+                  "profile": {
+                    "maxAmp": 1600,
+                    "rate": 400,
+                    "label": "160–1600A"
+                  },
+                  "isDefaultRate": true,
+                  "amp": 1600
+                },
+                "montasjeDetail": "Montasjegrunnlag (1 600A (800–1600A)): 23 m × 3,00 t/m + 4 × 0,75 t = 72,00 t × 657,80 kr/t",
+                "engineeringDetail": "Ingeniørgrunnlag: 23 m × 0,30 t/m + (4 / 10) × 0,30 t = 7,02 t × 929,90 kr/t",
+                "opphengDetail": "Opphengsmateriell (160–1600A): 23 m gir 12 stk × 400,00 kr/stk = 4 800,00 kr",
+                "total": 6000,
+                "selectedAddonTotal": 180570.61,
+                "selectedAddonConfig": {
+                  "includeMontasje": true,
+                  "includeEngineering": true,
+                  "includeOppheng": true,
+                  "showMontasje": true,
+                  "showEngineering": true,
+                  "showOppheng": true
+                }
+              },
+              "bom": [
+                {
+                  "code": "64281006P",
+                  "type": "board_feed",
+                  "series": "XCP-S",
+                  "ampere": 1600,
+                  "ledere": "3F+N+PE",
+                  "antall": 1,
+                  "enhet": 3726.17,
+                  "sum": 3726.17
+                },
+                {
+                  "code": "6428T016P",
+                  "type": "crt_board_feed",
+                  "series": "XCP-S",
+                  "ampere": 1600,
+                  "ledere": "3F+N+PE",
+                  "antall": 1,
+                  "enhet": 6267.53,
+                  "sum": 6267.53
+                },
+                {
+                  "code": "64280106P",
+                  "type": "straight_3m",
+                  "series": "XCP-S",
+                  "ampere": 1600,
+                  "ledere": "3F+N+PE",
+                  "antall": 7,
+                  "enhet": 5930.21,
+                  "sum": 41511.47
+                },
+                {
+                  "code": "64280126P",
+                  "type": "straight_1501_2000",
+                  "series": "XCP-S",
+                  "ampere": 1600,
+                  "ledere": "3F+N+PE",
+                  "antall": 1,
+                  "enhet": 4748.95,
+                  "sum": 4748.95
+                },
+                {
+                  "code": "64280316P",
+                  "type": "elbow_horizontal_90",
+                  "series": "XCP-S",
+                  "ampere": 1600,
+                  "ledere": "3F+N+PE",
+                  "antall": 2,
+                  "enhet": 4416.76,
+                  "sum": 8833.52
+                },
+                {
+                  "code": "64280426P",
+                  "type": "elbow_vertical_90",
+                  "series": "XCP-S",
+                  "ampere": 1600,
+                  "ledere": "3F+N+PE",
+                  "antall": 2,
+                  "enhet": 7163.12,
+                  "sum": 14326.24
+                }
+              ],
+              "selectedAddonConfig": {
+                "includeMontasje": true,
+                "includeEngineering": true,
+                "includeOppheng": true,
+                "showMontasje": true,
+                "showEngineering": true,
+                "showOppheng": true
+              },
+              "selectedAddonTotal": 180570.61
+            }
+          ]
+        },
         {
           "id": "19ff2b1b-15ca-415c-9940-d24f52dd77a0",
           "name": "Eksempel",

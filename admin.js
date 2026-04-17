@@ -25,6 +25,11 @@ function normalizeApiBaseUrl(value){
   }
 }
 
+function isLocalDevelopmentHost(){
+  const host = String(window.location.hostname || '').toLowerCase();
+  return host === 'localhost' || host === '127.0.0.1' || host === '[::1]';
+}
+
 function resolveApiBaseUrl(){
   let fromStorage = '';
   try{
@@ -47,8 +52,7 @@ function resolveApiBaseUrl(){
   }
   if (normalized) return normalized;
 
-  const host = String(window.location.hostname || '').toLowerCase();
-  if (host.endsWith('github.io')){
+  if (isLocalDevelopmentHost()){
     return 'http://localhost:5500';
   }
   return '';
@@ -59,6 +63,17 @@ const API_BASE_URL = resolveApiBaseUrl();
 function buildApiUrl(path){
   const suffix = String(path || '').startsWith('/') ? String(path) : `/${String(path || '')}`;
   return API_BASE_URL ? `${API_BASE_URL}${suffix}` : suffix;
+}
+
+function isGithubPagesWithoutApiBase(){
+  const host = String(window.location.hostname || '').toLowerCase();
+  return host.endsWith('github.io') && !API_BASE_URL;
+}
+
+function appendApiBaseHint(errorText, status){
+  if (!isGithubPagesWithoutApiBase()) return errorText;
+  if (status !== 404 && status !== 405) return errorText;
+  return `${errorText}. GitHub Pages krever at busbar-api-base peker til Render-backenden.`;
 }
 
 function readStoredAdminAuth(){
@@ -354,7 +369,7 @@ async function fetchAdminOverview(authHeader){
         message += `: ${data.error.trim()}`;
       }
     }catch(_err){}
-    throw new Error(message);
+    throw new Error(appendApiBaseHint(message, res.status));
   }
   return res.json();
 }
