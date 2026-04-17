@@ -9,6 +9,15 @@ const fmtPercentNO = new Intl.NumberFormat('no-NO', {
   maximumFractionDigits: 2
 });
 
+const ADMIN_PROJECT_SORT_STORAGE_KEY = 'busbar.admin.project.sort.v1';
+const ADMIN_LINE_SORT_STORAGE_KEY = 'busbar.admin.line.sort.v1';
+const ADMIN_SORT_OPTIONS = Object.freeze(['date_newest', 'date_oldest', 'alpha_asc', 'alpha_desc']);
+const adminViewState = {
+  users: [],
+  projectSort: 'date_newest',
+  lineSort: 'date_newest'
+};
+
 const $ = id => document.getElementById(id);
 
 function normalizeApiBaseUrl(value){
@@ -74,6 +83,119 @@ function appendApiBaseHint(errorText, status){
   if (!isGithubPagesWithoutApiBase()) return errorText;
   if (status !== 404 && status !== 405) return errorText;
   return `${errorText}. GitHub Pages krever at busbar-api-base peker til Render-backenden.`;
+}
+
+function loadSortMode(storageKey, validModes, fallback){
+  if (typeof localStorage === 'undefined') return fallback;
+  try{
+    const raw = localStorage.getItem(storageKey);
+    return validModes.includes(raw) ? raw : fallback;
+  }catch(_err){
+    return fallback;
+  }
+}
+
+function saveSortMode(storageKey, mode){
+  if (typeof localStorage === 'undefined') return;
+  try{
+    localStorage.setItem(storageKey, mode);
+  }catch(_err){}
+}
+
+function getSortableCreatedTimestamp(item){
+  const created = new Date(item?.createdAt || item?.updatedAt || 0).getTime();
+  return Number.isFinite(created) ? created : 0;
+}
+
+function compareNoText(left, right){
+  return String(left || '').localeCompare(String(right || ''), 'no', {
+    sensitivity: 'base',
+    numeric: true
+  });
+}
+
+function compareAdminProjectRowsForSort(a, b, mode = adminViewState.projectSort){
+  if (mode === 'alpha_asc'){
+    return compareNoText(a?.name, b?.name);
+  }
+  if (mode === 'alpha_desc'){
+    return compareNoText(b?.name, a?.name);
+  }
+  const aTime = getSortableCreatedTimestamp(a);
+  const bTime = getSortableCreatedTimestamp(b);
+  if (mode === 'date_oldest'){
+    return aTime - bTime;
+  }
+  return bTime - aTime;
+}
+
+function compareAdminLineRowsForSort(a, b, mode = adminViewState.lineSort){
+  if (mode === 'alpha_asc'){
+    return compareNoText(a?.lineNumber, b?.lineNumber);
+  }
+  if (mode === 'alpha_desc'){
+    return compareNoText(b?.lineNumber, a?.lineNumber);
+  }
+  const aTime = getSortableCreatedTimestamp(a);
+  const bTime = getSortableCreatedTimestamp(b);
+  if (mode === 'date_oldest'){
+    return aTime - bTime;
+  }
+  return bTime - aTime;
+}
+
+function updateSortControlValues(){
+  const projectSelect = $('adminProjectSortSelect');
+  const lineSelect = $('adminLineSortSelect');
+  if (projectSelect && ADMIN_SORT_OPTIONS.includes(adminViewState.projectSort)){
+    projectSelect.value = adminViewState.projectSort;
+  }
+  if (lineSelect && ADMIN_SORT_OPTIONS.includes(adminViewState.lineSort)){
+    lineSelect.value = adminViewState.lineSort;
+  }
+}
+
+function applyAdminSortModesFromStorage(){
+  adminViewState.projectSort = loadSortMode(
+    ADMIN_PROJECT_SORT_STORAGE_KEY,
+    ADMIN_SORT_OPTIONS,
+    'date_newest'
+  );
+  adminViewState.lineSort = loadSortMode(
+    ADMIN_LINE_SORT_STORAGE_KEY,
+    ADMIN_SORT_OPTIONS,
+    'date_newest'
+  );
+  updateSortControlValues();
+}
+
+function renderTablesFromState(){
+  renderProjectsTable(adminViewState.users);
+  renderLinesTable(adminViewState.users);
+}
+
+function setAdminProjectSortMode(mode, options = {}){
+  if (!ADMIN_SORT_OPTIONS.includes(mode)) return;
+  adminViewState.projectSort = mode;
+  if (options.persist !== false){
+    saveSortMode(ADMIN_PROJECT_SORT_STORAGE_KEY, mode);
+  }
+  updateSortControlValues();
+  if (options.render !== false){
+    renderTablesFromState();
+  }
+}
+
+function setAdminLineSortMode(mode, options = {}){
+  if (!ADMIN_SORT_OPTIONS.includes(mode)) return;
+  adminViewState.lineSort = mode;
+  if (options.persist !== false){
+    saveSortMode(ADMIN_LINE_SORT_STORAGE_KEY, mode);
+  }
+  updateSortControlValues();
+  if (options.render !== false){
+    renderTablesFromState();
+  }
 }
 
 function readStoredAdminAuth(){
@@ -247,6 +369,8 @@ function renderProjectsTable(users){
         lineCount: Array.isArray(project?.lines) ? project.lines.length : 0,
         totalExFreight: formatAmount(metrics.projectTotalExFreight),
         dgPercent: formatPercent(metrics.projectDgRate),
+        createdAtRaw: project?.createdAt || null,
+        updatedAtRaw: project?.updatedAt || null,
         createdAt: formatTimestamp(project?.createdAt),
         updatedAt: formatTimestamp(project?.updatedAt)
       });
@@ -259,6 +383,16 @@ function renderProjectsTable(users){
     tbody.appendChild(tr);
     return;
   }
+
+  rows.sort((a, b)=>compareAdminProjectRowsForSort({
+    name: a.name,
+    createdAt: a.createdAtRaw,
+    updatedAt: a.updatedAtRaw
+  }, {
+    name: b.name,
+    createdAt: b.createdAtRaw,
+    updatedAt: b.updatedAtRaw
+  }, adminViewState.projectSort));
 
   rows.forEach(row => {
     const tr = document.createElement('tr');
@@ -302,6 +436,8 @@ function renderLinesTable(users){
           meter: Number.isFinite(Number(inputs?.meter)) ? Number(inputs.meter) : '-',
           totalExFreight: formatAmount(resolveLineTotalExFreight(line)),
           dgPercent: formatPercent(resolveLineDgRate(line)),
+          createdAtRaw: line?.createdAt || null,
+          updatedAtRaw: line?.updatedAt || line?.createdAt || null,
           updatedAt: formatTimestamp(line?.updatedAt || line?.createdAt)
         });
       });
@@ -314,6 +450,16 @@ function renderLinesTable(users){
     tbody.appendChild(tr);
     return;
   }
+
+  rows.sort((a, b)=>compareAdminLineRowsForSort({
+    lineNumber: a.lineNumber,
+    createdAt: a.createdAtRaw,
+    updatedAt: a.updatedAtRaw
+  }, {
+    lineNumber: b.lineNumber,
+    createdAt: b.createdAtRaw,
+    updatedAt: b.updatedAtRaw
+  }, adminViewState.lineSort));
 
   rows.forEach(row => {
     const tr = document.createElement('tr');
@@ -379,9 +525,9 @@ async function loadOverview(authHeader){
   if (refreshBtn) refreshBtn.disabled = true;
   try{
     const data = await fetchAdminOverview(authHeader);
+    adminViewState.users = Array.isArray(data?.users) ? data.users : [];
     renderSummary(data?.totals || {});
-    renderProjectsTable(data?.users || []);
-    renderLinesTable(data?.users || []);
+    renderTablesFromState();
     const generatedEl = $('adminGeneratedAt');
     if (generatedEl){
       generatedEl.textContent = `Sist oppdatert: ${formatTimestamp(data?.generatedAt)}`;
@@ -453,6 +599,18 @@ function bindUi(){
       }
     });
   }
+  const projectSortSelect = $('adminProjectSortSelect');
+  if (projectSortSelect){
+    projectSortSelect.addEventListener('change', ()=>{
+      setAdminProjectSortMode(projectSortSelect.value);
+    });
+  }
+  const lineSortSelect = $('adminLineSortSelect');
+  if (lineSortSelect){
+    lineSortSelect.addEventListener('change', ()=>{
+      setAdminLineSortMode(lineSortSelect.value);
+    });
+  }
   const logoutBtn = $('adminLogoutBtn');
   if (logoutBtn){
     logoutBtn.addEventListener('click', handleAdminLogout);
@@ -460,6 +618,7 @@ function bindUi(){
 }
 
 window.addEventListener('DOMContentLoaded', async () => {
+  applyAdminSortModesFromStorage();
   bindUi();
   const stored = readStoredAdminAuth();
   if (!stored) return;

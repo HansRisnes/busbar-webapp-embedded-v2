@@ -27,7 +27,8 @@ let lastCalcInput = null;
 const AUTH_PASSWORD = 'busbar';
 const AUTH_SESSION_KEY = 'busbar.auth.session.v1';
 let authState = { loggedIn: false, username: '' };
-const PROJECTS_STORAGE_KEY = 'busbar.projects.v1';
+const LEGACY_PROJECTS_STORAGE_KEY = 'busbar.projects.v1';
+const PROJECTS_STORAGE_KEY_PREFIX = 'busbar.projects.user.v2';
 const PROJECT_SYNC_DEBOUNCE_MS = 800;
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PROJECT_SORT_STORAGE_KEY = 'busbar.project.sort.v1';
@@ -866,6 +867,15 @@ function updateAuthUI(){
       statusEl.textContent = '';
     }
   }
+
+  const newProjectBtn = $('newProjectBtn');
+  if (newProjectBtn){
+    newProjectBtn.disabled = !authState.loggedIn;
+  }
+  const createProjectButtons = Array.from(document.querySelectorAll('button[data-action="create-project"]'));
+  createProjectButtons.forEach(btn=>{
+    btn.disabled = !authState.loggedIn;
+  });
 }
 
 function showLoginModal(){
@@ -924,6 +934,12 @@ function handleLoginSubmit(){
   authState = { loggedIn: true, username };
   persistAuthToSession();
   hideLoginModal();
+  projectState.projects = loadProjectsFromStorage();
+  projectState.expandedProjectId = null;
+  sortProjects();
+  updateProjectHistories();
+  renderProjectDashboard();
+  updateProjectMetaDisplay();
   updateAuthUI();
   const statusEl = $('status');
   if (statusEl) statusEl.textContent = '';
@@ -945,7 +961,8 @@ if (logoutBtn){
     projectSyncState.pending = false;
     persistAuthToSession();
     hideLoginModal();
-   updateAuthUI();
+    clearProjectOverviewForLoggedOutUser();
+    updateAuthUI();
     const statusEl = $('status');
     if (statusEl) statusEl.textContent = 'Logg inn for \u00E5 beregne.';
   });
@@ -1030,6 +1047,21 @@ function getCurrentUserEmail(){
   const email = normalizeUserEmail(authState.username);
   if (!hasValidUserEmail(email)) return '';
   return email;
+}
+
+function getProjectsStorageKeyForEmail(email){
+  const normalized = normalizeUserEmail(email);
+  if (!hasValidUserEmail(normalized)) return '';
+  return `${PROJECTS_STORAGE_KEY_PREFIX}:${normalized}`;
+}
+
+function clearProjectOverviewForLoggedOutUser(){
+  projectState.projects = [];
+  projectState.expandedProjectId = null;
+  updateProjectHistories();
+  clearActiveProject();
+  renderProjectDashboard();
+  updateProjectMetaDisplay();
 }
 
 function canUseProjectSyncApi(){
@@ -1169,9 +1201,12 @@ async function syncProjectsForCurrentUser(){
 }
 
 function loadProjectsFromStorage(){
+  const email = getCurrentUserEmail();
+  const storageKey = getProjectsStorageKeyForEmail(email);
+  if (!storageKey) return [];
   if (typeof localStorage === 'undefined') return [];
   try{
-    const stored = localStorage.getItem(PROJECTS_STORAGE_KEY);
+    const stored = localStorage.getItem(storageKey);
     if (!stored) return [];
     const parsed = JSON.parse(stored);
     if (!Array.isArray(parsed)) return [];
@@ -1183,9 +1218,15 @@ function loadProjectsFromStorage(){
 }
 
 function saveProjectsToStorage(options = {}){
+  const email = getCurrentUserEmail();
+  const storageKey = getProjectsStorageKeyForEmail(email);
+  if (!storageKey) return;
   if (typeof localStorage === 'undefined') return;
   try{
-    localStorage.setItem(PROJECTS_STORAGE_KEY, JSON.stringify(projectState.projects));
+    localStorage.setItem(storageKey, JSON.stringify(projectState.projects));
+    if (localStorage.getItem(LEGACY_PROJECTS_STORAGE_KEY)){
+      localStorage.removeItem(LEGACY_PROJECTS_STORAGE_KEY);
+    }
   }catch(err){
     console.warn('Kunne ikke lagre prosjekter', err);
   }
@@ -2312,6 +2353,7 @@ function renderProjectDashboard(){
     btn.className = 'btn';
     btn.dataset.action = 'create-project';
     btn.textContent = 'Opprett nytt prosjekt';
+    btn.disabled = !authState.loggedIn;
     empty.appendChild(text);
     empty.appendChild(btn);
     listEl.appendChild(empty);
@@ -2525,6 +2567,9 @@ function renderProjectDashboard(){
 
 async function initProjectDashboard(){
   projectState.projects = loadProjectsFromStorage();
+  if (!getCurrentUserEmail()){
+    projectState.projects = [];
+  }
   applyDashboardSortModesFromStorage();
   sortProjects();
   updateProjectHistories();
@@ -2745,6 +2790,8 @@ function applyInputsToCalculator(input){
       }
     }
   }
+
+
   const engineeringInput = $('engineeringHourlyRate');
   const engineeringToggle = $('engineeringRateToggle');
   if (input.engineeringSettings){
@@ -3226,7 +3273,13 @@ if (projectMarginModal){
 
 const newProjectBtn = $('newProjectBtn');
 if (newProjectBtn){
-  newProjectBtn.addEventListener('click', ()=>openProjectModal({ mode: 'create' }));
+  newProjectBtn.addEventListener('click', ()=>{
+    if (!authState.loggedIn){
+      showLoginModal();
+      return;
+    }
+    openProjectModal({ mode: 'create' });
+  });
 }
 
 const projectSortSelect = $('projectSortSelect');
@@ -3281,6 +3334,10 @@ if (projectListEl){
       return;
     }
     if (target.dataset.action === 'create-project'){
+      if (!authState.loggedIn){
+        showLoginModal();
+        return;
+      }
       openProjectModal({ mode: 'create' });
     }
   });
