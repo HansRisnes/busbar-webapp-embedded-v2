@@ -9,13 +9,12 @@ const fmtPercentNO = new Intl.NumberFormat('no-NO', {
   maximumFractionDigits: 2
 });
 
-const ADMIN_PROJECT_SORT_STORAGE_KEY = 'busbar.admin.project.sort.v1';
-const ADMIN_LINE_SORT_STORAGE_KEY = 'busbar.admin.line.sort.v1';
-const ADMIN_SORT_OPTIONS = Object.freeze(['date_newest', 'date_oldest', 'alpha_asc', 'alpha_desc']);
 const adminViewState = {
   users: [],
-  projectSort: 'date_newest',
-  lineSort: 'date_newest'
+  projectRows: [],
+  lineRows: [],
+  projectColumnSort: { key: '', type: 'text', direction: 'asc' },
+  lineColumnSort: { key: '', type: 'text', direction: 'asc' }
 };
 
 const $ = id => document.getElementById(id);
@@ -85,28 +84,6 @@ function appendApiBaseHint(errorText, status){
   return `${errorText}. GitHub Pages krever at busbar-api-base peker til Render-backenden.`;
 }
 
-function loadSortMode(storageKey, validModes, fallback){
-  if (typeof localStorage === 'undefined') return fallback;
-  try{
-    const raw = localStorage.getItem(storageKey);
-    return validModes.includes(raw) ? raw : fallback;
-  }catch(_err){
-    return fallback;
-  }
-}
-
-function saveSortMode(storageKey, mode){
-  if (typeof localStorage === 'undefined') return;
-  try{
-    localStorage.setItem(storageKey, mode);
-  }catch(_err){}
-}
-
-function getSortableCreatedTimestamp(item){
-  const created = new Date(item?.createdAt || item?.updatedAt || 0).getTime();
-  return Number.isFinite(created) ? created : 0;
-}
-
 function compareNoText(left, right){
   return String(left || '').localeCompare(String(right || ''), 'no', {
     sensitivity: 'base',
@@ -114,88 +91,98 @@ function compareNoText(left, right){
   });
 }
 
-function compareAdminProjectRowsForSort(a, b, mode = adminViewState.projectSort){
-  if (mode === 'alpha_asc'){
-    return compareNoText(a?.name, b?.name);
-  }
-  if (mode === 'alpha_desc'){
-    return compareNoText(b?.name, a?.name);
-  }
-  const aTime = getSortableCreatedTimestamp(a);
-  const bTime = getSortableCreatedTimestamp(b);
-  if (mode === 'date_oldest'){
-    return aTime - bTime;
-  }
-  return bTime - aTime;
-}
-
-function compareAdminLineRowsForSort(a, b, mode = adminViewState.lineSort){
-  if (mode === 'alpha_asc'){
-    return compareNoText(a?.lineNumber, b?.lineNumber);
-  }
-  if (mode === 'alpha_desc'){
-    return compareNoText(b?.lineNumber, a?.lineNumber);
-  }
-  const aTime = getSortableCreatedTimestamp(a);
-  const bTime = getSortableCreatedTimestamp(b);
-  if (mode === 'date_oldest'){
-    return aTime - bTime;
-  }
-  return bTime - aTime;
-}
-
-function updateSortControlValues(){
-  const projectSelect = $('adminProjectSortSelect');
-  const lineSelect = $('adminLineSortSelect');
-  if (projectSelect && ADMIN_SORT_OPTIONS.includes(adminViewState.projectSort)){
-    projectSelect.value = adminViewState.projectSort;
-  }
-  if (lineSelect && ADMIN_SORT_OPTIONS.includes(adminViewState.lineSort)){
-    lineSelect.value = adminViewState.lineSort;
-  }
-}
-
-function applyAdminSortModesFromStorage(){
-  adminViewState.projectSort = loadSortMode(
-    ADMIN_PROJECT_SORT_STORAGE_KEY,
-    ADMIN_SORT_OPTIONS,
-    'date_newest'
-  );
-  adminViewState.lineSort = loadSortMode(
-    ADMIN_LINE_SORT_STORAGE_KEY,
-    ADMIN_SORT_OPTIONS,
-    'date_newest'
-  );
-  updateSortControlValues();
-}
-
 function renderTablesFromState(){
-  renderProjectsTable(adminViewState.users);
-  renderLinesTable(adminViewState.users);
+  renderProjectsTable(getSortedProjectRows());
+  renderLinesTable(getSortedLineRows());
 }
 
-function setAdminProjectSortMode(mode, options = {}){
-  if (!ADMIN_SORT_OPTIONS.includes(mode)) return;
-  adminViewState.projectSort = mode;
-  if (options.persist !== false){
-    saveSortMode(ADMIN_PROJECT_SORT_STORAGE_KEY, mode);
+function compareValuesByType(aValue, bValue, type = 'text'){
+  if (type === 'number'){
+    const left = Number(aValue);
+    const right = Number(bValue);
+    const leftSafe = Number.isFinite(left) ? left : Number.NEGATIVE_INFINITY;
+    const rightSafe = Number.isFinite(right) ? right : Number.NEGATIVE_INFINITY;
+    return leftSafe - rightSafe;
   }
-  updateSortControlValues();
-  if (options.render !== false){
-    renderTablesFromState();
+  if (type === 'date'){
+    const left = new Date(aValue || 0).getTime();
+    const right = new Date(bValue || 0).getTime();
+    const leftSafe = Number.isFinite(left) ? left : 0;
+    const rightSafe = Number.isFinite(right) ? right : 0;
+    return leftSafe - rightSafe;
   }
+  return compareNoText(aValue, bValue);
 }
 
-function setAdminLineSortMode(mode, options = {}){
-  if (!ADMIN_SORT_OPTIONS.includes(mode)) return;
-  adminViewState.lineSort = mode;
-  if (options.persist !== false){
-    saveSortMode(ADMIN_LINE_SORT_STORAGE_KEY, mode);
+function getSortedProjectRows(){
+  const rows = Array.isArray(adminViewState.projectRows) ? [...adminViewState.projectRows] : [];
+  const colSort = adminViewState.projectColumnSort;
+  if (colSort?.key){
+    rows.sort((a, b)=>{
+      const cmp = compareValuesByType(a?.[colSort.key], b?.[colSort.key], colSort.type);
+      return colSort.direction === 'desc' ? -cmp : cmp;
+    });
+    return rows;
   }
-  updateSortControlValues();
-  if (options.render !== false){
-    renderTablesFromState();
+  return rows;
+}
+
+function getSortedLineRows(){
+  const rows = Array.isArray(adminViewState.lineRows) ? [...adminViewState.lineRows] : [];
+  const colSort = adminViewState.lineColumnSort;
+  if (colSort?.key){
+    rows.sort((a, b)=>{
+      const cmp = compareValuesByType(a?.[colSort.key], b?.[colSort.key], colSort.type);
+      return colSort.direction === 'desc' ? -cmp : cmp;
+    });
+    return rows;
   }
+  return rows;
+}
+
+function setColumnSort(table, key, type){
+  const normalizedTable = table === 'lines' ? 'lines' : 'projects';
+  const normalizedType = type || 'text';
+  const current = normalizedTable === 'lines'
+    ? adminViewState.lineColumnSort
+    : adminViewState.projectColumnSort;
+  const next = { ...current };
+  if (next.key === key){
+    next.direction = next.direction === 'asc' ? 'desc' : 'asc';
+  } else {
+    next.key = key;
+    next.type = normalizedType;
+    next.direction = normalizedType === 'date' ? 'desc' : 'asc';
+  }
+  if (normalizedTable === 'lines'){
+    adminViewState.lineColumnSort = next;
+  } else {
+    adminViewState.projectColumnSort = next;
+  }
+  updateColumnSortUi();
+  renderTablesFromState();
+}
+
+function updateColumnSortUi(){
+  const buttons = Array.from(document.querySelectorAll('.admin-col-sort-btn'));
+  buttons.forEach(button=>{
+    const table = button.dataset.table === 'lines' ? 'lines' : 'projects';
+    const key = button.dataset.key || '';
+    const state = table === 'lines' ? adminViewState.lineColumnSort : adminViewState.projectColumnSort;
+    const active = Boolean(state?.key) && state.key === key;
+    const direction = active ? state.direction : '';
+    button.classList.toggle('is-active', active);
+    button.classList.toggle('is-asc', active && direction === 'asc');
+    button.classList.toggle('is-desc', active && direction === 'desc');
+    const indicator = button.querySelector('.sort-indicator');
+    if (indicator){
+      indicator.textContent = active ? (direction === 'desc' ? '▼' : '▲') : '↕';
+    }
+    const th = button.closest('th');
+    if (th){
+      th.setAttribute('aria-sort', active ? (direction === 'desc' ? 'descending' : 'ascending') : 'none');
+    }
+  });
 }
 
 function readStoredAdminAuth(){
@@ -328,12 +315,19 @@ function aggregateProjectMetrics(project){
   };
 }
 
-function renderSummary(totals){
+function renderSummaryFromRows(projectRows, lineRows){
   const summaryEl = $('adminSummary');
   if (!summaryEl) return;
-  const userCount = Number(totals?.userCount || 0);
-  const projectCount = Number(totals?.projectCount || 0);
-  const lineCount = Number(totals?.lineCount || 0);
+  const projectEntries = Array.isArray(projectRows) ? projectRows : [];
+  const lineEntries = Array.isArray(lineRows) ? lineRows : [];
+  const users = new Set();
+  projectEntries.forEach(row=>users.add(String(row?.email || '').trim().toLowerCase()));
+  lineEntries.forEach(row=>users.add(String(row?.email || '').trim().toLowerCase()));
+  users.delete('');
+  users.delete('-');
+  const userCount = users.size;
+  const projectCount = projectEntries.length;
+  const lineCount = lineEntries.length;
   summaryEl.innerHTML = `
     <div class="admin-summary-card">
       <span class="admin-summary-label">Brukere</span>
@@ -350,25 +344,26 @@ function renderSummary(totals){
   `;
 }
 
-function renderProjectsTable(users){
-  const tbody = document.querySelector('#adminProjectsTable tbody');
-  if (!tbody) return;
-  tbody.textContent = '';
+function buildProjectRows(users){
   const rows = [];
-
   (Array.isArray(users) ? users : []).forEach(user => {
     const email = String(user?.email || '-');
     const projects = Array.isArray(user?.projects) ? user.projects : [];
     projects.forEach(project => {
       const metrics = aggregateProjectMetrics(project);
+      const lineCount = Array.isArray(project?.lines) ? project.lines.length : 0;
+      const projectTotalRaw = toFiniteNumber(metrics.projectTotalExFreight);
+      const projectDgRaw = toFiniteNumber(metrics.projectDgRate);
       rows.push({
         email,
         name: project?.name || '-',
         customer: project?.customer || '-',
         contactPerson: project?.contactPerson || '-',
-        lineCount: Array.isArray(project?.lines) ? project.lines.length : 0,
-        totalExFreight: formatAmount(metrics.projectTotalExFreight),
-        dgPercent: formatPercent(metrics.projectDgRate),
+        lineCount,
+        totalExFreightRaw: projectTotalRaw,
+        totalExFreight: formatAmount(projectTotalRaw),
+        dgPercentRaw: projectDgRaw,
+        dgPercent: formatPercent(projectDgRaw),
         createdAtRaw: project?.createdAt || null,
         updatedAtRaw: project?.updatedAt || null,
         createdAt: formatTimestamp(project?.createdAt),
@@ -376,6 +371,58 @@ function renderProjectsTable(users){
       });
     });
   });
+  return rows;
+}
+
+function buildLineRows(users){
+  const rows = [];
+  (Array.isArray(users) ? users : []).forEach(user => {
+    const email = String(user?.email || '-');
+    const projects = Array.isArray(user?.projects) ? user.projects : [];
+    projects.forEach(project => {
+      const projectName = project?.name || '-';
+      const lines = Array.isArray(project?.lines) ? project.lines : [];
+      lines.forEach(line => {
+        const inputs = (line && typeof line === 'object' && line.inputs && typeof line.inputs === 'object')
+          ? line.inputs
+          : {};
+        const ampereRaw = toFiniteNumber(inputs?.ampere);
+        const meterRaw = toFiniteNumber(inputs?.meter);
+        const totalRaw = toFiniteNumber(resolveLineTotalExFreight(line));
+        const dgRaw = toFiniteNumber(resolveLineDgRate(line));
+        rows.push({
+          email,
+          projectName,
+          lineNumber: line?.lineNumber || '-',
+          series: inputs?.series || '-',
+          ampereRaw,
+          ampere: Number.isFinite(ampereRaw) ? ampereRaw : '-',
+          meterRaw,
+          meter: Number.isFinite(meterRaw) ? meterRaw : '-',
+          totalExFreightRaw: totalRaw,
+          totalExFreight: formatAmount(totalRaw),
+          dgPercentRaw: dgRaw,
+          dgPercent: formatPercent(dgRaw),
+          createdAtRaw: line?.createdAt || null,
+          updatedAtRaw: line?.updatedAt || line?.createdAt || null,
+          updatedAt: formatTimestamp(line?.updatedAt || line?.createdAt)
+        });
+      });
+    });
+  });
+  return rows;
+}
+
+function rebuildRowsFromUsers(){
+  adminViewState.projectRows = buildProjectRows(adminViewState.users);
+  adminViewState.lineRows = buildLineRows(adminViewState.users);
+}
+
+function renderProjectsTable(rowsInput){
+  const tbody = document.querySelector('#adminProjectsTable tbody');
+  if (!tbody) return;
+  tbody.textContent = '';
+  const rows = Array.isArray(rowsInput) ? rowsInput : [];
 
   if (!rows.length){
     const tr = document.createElement('tr');
@@ -383,16 +430,6 @@ function renderProjectsTable(users){
     tbody.appendChild(tr);
     return;
   }
-
-  rows.sort((a, b)=>compareAdminProjectRowsForSort({
-    name: a.name,
-    createdAt: a.createdAtRaw,
-    updatedAt: a.updatedAtRaw
-  }, {
-    name: b.name,
-    createdAt: b.createdAtRaw,
-    updatedAt: b.updatedAtRaw
-  }, adminViewState.projectSort));
 
   rows.forEach(row => {
     const tr = document.createElement('tr');
@@ -411,38 +448,11 @@ function renderProjectsTable(users){
   });
 }
 
-function renderLinesTable(users){
+function renderLinesTable(rowsInput){
   const tbody = document.querySelector('#adminLinesTable tbody');
   if (!tbody) return;
   tbody.textContent = '';
-  const rows = [];
-
-  (Array.isArray(users) ? users : []).forEach(user => {
-    const email = String(user?.email || '-');
-    const projects = Array.isArray(user?.projects) ? user.projects : [];
-    projects.forEach(project => {
-      const projectName = project?.name || '-';
-      const lines = Array.isArray(project?.lines) ? project.lines : [];
-      lines.forEach(line => {
-        const inputs = (line && typeof line === 'object' && line.inputs && typeof line.inputs === 'object')
-          ? line.inputs
-          : {};
-        rows.push({
-          email,
-          projectName,
-          lineNumber: line?.lineNumber || '-',
-          series: inputs?.series || '-',
-          ampere: Number.isFinite(Number(inputs?.ampere)) ? Number(inputs.ampere) : '-',
-          meter: Number.isFinite(Number(inputs?.meter)) ? Number(inputs.meter) : '-',
-          totalExFreight: formatAmount(resolveLineTotalExFreight(line)),
-          dgPercent: formatPercent(resolveLineDgRate(line)),
-          createdAtRaw: line?.createdAt || null,
-          updatedAtRaw: line?.updatedAt || line?.createdAt || null,
-          updatedAt: formatTimestamp(line?.updatedAt || line?.createdAt)
-        });
-      });
-    });
-  });
+  const rows = Array.isArray(rowsInput) ? rowsInput : [];
 
   if (!rows.length){
     const tr = document.createElement('tr');
@@ -450,16 +460,6 @@ function renderLinesTable(users){
     tbody.appendChild(tr);
     return;
   }
-
-  rows.sort((a, b)=>compareAdminLineRowsForSort({
-    lineNumber: a.lineNumber,
-    createdAt: a.createdAtRaw,
-    updatedAt: a.updatedAtRaw
-  }, {
-    lineNumber: b.lineNumber,
-    createdAt: b.createdAtRaw,
-    updatedAt: b.updatedAtRaw
-  }, adminViewState.lineSort));
 
   rows.forEach(row => {
     const tr = document.createElement('tr');
@@ -526,7 +526,8 @@ async function loadOverview(authHeader){
   try{
     const data = await fetchAdminOverview(authHeader);
     adminViewState.users = Array.isArray(data?.users) ? data.users : [];
-    renderSummary(data?.totals || {});
+    rebuildRowsFromUsers();
+    renderSummaryFromRows(adminViewState.projectRows, adminViewState.lineRows);
     renderTablesFromState();
     const generatedEl = $('adminGeneratedAt');
     if (generatedEl){
@@ -599,18 +600,15 @@ function bindUi(){
       }
     });
   }
-  const projectSortSelect = $('adminProjectSortSelect');
-  if (projectSortSelect){
-    projectSortSelect.addEventListener('change', ()=>{
-      setAdminProjectSortMode(projectSortSelect.value);
-    });
-  }
-  const lineSortSelect = $('adminLineSortSelect');
-  if (lineSortSelect){
-    lineSortSelect.addEventListener('change', ()=>{
-      setAdminLineSortMode(lineSortSelect.value);
-    });
-  }
+  document.addEventListener('click', evt=>{
+    const button = evt.target?.closest?.('.admin-col-sort-btn');
+    if (!button) return;
+    const key = String(button.dataset.key || '').trim();
+    if (!key) return;
+    const table = button.dataset.table === 'lines' ? 'lines' : 'projects';
+    const type = String(button.dataset.type || 'text').trim().toLowerCase();
+    setColumnSort(table, key, type);
+  });
   const logoutBtn = $('adminLogoutBtn');
   if (logoutBtn){
     logoutBtn.addEventListener('click', handleAdminLogout);
@@ -618,7 +616,7 @@ function bindUi(){
 }
 
 window.addEventListener('DOMContentLoaded', async () => {
-  applyAdminSortModesFromStorage();
+  updateColumnSortUi();
   bindUi();
   const stored = readStoredAdminAuth();
   if (!stored) return;

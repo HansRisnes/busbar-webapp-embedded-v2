@@ -1112,3 +1112,30 @@ footer{margin-top:20px;color:var(--muted)}
   top:0;
 }
 
+.admin-col-sort-btn{
+  appearance:none;
+  border:none;
+  background:transparent;
+  color:inherit;
+  font:inherit;
+  font-weight:600;
+  cursor:pointer;
+  padding:0;
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+}
+
+.admin-col-sort-btn .sort-indicator{
+  font-size:0.8em;
+  opacity:0.8;
+}
+
+.admin-col-sort-btn.is-active{
+  color:var(--text);
+}
+
+.admin-col-sort-btn.is-active .sort-indicator{
+  opacity:1;
+}
+

@@ -50,26 +50,6 @@
         </div>
         <div class="dashboard-actions">
           <button id="adminRefreshBtn" type="button" class="btn alt">Oppdater</button>
-          <div class="dashboard-sort-row">
-            <div class="dashboard-sort-controls">
-              <label for="adminProjectSortSelect">Sorter prosjekter</label>
-              <select id="adminProjectSortSelect">
-                <option value="date_newest">Nyest først</option>
-                <option value="date_oldest">Eldst først</option>
-                <option value="alpha_asc">Alfabetisk (A-Å)</option>
-                <option value="alpha_desc">Alfabetisk (Å-A)</option>
-              </select>
-            </div>
-            <div class="dashboard-sort-controls">
-              <label for="adminLineSortSelect">Sorter linjer</label>
-              <select id="adminLineSortSelect">
-                <option value="date_newest">Nyest først</option>
-                <option value="date_oldest">Eldst først</option>
-                <option value="alpha_asc">Alfabetisk (A-Å)</option>
-                <option value="alpha_desc">Alfabetisk (Å-A)</option>
-              </select>
-            </div>
-          </div>
         </div>
       </div>
 
@@ -80,15 +60,15 @@
         <table id="adminProjectsTable" class="admin-table">
           <thead>
             <tr>
-              <th>Epost</th>
-              <th>Prosjekt</th>
-              <th>Kunde</th>
-              <th>Kontaktperson</th>
-              <th>Linjer</th>
-              <th>Total stroemskinne ink. frakt</th>
-              <th>DG %</th>
-              <th>Opprettet</th>
-              <th>Oppdatert</th>
+              <th><button type="button" class="admin-col-sort-btn" data-table="projects" data-key="email" data-type="text">Epost <span class="sort-indicator">↕</span></button></th>
+              <th><button type="button" class="admin-col-sort-btn" data-table="projects" data-key="name" data-type="text">Prosjekt <span class="sort-indicator">↕</span></button></th>
+              <th><button type="button" class="admin-col-sort-btn" data-table="projects" data-key="customer" data-type="text">Kunde <span class="sort-indicator">↕</span></button></th>
+              <th><button type="button" class="admin-col-sort-btn" data-table="projects" data-key="contactPerson" data-type="text">Kontaktperson <span class="sort-indicator">↕</span></button></th>
+              <th><button type="button" class="admin-col-sort-btn" data-table="projects" data-key="lineCount" data-type="number">Linjer <span class="sort-indicator">↕</span></button></th>
+              <th><button type="button" class="admin-col-sort-btn" data-table="projects" data-key="totalExFreightRaw" data-type="number">Total stroemskinne ink. frakt <span class="sort-indicator">↕</span></button></th>
+              <th><button type="button" class="admin-col-sort-btn" data-table="projects" data-key="dgPercentRaw" data-type="number">DG % <span class="sort-indicator">↕</span></button></th>
+              <th><button type="button" class="admin-col-sort-btn" data-table="projects" data-key="createdAtRaw" data-type="date">Opprettet <span class="sort-indicator">↕</span></button></th>
+              <th><button type="button" class="admin-col-sort-btn" data-table="projects" data-key="updatedAtRaw" data-type="date">Oppdatert <span class="sort-indicator">↕</span></button></th>
             </tr>
           </thead>
           <tbody></tbody>
@@ -100,15 +80,15 @@
         <table id="adminLinesTable" class="admin-table">
           <thead>
             <tr>
-              <th>Epost</th>
-              <th>Prosjekt</th>
-              <th>Linje</th>
-              <th>Serie</th>
-              <th>Ampere</th>
-              <th>Meter</th>
-              <th>Total stroemskinne ink. frakt</th>
-              <th>DG %</th>
-              <th>Oppdatert</th>
+              <th><button type="button" class="admin-col-sort-btn" data-table="lines" data-key="email" data-type="text">Epost <span class="sort-indicator">↕</span></button></th>
+              <th><button type="button" class="admin-col-sort-btn" data-table="lines" data-key="projectName" data-type="text">Prosjekt <span class="sort-indicator">↕</span></button></th>
+              <th><button type="button" class="admin-col-sort-btn" data-table="lines" data-key="lineNumber" data-type="text">Linje <span class="sort-indicator">↕</span></button></th>
+              <th><button type="button" class="admin-col-sort-btn" data-table="lines" data-key="series" data-type="text">Serie <span class="sort-indicator">↕</span></button></th>
+              <th><button type="button" class="admin-col-sort-btn" data-table="lines" data-key="ampereRaw" data-type="number">Ampere <span class="sort-indicator">↕</span></button></th>
+              <th><button type="button" class="admin-col-sort-btn" data-table="lines" data-key="meterRaw" data-type="number">Meter <span class="sort-indicator">↕</span></button></th>
+              <th><button type="button" class="admin-col-sort-btn" data-table="lines" data-key="totalExFreightRaw" data-type="number">Total stroemskinne ink. frakt <span class="sort-indicator">↕</span></button></th>
+              <th><button type="button" class="admin-col-sort-btn" data-table="lines" data-key="dgPercentRaw" data-type="number">DG % <span class="sort-indicator">↕</span></button></th>
+              <th><button type="button" class="admin-col-sort-btn" data-table="lines" data-key="updatedAtRaw" data-type="date">Oppdatert <span class="sort-indicator">↕</span></button></th>
             </tr>
           </thead>
           <tbody></tbody>
