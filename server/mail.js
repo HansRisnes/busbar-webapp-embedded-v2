@@ -2972,6 +2972,28 @@ app.get('/api/admin/project-overview', requireAdminAuth, async (req, res) => {
   }
 });
 
+app.post('/api/admin/users/delete', requireAdminAuth, async (req, res) => {
+  try {
+    const email = normalizeEmail(req.body?.email);
+    if (!isValidEmail(email)) {
+      return res.status(400).json({ error: 'Ugyldig e-post' });
+    }
+
+    const deleted = await withUserAuthLock(async () => {
+      const store = await readUserAuthStore();
+      if (!store.users[email]) return false;
+      delete store.users[email];
+      await writeUserAuthStore(store);
+      return true;
+    });
+
+    return res.json({ email, deleted });
+  } catch (err) {
+    console.error('Sletting av bruker feilet', err);
+    return res.status(500).json({ error: 'Kunne ikke slette bruker' });
+  }
+});
+
 app.post('/api/send-calculation-email', async (req, res) => {
   try {
     const { project, customer, totals, bom } = req.body || {};
