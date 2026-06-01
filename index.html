@@ -64,7 +64,7 @@
 
   <main class="app-views">
     <div class="view-toolbar">
-      <a href="calculator.html" class="btn alt nav-page-btn">Åpne prisverktøy</a>
+      <a class="btn alt nav-page-btn is-disabled" aria-disabled="true" tabindex="-1">Åpne prisverktøy</a>
     </div>
 
     <section id="dashboardView" class="card dashboard-card">
@@ -128,10 +128,48 @@
         <label for="loginPassword">Passord
           <input id="loginPassword" type="password" autocomplete="current-password" required>
         </label>
+        <div class="register-inline">
+          <span>Ved første innlogging opprett ny bruker</span>
+          <button id="registerSubmit" type="button" class="btn alt btn-small">Opprett bruker</button>
+        </div>
         <p id="loginError" class="login-error" role="alert"></p>
         <div class="actions">
           <button id="loginCancel" type="button" class="btn alt">Avbryt</button>
           <button id="loginSubmit" type="button" class="btn">Logg på</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id="registerModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="registerTitle">
+    <div class="modal">
+      <h3 id="registerTitle">Opprett bruker</h3>
+      <form class="login-form" onsubmit="return false;" autocomplete="off">
+        <label for="registerName">Navn *
+          <input id="registerName" type="text" autocomplete="name" placeholder="Ola Nordmann" required>
+        </label>
+        <label for="registerEmail">E-post *
+          <input id="registerEmail" type="email" inputmode="email" autocomplete="email" placeholder="ola@busbar.no" required>
+        </label>
+        <label for="registerPhone">Telefon *
+          <input id="registerPhone" type="tel" autocomplete="tel" placeholder="+47 12 34 56 78" required>
+        </label>
+        <label for="registerCompany">Selskap *
+          <input id="registerCompany" type="text" autocomplete="organization" placeholder="Busbar AS" required>
+        </label>
+        <label for="registerPosition">Stilling *
+          <input id="registerPosition" type="text" autocomplete="organization-title" placeholder="Prosjektleder" required>
+        </label>
+        <label for="registerPassword">Passord *
+          <input id="registerPassword" type="password" autocomplete="new-password" required>
+        </label>
+        <label for="registerConfirmPassword">Bekreft passord *
+          <input id="registerConfirmPassword" type="password" autocomplete="new-password" required>
+        </label>
+        <p id="registerError" class="login-error" role="alert"></p>
+        <div class="actions">
+          <button id="registerCancel" type="button" class="btn alt">Avbryt</button>
+          <button id="registerCreateBtn" type="button" class="btn">Opprett bruker</button>
         </div>
       </form>
     </div>
@@ -165,6 +203,47 @@
           <button id="projectSubmit" type="button" class="btn" disabled>Fortsett</button>
         </div>
       </form>
+    </div>
+  </div>
+
+  <div id="projectDetailsModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="projectDetailsTitle">
+    <div class="modal">
+      <h3 id="projectDetailsTitle">Kundeinformasjon</h3>
+      <form class="project-form" onsubmit="return false;" autocomplete="off">
+        <label for="projectDetailsCustomer">Kunde
+          <input id="projectDetailsCustomer" type="text" disabled>
+        </label>
+        <label for="projectDetailsAddress">Adresse
+          <input id="projectDetailsAddress" type="text" autocomplete="street-address" required>
+        </label>
+        <label for="projectDetailsPostalPlace">Postnummer og sted
+          <input id="projectDetailsPostalPlace" type="text" autocomplete="postal-code" required>
+        </label>
+        <label for="projectDetailsContact">Kontaktperson
+          <input id="projectDetailsContact" type="text" disabled>
+        </label>
+        <label for="projectDetailsPhone">Telefon
+          <input id="projectDetailsPhone" type="tel" autocomplete="tel" required>
+        </label>
+        <p id="projectDetailsError" class="login-error project-error" role="alert"></p>
+        <div class="actions">
+          <button id="projectDetailsCancel" type="button" class="btn alt">Avbryt</button>
+          <button id="projectDetailsSubmit" type="button" class="btn">Lagre</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id="offerDetailsWarningModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="offerDetailsWarningTitle">
+    <div class="modal">
+      <h3 id="offerDetailsWarningTitle">Mangler detaljer</h3>
+      <p class="muted-text">Prosjektet mangler følgende felt:</p>
+      <ul id="offerDetailsMissingList" class="missing-details-list"></ul>
+      <p>Kontakt administrator for å legge til detaljer</p>
+      <div class="actions">
+        <button id="offerDetailsCancel" type="button" class="btn alt">Avbryt</button>
+        <button id="offerDetailsContinue" type="button" class="btn">Generer likevel</button>
+      </div>
     </div>
   </div>
 

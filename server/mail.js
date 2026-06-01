@@ -1,10 +1,13 @@
 require('dotenv').config();
 const path = require('path');
 const fs = require('fs/promises');
+const crypto = require('crypto');
+const { promisify } = require('util');
 const express = require('express');
 const nodemailer = require('nodemailer');
 const AdmZip = require('adm-zip');
 const { ClientSecretCredential } = require('@azure/identity');
+const scryptAsync = promisify(crypto.scrypt);
 
 const STATIC_DATA_DIR = path.resolve(__dirname, '..', 'data');
 const RUNTIME_DATA_DIR = (() => {
@@ -18,16 +21,26 @@ const PRICE_DATA_DIR = (() => {
   return path.resolve(raw);
 })();
 const DEFAULT_MARKET_FILE = path.resolve(RUNTIME_DATA_DIR, 'market-data.json');
-const OFFER_TEMPLATE_FILE = path.resolve(
+const OFFER_TEMPLATE_DIR = path.resolve(
   __dirname,
   'templates',
-  'tilbud',
-  'tilbud-stromskinner-template.docx'
+  'tilbud'
 );
+const OFFER_TEMPLATE_FILE = (() => {
+  const rawFile = String(process.env.OFFER_TEMPLATE_FILE || '').trim();
+  if (rawFile) return path.resolve(rawFile);
+
+  const rawName = String(process.env.OFFER_TEMPLATE_NAME || '').trim();
+  if (rawName) return path.resolve(OFFER_TEMPLATE_DIR, rawName);
+
+  return '';
+})();
 const OFFER_COUNTER_FILE = path.resolve(RUNTIME_DATA_DIR, 'offer-sequence.json');
 const OFFER_PROJECT_NUMBERS_FILE = path.resolve(RUNTIME_DATA_DIR, 'offer-project-numbers.json');
 const OFFER_REVISIONS_FILE = path.resolve(RUNTIME_DATA_DIR, 'offer-revisions.json');
 const PROJECT_ARCHIVE_FILE = path.resolve(RUNTIME_DATA_DIR, 'project-archive.json');
+const USER_AUTH_FILE = path.resolve(RUNTIME_DATA_DIR, 'user-auth.json');
+const CUSTOMER_DATABASE_FILE = path.resolve(RUNTIME_DATA_DIR, 'customer-database.json');
 const OFFER_LINE_BLOCK_START_TOKEN = '__BUSBAR_LINE_BLOCK_START__';
 const OFFER_LINE_BLOCK_END_TOKEN = '__BUSBAR_LINE_BLOCK_END__';
 const OFFER_FIRE_BLOCK_START_TOKEN = '__BUSBAR_FIRE_BLOCK_START__';
@@ -89,6 +102,8 @@ const marketScheduleState = {
 let marketCache = { payload: null };
 let offerNumberLock = Promise.resolve();
 let projectArchiveLock = Promise.resolve();
+let userAuthLock = Promise.resolve();
+let customerDatabaseLock = Promise.resolve();
 let fireBarrierPriceIndexPromise = null;
 let marketRefreshInFlight = null;
 
@@ -150,6 +165,10 @@ app.use((req, res, next) => {
   }
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader(
+    'Access-Control-Expose-Headers',
+    'Content-Disposition, X-Offer-Number, X-Offer-Revision, X-Offer-Filename, X-Offer-Template, X-Offer-Template-Path'
+  );
   if (req.method === 'OPTIONS') {
     return res.sendStatus(204);
   }
@@ -157,12 +176,26 @@ app.use((req, res, next) => {
 });
 
 const ADMIN_USERNAME = safeString(process.env.ADMIN_USERNAME || 'admin');
-const ADMIN_PASSWORD = safeString(process.env.ADMIN_PASSWORD || 'change-me-admin');
+const ADMIN_PASSWORD = safeString(process.env.ADMIN_PASSWORD || 'admin1');
+const AUTH_TOKEN_SECRET = safeString(
+  process.env.AUTH_TOKEN_SECRET ||
+  process.env.SESSION_SECRET ||
+  process.env.ADMIN_PASSWORD ||
+  'dev-auth-token-secret-change-me'
+);
+const AUTH_TOKEN_TTL_SECONDS = (() => {
+  const parsed = Number(process.env.AUTH_TOKEN_TTL_SECONDS || 60 * 60 * 24 * 30);
+  if (!Number.isFinite(parsed) || parsed < 300) return 60 * 60 * 24 * 30;
+  return Math.round(parsed);
+})();
 
 if (!process.env.ADMIN_USERNAME || !process.env.ADMIN_PASSWORD) {
   console.warn(
     '[admin] ADMIN_USERNAME eller ADMIN_PASSWORD mangler i miljøvariabler. Bruker midlertidige standardverdier.'
   );
+}
+if (!process.env.AUTH_TOKEN_SECRET && !process.env.SESSION_SECRET) {
+  console.warn('[auth] AUTH_TOKEN_SECRET mangler i miljøvariabler. Bruker midlertidig lokal fallback.');
 }
 
 const requiredEnv = [
@@ -181,6 +214,24 @@ requiredEnv.forEach(key => {
 
 function round2(value) {
   return Math.round(Number(value || 0) * 100) / 100;
+}
+
+function normalizeMarginRate(value, fallback = 0.20) {
+  const raw = toFiniteNumber(value);
+  if (!Number.isFinite(raw)) return fallback;
+  const rate = raw > 1 ? raw / 100 : raw;
+  if (!Number.isFinite(rate)) return fallback;
+  if (rate < 0) return 0;
+  if (rate >= 1) return 0.95;
+  return rate;
+}
+
+function applyDgToCost(cost, rate) {
+  const safeCost = round2(toFiniteNumber(cost) || 0);
+  const dgRate = normalizeMarginRate(rate);
+  const factor = 1 - dgRate;
+  if (!(factor > 0)) return safeCost;
+  return round2(safeCost / factor);
 }
 
 function toFiniteNumber(value) {
@@ -205,6 +256,15 @@ function formatNoCurrency(value) {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2
   }).format(round2(amount));
+}
+
+function formatNoFxRate(value) {
+  const amount = toFiniteNumber(value);
+  if (!Number.isFinite(amount)) return '';
+  return new Intl.NumberFormat('no-NO', {
+    minimumFractionDigits: 4,
+    maximumFractionDigits: 4
+  }).format(amount);
 }
 
 function formatNoInteger(value) {
@@ -267,7 +327,7 @@ function withOfferNumberLock(task) {
 async function readJsonFile(filePath, fallbackValue) {
   try {
     const raw = await fs.readFile(filePath, 'utf8');
-    return JSON.parse(raw);
+    return JSON.parse(raw.replace(/^\uFEFF/, ''));
   } catch (err) {
     if (err && err.code === 'ENOENT') return fallbackValue;
     throw err;
@@ -279,9 +339,52 @@ async function writeJsonFile(filePath, value) {
   await fs.writeFile(filePath, JSON.stringify(value, null, 2), 'utf8');
 }
 
+async function resolveOfferTemplateFile() {
+  if (OFFER_TEMPLATE_FILE) {
+    await fs.access(OFFER_TEMPLATE_FILE);
+    return OFFER_TEMPLATE_FILE;
+  }
+
+  const entries = await fs.readdir(OFFER_TEMPLATE_DIR, { withFileTypes: true });
+  const candidates = await Promise.all(
+    entries
+      .filter(entry=>
+        entry.isFile() &&
+        !entry.name.startsWith('~$') &&
+        entry.name.toLowerCase().endsWith('.docx')
+      )
+      .map(async entry=>{
+        const filePath = path.resolve(OFFER_TEMPLATE_DIR, entry.name);
+        const stat = await fs.stat(filePath);
+        return { filePath, mtimeMs: stat.mtimeMs };
+      })
+  );
+
+  if (!candidates.length) {
+    const err = new Error(`Fant ingen .docx-mal i ${OFFER_TEMPLATE_DIR}`);
+    err.code = 'ENOENT';
+    throw err;
+  }
+
+  candidates.sort((a, b)=>b.mtimeMs - a.mtimeMs);
+  return candidates[0].filePath;
+}
+
 function withProjectArchiveLock(task) {
   const run = projectArchiveLock.then(() => task());
   projectArchiveLock = run.catch(() => {});
+  return run;
+}
+
+function withUserAuthLock(task) {
+  const run = userAuthLock.then(() => task());
+  userAuthLock = run.catch(() => {});
+  return run;
+}
+
+function withCustomerDatabaseLock(task) {
+  const run = customerDatabaseLock.then(() => task());
+  customerDatabaseLock = run.catch(() => {});
   return run;
 }
 
@@ -311,6 +414,251 @@ function safeJsonClone(value, fallback) {
 
 function generateRecordId(prefix = 'id') {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(16).slice(2, 10)}`;
+}
+
+function normalizeLookupKey(value) {
+  return safeString(value).toLowerCase();
+}
+
+function normalizePassword(value) {
+  return String(value || '');
+}
+
+function isValidPassword(value) {
+  const password = normalizePassword(value);
+  return password.length >= 4 && password.length <= 200;
+}
+
+function normalizeUserProfile(raw) {
+  return {
+    name: safeString(raw?.name),
+    phone: safeString(raw?.phone),
+    company: safeString(raw?.company),
+    position: safeString(raw?.position)
+  };
+}
+
+function isCompleteUserProfile(profile) {
+  return Boolean(
+    safeString(profile?.name) &&
+    safeString(profile?.phone) &&
+    safeString(profile?.company) &&
+    safeString(profile?.position)
+  );
+}
+
+function base64UrlEncode(value) {
+  return Buffer.from(value).toString('base64url');
+}
+
+function signAuthPayload(encodedPayload) {
+  return crypto
+    .createHmac('sha256', AUTH_TOKEN_SECRET)
+    .update(encodedPayload)
+    .digest('base64url');
+}
+
+function createAuthToken(email) {
+  const now = Math.floor(Date.now() / 1000);
+  const payload = {
+    email,
+    iat: now,
+    exp: now + AUTH_TOKEN_TTL_SECONDS
+  };
+  const encodedPayload = base64UrlEncode(JSON.stringify(payload));
+  const signature = signAuthPayload(encodedPayload);
+  return `${encodedPayload}.${signature}`;
+}
+
+function verifyAuthToken(token) {
+  const raw = safeString(token);
+  const parts = raw.split('.');
+  if (parts.length !== 2 || !parts[0] || !parts[1]) return null;
+  const expected = signAuthPayload(parts[0]);
+  const givenBuffer = Buffer.from(parts[1]);
+  const expectedBuffer = Buffer.from(expected);
+  if (givenBuffer.length !== expectedBuffer.length) return null;
+  if (!crypto.timingSafeEqual(givenBuffer, expectedBuffer)) return null;
+  try {
+    const payload = JSON.parse(Buffer.from(parts[0], 'base64url').toString('utf8'));
+    const email = normalizeEmail(payload?.email);
+    const exp = Number(payload?.exp);
+    if (!isValidEmail(email) || !Number.isFinite(exp)) return null;
+    if (exp < Math.floor(Date.now() / 1000)) return null;
+    return { email };
+  } catch (_err) {
+    return null;
+  }
+}
+
+function getBearerToken(req) {
+  const header = safeString(req.headers.authorization);
+  if (!header.toLowerCase().startsWith('bearer ')) return '';
+  return header.slice(7).trim();
+}
+
+function requireUserAuth(req, res, next) {
+  const auth = verifyAuthToken(getBearerToken(req));
+  if (!auth) {
+    return res.status(401).json({ error: 'Logg inn for å hente prosjekter' });
+  }
+  req.userAuth = auth;
+  return next();
+}
+
+async function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString('base64url');
+  const hash = await scryptAsync(normalizePassword(password), salt, 64);
+  return `scrypt:${salt}:${Buffer.from(hash).toString('base64url')}`;
+}
+
+async function verifyPassword(password, storedHash) {
+  const parts = safeString(storedHash).split(':');
+  if (parts.length !== 3 || parts[0] !== 'scrypt' || !parts[1] || !parts[2]) return false;
+  const expected = Buffer.from(parts[2], 'base64url');
+  const actual = await scryptAsync(normalizePassword(password), parts[1], expected.length);
+  const actualBuffer = Buffer.from(actual);
+  if (actualBuffer.length !== expected.length) return false;
+  return crypto.timingSafeEqual(actualBuffer, expected);
+}
+
+function normalizeUserAuthRecord(email, raw) {
+  const now = new Date().toISOString();
+  return {
+    email,
+    profile: normalizeUserProfile(raw?.profile || raw),
+    passwordHash: safeString(raw?.passwordHash),
+    createdAt: toIsoTimestamp(raw?.createdAt, now),
+    updatedAt: toIsoTimestamp(raw?.updatedAt || raw?.createdAt, now)
+  };
+}
+
+async function readUserAuthStore() {
+  const stored = await readJsonFile(USER_AUTH_FILE, { users: {} });
+  const usersRaw = (stored && typeof stored === 'object' && stored.users && typeof stored.users === 'object')
+    ? stored.users
+    : {};
+  const users = {};
+  Object.entries(usersRaw).forEach(([key, value]) => {
+    const email = normalizeEmail(key || value?.email);
+    if (!isValidEmail(email)) return;
+    const user = normalizeUserAuthRecord(email, value);
+    if (!user.passwordHash) return;
+    users[email] = user;
+  });
+  return { users };
+}
+
+async function writeUserAuthStore(state) {
+  const users = (state && typeof state === 'object' && state.users && typeof state.users === 'object')
+    ? state.users
+    : {};
+  await writeJsonFile(USER_AUTH_FILE, { users });
+}
+
+function normalizeCustomerContact(raw) {
+  const name = safeString(raw?.name || raw?.contactPerson || raw?.contact);
+  const phone = safeString(raw?.phone || raw?.contactPhone);
+  if (!name && !phone) return null;
+  return {
+    id: safeString(raw?.id) || generateRecordId('contact'),
+    name,
+    phone
+  };
+}
+
+function normalizeCustomerRecord(raw) {
+  const name = safeString(raw?.name || raw?.customer);
+  if (!name) return null;
+  const contactsRaw = Array.isArray(raw?.contacts) ? raw.contacts : [];
+  const contactsByKey = new Map();
+  contactsRaw.forEach(contactRaw => {
+    const contact = normalizeCustomerContact(contactRaw);
+    if (!contact) return;
+    const key = normalizeLookupKey(contact.name || contact.id);
+    if (!key) return;
+    contactsByKey.set(key, contact);
+  });
+  return {
+    id: safeString(raw?.id) || generateRecordId('customer'),
+    name,
+    address: safeString(raw?.address || raw?.customerAddress),
+    postalPlace: safeString(raw?.postalPlace || raw?.customerPostalPlace),
+    contacts: Array.from(contactsByKey.values())
+  };
+}
+
+async function readCustomerDatabase() {
+  const stored = await readJsonFile(CUSTOMER_DATABASE_FILE, { customers: [] });
+  const rawCustomers = Array.isArray(stored?.customers) ? stored.customers : [];
+  const byKey = new Map();
+  rawCustomers.forEach(raw => {
+    const customer = normalizeCustomerRecord(raw);
+    if (!customer) return;
+    byKey.set(normalizeLookupKey(customer.name), customer);
+  });
+  return { customers: Array.from(byKey.values()) };
+}
+
+async function writeCustomerDatabase(state) {
+  const customers = Array.isArray(state?.customers)
+    ? state.customers.map(normalizeCustomerRecord).filter(Boolean)
+    : [];
+  await writeJsonFile(CUSTOMER_DATABASE_FILE, { customers });
+}
+
+function mergeCustomerIntoMap(map, customerInput) {
+  const customer = normalizeCustomerRecord(customerInput);
+  if (!customer) return;
+  const key = normalizeLookupKey(customer.name);
+  const existing = map.get(key) || {
+    id: customer.id,
+    name: customer.name,
+    address: '',
+    postalPlace: '',
+    contacts: []
+  };
+  existing.name = existing.name || customer.name;
+  if (!existing.address && customer.address) existing.address = customer.address;
+  if (!existing.postalPlace && customer.postalPlace) existing.postalPlace = customer.postalPlace;
+  const contactsByKey = new Map(existing.contacts.map(contact => [normalizeLookupKey(contact.name), contact]));
+  customer.contacts.forEach(contact => {
+    const contactKey = normalizeLookupKey(contact.name);
+    if (!contactKey) return;
+    const existingContact = contactsByKey.get(contactKey) || { id: contact.id, name: contact.name, phone: '' };
+    if (!existingContact.phone && contact.phone) existingContact.phone = contact.phone;
+    contactsByKey.set(contactKey, existingContact);
+  });
+  existing.contacts = Array.from(contactsByKey.values());
+  map.set(key, existing);
+}
+
+async function buildMergedCustomerDatabase() {
+  const [database, archive] = await Promise.all([
+    readCustomerDatabase(),
+    readProjectArchive()
+  ]);
+  const byKey = new Map();
+  database.customers.forEach(customer => mergeCustomerIntoMap(byKey, customer));
+  Object.values(archive.users || {}).forEach(user => {
+    (Array.isArray(user.projects) ? user.projects : []).forEach(project => {
+      const customerName = safeString(project.customer);
+      if (!customerName) return;
+      mergeCustomerIntoMap(byKey, {
+        name: customerName,
+        address: project.customerAddress,
+        postalPlace: project.customerPostalPlace,
+        contacts: safeString(project.contactPerson)
+          ? [{ name: project.contactPerson, phone: project.contactPhone }]
+          : []
+      });
+    });
+  });
+  const customers = Array.from(byKey.values()).sort((a, b) => a.name.localeCompare(b.name, 'no', {
+    sensitivity: 'base',
+    numeric: true
+  }));
+  return { customers };
 }
 
 function normalizeLineRecord(raw) {
@@ -353,6 +701,9 @@ function normalizeProjectRecord(raw) {
     name: safeString(raw.name),
     customer: safeString(raw.customer),
     contactPerson: safeString(raw.contactPerson || raw.contact),
+    customerAddress: safeString(raw.customerAddress || raw.address),
+    customerPostalPlace: safeString(raw.customerPostalPlace || raw.postalPlace),
+    contactPhone: safeString(raw.contactPhone || raw.phone),
     createdAt: toIsoTimestamp(raw.createdAt, now),
     updatedAt: toIsoTimestamp(raw.updatedAt || raw.createdAt, now),
     selectedAddonConfig,
@@ -734,11 +1085,13 @@ function resolveLineSelectedAddonTotal(line) {
   const montasjeTotal = toFiniteNumber(lineTotals.totalInclMontasje);
   const engineeringTotal = toFiniteNumber(lineTotals.totalInclEngineering);
   const opphengTotal = toFiniteNumber(lineTotals.totalInclOppheng ?? lineTotals.total);
+  const tapOffOfferTotal = resolveTapOffOfferPriceTotal(line, line?.inputs);
 
   let total = baseTotal;
   if (includeMontasje && Number.isFinite(montasjeTotal)) total += montasjeTotal;
   if (includeEngineering && Number.isFinite(engineeringTotal)) total += engineeringTotal;
   if (includeOppheng && Number.isFinite(opphengTotal)) total += opphengTotal;
+  if (Number.isFinite(tapOffOfferTotal)) total += tapOffOfferTotal;
   return round2(total);
 }
 
@@ -800,6 +1153,8 @@ function aggregateProjectOfferTotals(project) {
     totalInclEngineering: 0,
     oppheng: 0,
     opphengCount: 0,
+    tapOffBoxTotal: 0,
+    tapOffOfferTotal: 0,
     selectedAddonTotal: 0,
     offerIncludedTotal: 0,
     offerMainVisibleTotal: 0,
@@ -829,6 +1184,14 @@ function aggregateProjectOfferTotals(project) {
     add('totalInclEngineering', lineTotals.totalInclEngineering);
     add('oppheng', lineTotals?.oppheng?.cost ?? lineTotals.total);
     add('opphengCount', lineTotals?.oppheng?.pieceCount);
+    const explicitTapOffBoxTotal = toFiniteNumber(lineTotals.tapOffBoxTotal);
+    add(
+      'tapOffBoxTotal',
+      Number.isFinite(explicitTapOffBoxTotal)
+        ? explicitTapOffBoxTotal
+        : resolveTapOffBoxPriceTotal(line, line?.inputs)
+    );
+    add('tapOffOfferTotal', resolveTapOffOfferPriceTotal(line, line?.inputs));
     const lineOfferAmounts = resolveLineOfferAmounts(line);
     add('selectedAddonTotal', lineOfferAmounts.includedTotal);
     add('offerIncludedTotal', lineOfferAmounts.includedTotal);
@@ -854,6 +1217,243 @@ function normalizeElementLabel(rawValue) {
   return labels[key] || key;
 }
 
+function resolveIpGradeFromSeries(rawSeries) {
+  const series = safeString(rawSeries).toUpperCase();
+  if (series === 'RCP-IP68') return 'IP68';
+  if (series === 'XCM' || series === 'XCP-S' || series === 'XAP-B') return 'IP55';
+  return '';
+}
+
+function resolveBoxLabelFromSelection(value) {
+  const [kind, ampRaw] = safeString(value).split('|');
+  const amp = safeString(ampRaw);
+  const labels = {
+    plug_in_box: 'Plug-in box (plast)',
+    tap_off_box: 'Tap-off box (metall)',
+    bolt_on_box: 'Bolt-on box (metall)'
+  };
+  const label = labels[kind] || safeString(kind);
+  if (!amp && !label) return '';
+  if (!amp) return label;
+  if (!label) return `${amp}A`;
+  return `${amp}A · ${label}`;
+}
+
+function isSeparateTapOffBoxType(value) {
+  return ['plug_in_box', 'tap_off_box'].includes(safeString(value).toLowerCase());
+}
+
+function isTapOffInnmatType(value) {
+  return ['plug_in_box_innmat', 'tap_off_box_innmat'].includes(safeString(value).toLowerCase());
+}
+
+function isSeparateTapOffBoxBomLine(entry) {
+  const type = entry?.type || entry?.element_type || entry?.elementType;
+  return isSeparateTapOffBoxType(type) || isTapOffInnmatType(type);
+}
+
+function isTapOffInnmatBomLine(entry) {
+  return isTapOffInnmatType(entry?.type || entry?.element_type || entry?.elementType)
+    || entry?.tapOffInnmatLine === true;
+}
+
+function resolveBomLineSum(entry) {
+  const direct = toFiniteNumber(entry?.sum);
+  if (Number.isFinite(direct)) return direct;
+  const unit = toFiniteNumber(entry?.enhet ?? entry?.unit ?? entry?.unit_price);
+  const qty = toFiniteNumber(entry?.antall ?? entry?.qty ?? entry?.quantity);
+  if (Number.isFinite(unit) && Number.isFinite(qty)) return unit * qty;
+  return 0;
+}
+
+function resolveTapOffInnmatTotalFromInputForBomEntry(entry, inputItems, usedIndexes) {
+  const entryType = safeString(entry?.type || entry?.element_type || entry?.elementType).toLowerCase();
+  const entryAmp = toFiniteNumber(entry?.ampere);
+  const entryQty = toFiniteNumber(entry?.antall ?? entry?.qty ?? entry?.quantity);
+
+  for (let i = 0; i < inputItems.length; i += 1) {
+    if (usedIndexes.has(i)) continue;
+    const item = inputItems[i];
+    const [itemType, itemAmpRaw] = safeString(item.boxSel).split('|');
+    const itemAmp = toFiniteNumber(itemAmpRaw);
+    const itemQty = toFiniteNumber(item.qty);
+    const sameType = safeString(itemType).toLowerCase() === entryType;
+    const sameAmp = !Number.isFinite(entryAmp) || !Number.isFinite(itemAmp) || Math.round(entryAmp) === Math.round(itemAmp);
+    const sameQty = !Number.isFinite(entryQty) || !Number.isFinite(itemQty) || Math.round(entryQty) === Math.round(itemQty);
+    if (!sameType || !sameAmp || !sameQty) continue;
+    usedIndexes.add(i);
+    const innmat = toFiniteNumber(item.innmatSum);
+    const qty = Number.isFinite(entryQty) ? entryQty : itemQty;
+    return Number.isFinite(innmat) && Number.isFinite(qty) ? innmat * qty : 0;
+  }
+
+  return 0;
+}
+
+function resolveTapOffBoxPriceTotal(line, input = {}) {
+  const bom = Array.isArray(line?.bom) ? line.bom : [];
+  const inputItems = resolveTapOffItemsFromInput(input);
+  const usedInputIndexes = new Set();
+  const hasSeparateInnmatLines = bom.some(isTapOffInnmatBomLine);
+  return round2(bom.reduce((sum, entry)=>{
+    if (!isSeparateTapOffBoxBomLine(entry)) return sum;
+    const baseSum = resolveBomLineSum(entry);
+    if (isTapOffInnmatBomLine(entry)) return sum + baseSum;
+    const includesInnmat = entry?.tapOffIncludesInnmatInSum === true;
+    const explicitInnmatTotal = toFiniteNumber(entry?.tapOffInnmatTotal);
+    if (includesInnmat) return sum + baseSum;
+    if (hasSeparateInnmatLines) return sum + baseSum;
+    if (Number.isFinite(explicitInnmatTotal) && explicitInnmatTotal > 0) {
+      return sum + baseSum + explicitInnmatTotal;
+    }
+    return sum + baseSum + resolveTapOffInnmatTotalFromInputForBomEntry(entry, inputItems, usedInputIndexes);
+  }, 0));
+}
+
+function resolveTapOffOfferPriceTotal(line, input = {}) {
+  const lineTotals = (line && typeof line === 'object' && line.totals && typeof line.totals === 'object')
+    ? line.totals
+    : {};
+  const explicit = toFiniteNumber(lineTotals.tapOffOfferTotal);
+  if (Number.isFinite(explicit)) return round2(explicit);
+  const cost = resolveTapOffBoxPriceTotal(line, input);
+  if (!Number.isFinite(cost)) return NaN;
+  const rate = lineTotals.tapOffMarginRate ?? input?.tapOffMarginRate ?? lineTotals.marginRate ?? input?.marginRate;
+  return applyDgToCost(cost, rate);
+}
+
+function resolveTapOffItemsFromInput(input = {}) {
+  const directItems = Array.isArray(input?.boxItems) ? input.boxItems : [];
+  const normalizedDirect = directItems
+    .map(item=>{
+      const boxSel = safeString(item?.boxSel || item?.value || '');
+      const qtyRaw = toFiniteNumber(item?.boxQty ?? item?.qty);
+      const qty = Number.isFinite(qtyRaw) ? Math.max(0, Math.round(qtyRaw)) : 0;
+      const innmatRaw = toFiniteNumber(item?.innmatSum ?? item?.innmat);
+      const innmatSum = Number.isFinite(innmatRaw) ? Math.max(0, innmatRaw) : 0;
+      if (!boxSel || qty <= 0) return null;
+      const ampRaw = toFiniteNumber(boxSel.split('|')[1]);
+      const amp = Number.isFinite(ampRaw) && ampRaw > 0 ? Math.round(ampRaw) : null;
+      return { boxSel, qty, amp, innmatSum };
+    })
+    .filter(Boolean);
+  if (normalizedDirect.length) return normalizedDirect;
+
+  const legacyBoxSel = safeString(input?.boxSel || '');
+  const legacyQtyRaw = toFiniteNumber(input?.boxQty);
+  if (legacyBoxSel && Number.isFinite(legacyQtyRaw) && legacyQtyRaw > 0) {
+    const ampRaw = toFiniteNumber(legacyBoxSel.split('|')[1]);
+    const amp = Number.isFinite(ampRaw) && ampRaw > 0 ? Math.round(ampRaw) : null;
+    const innmatRaw = toFiniteNumber(input?.boxInnmatSum);
+    const innmatSum = Number.isFinite(innmatRaw) ? Math.max(0, innmatRaw) : 0;
+    return [{ boxSel: legacyBoxSel, qty: Math.round(legacyQtyRaw), amp, innmatSum }];
+  }
+
+  return [];
+}
+
+function resolveTapOffItemsFromLine(line, input = {}) {
+  const fromInput = resolveTapOffItemsFromInput(input);
+  if (fromInput.length) return fromInput;
+
+  const bom = Array.isArray(line?.bom) ? line.bom : [];
+  const types = new Set(['plug_in_box', 'tap_off_box', 'bolt_on_box']);
+  const fromBom = bom
+    .filter(entry=>{
+      const type = safeString(entry?.type || entry?.element_type || entry?.elementType).toLowerCase();
+      if (isTapOffInnmatType(type) || entry?.tapOffInnmatLine === true) return false;
+      const code = safeString(entry?.code).toLowerCase();
+      const desc = safeString(entry?.desc || entry?.description || entry?.tekst).toLowerCase();
+      const haystack = `${type} ${code} ${desc}`;
+      return (
+        types.has(type)
+        || /\b(tap[\s-]*off|plug[\s-]*in|bolt[\s-]*on)\b/.test(haystack)
+        || /\b(avtapping|avtappings|boks|box)\b/.test(haystack)
+      );
+    })
+    .map(entry=>{
+      const qtyRaw = toFiniteNumber(entry?.antall ?? entry?.qty);
+      const qty = Number.isFinite(qtyRaw) ? Math.max(0, Math.round(qtyRaw)) : 0;
+      if (qty <= 0) return null;
+      const ampRawDirect = toFiniteNumber(entry?.ampere);
+      const ampFromCodeMatch = safeString(entry?.code).match(/(\d{2,4})\s*A/i);
+      const ampFromCode = ampFromCodeMatch ? Number(ampFromCodeMatch[1]) : NaN;
+      const amp = Number.isFinite(ampRawDirect)
+        ? Math.round(ampRawDirect)
+        : (Number.isFinite(ampFromCode) ? Math.round(ampFromCode) : null);
+      return {
+        boxSel: amp
+          ? `${safeString(entry?.type || entry?.element_type || entry?.elementType).toLowerCase()}|${amp}`
+          : safeString(entry?.type || entry?.element_type || entry?.elementType).toLowerCase(),
+        code: safeString(entry?.code),
+        qty,
+        amp,
+        innmatSum: 0
+      };
+    })
+    .filter(Boolean);
+  return fromBom;
+}
+
+function buildTapOffOfferText(line, input = {}) {
+  const items = resolveTapOffItemsFromLine(line, input);
+  if (!items.length) return '';
+  return items.map(item=>{
+    const label = resolveBoxLabelFromSelection(item.boxSel) || item.code || 'Avtappingsboks';
+    const qtyTxt = formatNoInteger(item.qty) || String(item.qty);
+    return `${label} · antall ${qtyTxt}`;
+  }).join(' | ');
+}
+
+function resolveExpansionQtyFromBom(line) {
+  const bom = Array.isArray(line?.bom) ? line.bom : [];
+  return bom.reduce((sum, entry)=>{
+    const type = safeString(entry?.type || entry?.element_type || entry?.elementType).toLowerCase();
+    const code = safeString(entry?.code).toLowerCase();
+    const desc = safeString(entry?.desc || entry?.description || entry?.tekst).toLowerCase();
+    const looksLikeExpansion = type === 'expansion_unit' || /\bexpans/.test(type) || /\bexpans/.test(code) || /\bexpans/.test(desc);
+    if (!looksLikeExpansion) return sum;
+    const qty = toFiniteNumber(entry?.antall ?? entry?.qty ?? entry?.quantity);
+    const normalizedQty = Number.isFinite(qty) ? qty : 1;
+    return sum + normalizedQty;
+  }, 0);
+}
+
+function resolveExpansionQtyFromLine(line, input = {}) {
+  const fromBom = resolveExpansionQtyFromBom(line);
+  if (fromBom > 0) return fromBom;
+  const meter = toFiniteNumber(input?.meter);
+  const expYes = Boolean(input?.expansionYes);
+  if (expYes && Number.isFinite(meter) && meter > 30) return 1;
+  return 0;
+}
+
+function buildOfferLineDebugSummary(line, input = {}) {
+  const tapOffText = buildTapOffOfferText(line, input);
+  const expansionQty = resolveExpansionQtyFromLine(line, input);
+  const bom = Array.isArray(line?.bom) ? line.bom : [];
+  return {
+    lineNumber: safeString(line?.lineNumber),
+    boxItemsCount: Array.isArray(input?.boxItems) ? input.boxItems.length : 0,
+    bomBoxCount: resolveTapOffItemsFromLine(line, input).length,
+    avbTekst: tapOffText,
+    avbPris: resolveTapOffBoxPriceTotal(line, input),
+    expansionQty,
+    expansionBomRows: bom
+      .filter(entry=>{
+        const type = safeString(entry?.type || entry?.element_type || entry?.elementType).toLowerCase();
+        const code = safeString(entry?.code).toLowerCase();
+        const desc = safeString(entry?.desc || entry?.description || entry?.tekst).toLowerCase();
+        return type === 'expansion_unit' || /\bexpans/.test(`${type} ${code} ${desc}`);
+      })
+      .map(entry=>({
+        code: safeString(entry?.code),
+        type: safeString(entry?.type || entry?.element_type || entry?.elementType),
+        antall: entry?.antall ?? entry?.qty ?? entry?.quantity
+      }))
+  };
+}
+
 function collectProjectInputSummary(lines) {
   const pushUnique = (list, value)=>{
     const normalized = safeString(value);
@@ -867,7 +1467,12 @@ function collectProjectInputSummary(lines) {
   const ledereValues = [];
   const startElements = [];
   const sluttElements = [];
+  const ipGrades = [];
+  const tapOffTexts = [];
   let brannElementTotal = 0;
+  let tapOffTotal = 0;
+  let tapOffPriceTotal = 0;
+  let expansionElementTotal = 0;
   let meterTotal = 0;
   let verticalAnglesTotal = 0;
   let horizontalAnglesTotal = 0;
@@ -879,6 +1484,7 @@ function collectProjectInputSummary(lines) {
 
     pushUnique(lineNumbers, line?.lineNumber);
     pushUnique(systems, input.series);
+    pushUnique(ipGrades, resolveIpGradeFromSeries(input.series));
     pushUnique(ledereValues, input.ledere);
     pushUnique(startElements, normalizeElementLabel(input.startEl));
     pushUnique(sluttElements, normalizeElementLabel(input.sluttEl));
@@ -894,6 +1500,12 @@ function collectProjectInputSummary(lines) {
 
     const brannQty = toFiniteNumber(input.fbQty ?? input.fireBarrierQty);
     if (Number.isFinite(brannQty)) brannElementTotal += brannQty;
+    const tapOffItems = resolveTapOffItemsFromLine(line, input);
+    tapOffTotal += tapOffItems.reduce((sum, item)=>sum + Number(item.qty || 0), 0);
+    tapOffPriceTotal += resolveTapOffOfferPriceTotal(line, input);
+    const tapOffText = buildTapOffOfferText(line, input);
+    pushUnique(tapOffTexts, tapOffText);
+    expansionElementTotal += resolveExpansionQtyFromLine(line, input);
 
     const ampNum = toFiniteNumber(input.ampere ?? input.amp);
     if (Number.isFinite(ampNum)) {
@@ -913,15 +1525,27 @@ function collectProjectInputSummary(lines) {
     ledereValues: ledereValues.join(', '),
     startElements: startElements.join(', '),
     sluttElements: sluttElements.join(', '),
-    brannElementTotal: formatNoInteger(brannElementTotal)
+    brannElementTotal: formatNoInteger(brannElementTotal),
+    ipGrades: ipGrades.join(', '),
+    expansionElementTotal: formatNoInteger(expansionElementTotal),
+    tapOffTotal: formatNoInteger(tapOffTotal),
+    tapOffPriceTotal: round2(tapOffPriceTotal),
+    tapOffTexts: tapOffTexts.join(' | ')
   };
 }
 
-function buildOfferPlaceholderValues(project, offerNumber, offerDate, revision = 0) {
+function buildOfferPlaceholderValues(project, offerNumber, offerDate, revision = 0, userProfile = {}) {
   const safeProject = (project && typeof project === 'object') ? project : {};
   const projectName = safeString(safeProject.name);
   const customer = safeString(safeProject.customer);
   const contactPerson = safeString(safeProject.contactPerson || safeProject.contact);
+  const customerAddress = safeString(safeProject.customerAddress || safeProject.address);
+  const customerPostalPlace = safeString(safeProject.customerPostalPlace || safeProject.postalPlace);
+  const contactPhone = safeString(safeProject.contactPhone || safeProject.phone);
+  const profile = normalizeUserProfile(userProfile);
+  const marketPayload = currentMarketPayloadForResponse();
+  const usdNokRate = formatNoFxRate(marketPayload?.fx?.usdNok?.rate);
+  const eurNokRate = formatNoFxRate(marketPayload?.fx?.eurNok?.rate);
   const { lines, totals } = aggregateProjectOfferTotals(safeProject);
   const offerIncludedTotal = Number.isFinite(toFiniteNumber(totals.offerIncludedTotal))
     ? totals.offerIncludedTotal
@@ -955,6 +1579,37 @@ function buildOfferPlaceholderValues(project, offerNumber, offerDate, revision =
     kunde: customer,
     customer: customer,
     kontaktperson: contactPerson,
+    adresse: customerAddress,
+    kunde_adresse: customerAddress,
+    customer_address: customerAddress,
+    ADRESSE: customerAddress,
+    KUNDE_ADRESSE: customerAddress,
+    postnummer_sted: customerPostalPlace,
+    kunde_postnummer_sted: customerPostalPlace,
+    postal_place: customerPostalPlace,
+    POSTNUMMER_STED: customerPostalPlace,
+    KUNDE_POSTNUMMER_STED: customerPostalPlace,
+    telefon_kontaktperson: contactPhone,
+    kontaktperson_telefon: contactPhone,
+    contact_phone: contactPhone,
+    TELEFON_KONTAKTPERSON: contactPhone,
+    KONTAKTPERSON_TELEFON: contactPhone,
+    bruker_navn: profile.name,
+    bruker_epost: safeString(userProfile?.email),
+    bruker_telefon: profile.phone,
+    bruker_selskap: profile.company,
+    bruker_stilling: profile.position,
+    bruker_firma: profile.company,
+    selger_navn: profile.name,
+    selger_epost: safeString(userProfile?.email),
+    selger_telefon: profile.phone,
+    selger_selskap: profile.company,
+    selger_stilling: profile.position,
+    SELGER_NAVN: profile.name,
+    SELGER_EPOST: safeString(userProfile?.email),
+    SELGER_TELEFON: profile.phone,
+    SELGER_SELSKAP: profile.company,
+    SELGER_STILLING: profile.position,
     lss: '',
     linjer_start: '',
     lse: '',
@@ -975,7 +1630,30 @@ function buildOfferPlaceholderValues(project, offerNumber, offerDate, revision =
     led: inputSummary.ledereValues,
     ste: inputSummary.startElements,
     sle: inputSummary.sluttElements,
+    ipg: inputSummary.ipGrades,
+    ip_grad: inputSummary.ipGrades,
+    IP_GRAD: inputSummary.ipGrades,
+    avb: inputSummary.tapOffTotal,
+    avb_tekst: inputSummary.tapOffTexts,
+    avtappingsbokser_tekst: inputSummary.tapOffTexts,
+    AVTAPPINGSBOKSER_TEKST: inputSummary.tapOffTexts,
+    avb_pris: formatNoCurrencyWithKr(inputSummary.tapOffPriceTotal),
+    avb_pris_nok: formatNoCurrencyWithKr(inputSummary.tapOffPriceTotal),
+    avb_sum: formatNoCurrencyWithKr(inputSummary.tapOffPriceTotal),
+    avb_sum_nok: formatNoCurrencyWithKr(inputSummary.tapOffPriceTotal),
+    avtappingsbokser_pris: formatNoCurrencyWithKr(inputSummary.tapOffPriceTotal),
+    avtappingsbokser_pris_nok: formatNoCurrencyWithKr(inputSummary.tapOffPriceTotal),
+    AVTAPPINGSBOKSER_PRIS: formatNoCurrencyWithKr(inputSummary.tapOffPriceTotal),
     bre: inputSummary.brannElementTotal,
+    exp: Number(inputSummary.expansionElementTotal) > 0
+      ? `${inputSummary.expansionElementTotal} stk. Ekspansjonselement`
+      : '',
+    ekspansjonselement: Number(inputSummary.expansionElementTotal) > 0
+      ? `${inputSummary.expansionElementTotal} stk. Ekspansjonselement`
+      : '',
+    EXPANSJONSELEMENT: Number(inputSummary.expansionElementTotal) > 0
+      ? `${inputSummary.expansionElementTotal} stk. Ekspansjonselement`
+      : '',
     brt: '',
     brp: '',
     stv: formatNoCurrency(totals.selectedAddonTotal),
@@ -1013,8 +1691,16 @@ function buildOfferPlaceholderValues(project, offerNumber, offerDate, revision =
     engineering_margin_nok: formatNoCurrency(totals.engineeringMargin),
     total_incl_engineering_nok: formatNoCurrency(totals.totalInclEngineering),
     oppheng_nok: formatNoCurrency(totals.oppheng),
+    tap_off_box_total_nok: formatNoCurrencyWithKr(totals.tapOffBoxTotal),
+    tap_off_box_offer_total_nok: formatNoCurrencyWithKr(totals.tapOffOfferTotal),
+    total_avtappingsbokser_nok: formatNoCurrencyWithKr(totals.tapOffOfferTotal),
+    avb_total_nok: formatNoCurrencyWithKr(totals.tapOffOfferTotal),
     selected_addon_total_nok: formatNoCurrency(offerIncludedTotal),
-    total_valgte_nok: formatNoCurrency(offerIncludedTotal)
+    total_valgte_nok: formatNoCurrency(offerIncludedTotal),
+    usd_nok_dagens: usdNokRate ? `USD ${usdNokRate}` : '',
+    eur_nok_dagens: eurNokRate ? `EUR ${eurNokRate}` : '',
+    USD_NOK_DAGENS: usdNokRate ? `USD ${usdNokRate}` : '',
+    EUR_NOK_DAGENS: eurNokRate ? `EUR ${eurNokRate}` : ''
   };
 
   return placeholders;
@@ -1051,6 +1737,11 @@ async function buildOfferLinePlaceholderValues(project) {
     const brannQtyNum = toFiniteNumber(input.fbQty ?? input.fireBarrierQty);
     const brannQty = Number.isFinite(brannQtyNum) ? brannQtyNum : 0;
     const hasBrannElements = brannQty > 0;
+    const ipGrade = resolveIpGradeFromSeries(input.series);
+    const expansionQty = resolveExpansionQtyFromLine(line, input);
+    const expansionText = expansionQty > 0
+      ? `${formatNoInteger(expansionQty)} stk. Ekspansjonselement`
+      : '';
 
     const montasjePrice = formatNoCurrencyWithKr(lineTotals.totalInclMontasje);
     const engineeringPrice = formatNoCurrencyWithKr(lineTotals.totalInclEngineering);
@@ -1062,6 +1753,10 @@ async function buildOfferLinePlaceholderValues(project) {
     const engineeringHoursValue = formatNoIntegerUp(lineTotals?.engineering?.totalHours);
     const montasjeHoursLabel = montasjeHoursValue ? `${montasjeHoursValue} timer totalt` : '';
     const engineeringHoursLabel = engineeringHoursValue ? `${engineeringHoursValue} timer totalt` : '';
+    const tapOffItems = resolveTapOffItemsFromLine(line, input);
+    const tapOffText = buildTapOffOfferText(line, input);
+    const tapOffTotalQty = tapOffItems.reduce((sum, item)=>sum + Number(item.qty || 0), 0);
+    const tapOffPriceTotal = resolveTapOffOfferPriceTotal(line, input);
 
     linePlaceholderSets.push({
       lnr: lineNumber,
@@ -1074,10 +1769,26 @@ async function buildOfferLinePlaceholderValues(project) {
       led: safeString(input.ledere),
       ste: normalizeElementLabel(input.startEl),
       sle: normalizeElementLabel(input.sluttEl),
-      avb: formatNoInteger(input.boxQty),
+      ipg: ipGrade,
+      ip_grad: ipGrade,
+      IP_GRAD: ipGrade,
+      avb: formatNoInteger(tapOffTotalQty),
+      avb_tekst: tapOffText,
+      avtappingsbokser_tekst: tapOffText,
+      AVTAPPINGSBOKSER_TEKST: tapOffText,
+      avb_pris: formatNoCurrencyWithKr(tapOffPriceTotal),
+      avb_pris_nok: formatNoCurrencyWithKr(tapOffPriceTotal),
+      avb_sum: formatNoCurrencyWithKr(tapOffPriceTotal),
+      avb_sum_nok: formatNoCurrencyWithKr(tapOffPriceTotal),
+      avtappingsbokser_pris: formatNoCurrencyWithKr(tapOffPriceTotal),
+      avtappingsbokser_pris_nok: formatNoCurrencyWithKr(tapOffPriceTotal),
+      AVTAPPINGSBOKSER_PRIS: formatNoCurrencyWithKr(tapOffPriceTotal),
       bre: hasBrannElements
         ? `${formatNoInteger(brannQty)} stk. Branngjennomforing EI 60/90/120`
         : '',
+      exp: expansionText,
+      ekspansjonselement: expansionText,
+      EXPANSJONSELEMENT: expansionText,
       total_ex_montasje_nok: formatNoCurrency(lineOfferAmounts.mainVisibleTotal),
       stv: formatNoCurrency(lineOfferAmounts.mainVisibleTotal),
       stv_hoved: formatNoCurrency(lineOfferAmounts.mainVisibleTotal),
@@ -1197,13 +1908,28 @@ function replacePlaceholdersInXml(xml, placeholders) {
     return output;
   };
 
+  const replaceCharSplitPlaceholder = (input, key, escapedValue)=>{
+    const normalizedKey = String(key || '');
+    if (!normalizedKey) return input;
+    const chars = [...normalizedKey];
+    const bridge = '(?:\\s|</w:t>(?:(?!<w:t)[\\s\\S])*<w:t[^>]*>)*';
+    const body = chars.map(ch=>`${escapeRegex(ch)}${bridge}`).join('');
+    const open = `\\{${bridge}\\{${bridge}`;
+    const close = `${bridge}\\}${bridge}\\}`;
+    const pattern = new RegExp(`${open}${body}${close}`, 'g');
+    return input.replace(pattern, escapedValue);
+  };
+
   let output = String(xml);
-  Object.entries(placeholders).forEach(([key, rawValue])=>{
+  const orderedEntries = Object.entries(placeholders)
+    .sort((a, b)=>String(b[0] || '').length - String(a[0] || '').length);
+  orderedEntries.forEach(([key, rawValue])=>{
     const escapedValue = escapeXml(rawValue ?? '');
     const pattern = new RegExp(`\\{\\{\\s*${escapeRegex(key)}\\s*\\}\\}`, 'g');
     output = output.replace(pattern, escapedValue);
     output = replaceDelimiterSplitPlaceholder(output, key, escapedValue);
     output = replaceSplitThreeLetterPlaceholder(output, key, escapedValue);
+    output = replaceCharSplitPlaceholder(output, key, escapedValue);
   });
   return output;
 }
@@ -1299,15 +2025,24 @@ function expandOpphengRepeatBlocks(xml, opphengPlaceholderSets) {
   });
 }
 
-async function generateOfferDocxBuffer(project, offerNumber, offerDate, revision = 0) {
-  await fs.access(OFFER_TEMPLATE_FILE);
-  const placeholders = buildOfferPlaceholderValues(project, offerNumber, offerDate, revision);
+async function generateOfferDocx(project, offerNumber, offerDate, revision = 0, userProfile = {}) {
+  const offerTemplateFile = await resolveOfferTemplateFile();
+  console.log(`[offer-template] Bruker mal: ${offerTemplateFile}`);
+  const offerLines = Array.isArray(project?.lines) ? project.lines : [];
+  const debugSummary = offerLines.map(line=>{
+    const input = (line && typeof line === 'object' && line.inputs && typeof line.inputs === 'object')
+      ? line.inputs
+      : {};
+    return buildOfferLineDebugSummary(line, input);
+  });
+  console.log(`[offer-template] Prosjekt "${safeString(project?.name)}" plassholderdata: ${JSON.stringify(debugSummary)}`);
+  const placeholders = buildOfferPlaceholderValues(project, offerNumber, offerDate, revision, userProfile);
   const {
     linePlaceholderSets,
     firePlaceholderSets,
     opphengPlaceholderSets
   } = await buildOfferLinePlaceholderValues(project);
-  const zip = new AdmZip(OFFER_TEMPLATE_FILE);
+  const zip = new AdmZip(offerTemplateFile);
   const entries = zip.getEntries().filter(entry=>
     !entry.isDirectory &&
     entry.entryName.startsWith('word/') &&
@@ -1325,7 +2060,10 @@ async function generateOfferDocxBuffer(project, offerNumber, offerDate, revision
     }
   });
 
-  return zip.toBuffer();
+  return {
+    buffer: zip.toBuffer(),
+    templateFile: offerTemplateFile
+  };
 }
 
 async function fetchWithTimeout(url, options = {}) {
@@ -1841,11 +2579,24 @@ async function sendMail({ subject, html }) {
 
 app.get('/api/health', async (_req, res) => {
   const now = new Date().toISOString();
+  let offerTemplate = null;
+  try {
+    const filePath = await resolveOfferTemplateFile();
+    offerTemplate = {
+      fileName: path.basename(filePath),
+      filePath
+    };
+  } catch (err) {
+    offerTemplate = {
+      error: err?.message || 'Fant ikke tilbudsmal'
+    };
+  }
   return res.json({
     ok: true,
     service: 'busbar-api',
     time: now,
-    runtimeDataDir: RUNTIME_DATA_DIR
+    runtimeDataDir: RUNTIME_DATA_DIR,
+    offerTemplate
   });
 });
 
@@ -1860,11 +2611,91 @@ app.get('/api/market-data', async (req, res) => {
   }
 });
 
-app.get('/api/user-projects', async (req, res) => {
+app.post('/api/auth/register', async (req, res) => {
+  try {
+    const email = normalizeEmail(req.body?.email);
+    const password = normalizePassword(req.body?.password);
+    const confirmPassword = normalizePassword(req.body?.confirmPassword);
+    const profile = normalizeUserProfile(req.body?.profile || req.body);
+    if (!isValidEmail(email)) {
+      return res.status(400).json({ error: 'Ugyldig e-post' });
+    }
+    if (!isValidPassword(password)) {
+      return res.status(400).json({ error: 'Passord må være minst 4 tegn' });
+    }
+    if (password !== confirmPassword) {
+      return res.status(400).json({ error: 'Passordene er ikke like' });
+    }
+    if (!isCompleteUserProfile(profile)) {
+      return res.status(400).json({ error: 'Fyll inn navn, telefon, selskap og stilling' });
+    }
+
+    const userRecord = await withUserAuthLock(async () => {
+      const store = await readUserAuthStore();
+      if (store.users[email]) {
+        const err = new Error('Bruker finnes allerede');
+        err.statusCode = 409;
+        throw err;
+      }
+      const now = new Date().toISOString();
+      store.users[email] = {
+        email,
+        profile,
+        passwordHash: await hashPassword(password),
+        createdAt: now,
+        updatedAt: now
+      };
+      await writeUserAuthStore(store);
+      return store.users[email];
+    });
+
+    return res.status(201).json({
+      email: userRecord.email,
+      profile: userRecord.profile,
+      token: createAuthToken(userRecord.email)
+    });
+  } catch (err) {
+    if (err?.statusCode === 409) {
+      return res.status(409).json({ error: 'Bruker finnes allerede. Logg inn med passordet ditt.' });
+    }
+    console.error('Oppretting av bruker feilet', err);
+    return res.status(500).json({ error: 'Kunne ikke opprette bruker' });
+  }
+});
+
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const email = normalizeEmail(req.body?.email);
+    const password = normalizePassword(req.body?.password);
+    if (!isValidEmail(email) || !password) {
+      return res.status(400).json({ error: 'Ugyldig e-post eller passord' });
+    }
+
+    const store = await readUserAuthStore();
+    const userRecord = store.users[email];
+    if (!userRecord || !(await verifyPassword(password, userRecord.passwordHash))) {
+      return res.status(401).json({ error: 'Feil e-post eller passord' });
+    }
+
+    return res.json({
+      email: userRecord.email,
+      profile: userRecord.profile,
+      token: createAuthToken(userRecord.email)
+    });
+  } catch (err) {
+    console.error('Innlogging feilet', err);
+    return res.status(500).json({ error: 'Kunne ikke logge inn' });
+  }
+});
+
+app.get('/api/user-projects', requireUserAuth, async (req, res) => {
   try {
     const email = normalizeEmail(req.query?.email);
     if (!isValidEmail(email)) {
       return res.status(400).json({ error: 'Ugyldig e-post' });
+    }
+    if (email !== req.userAuth.email) {
+      return res.status(403).json({ error: 'Ingen tilgang til denne brukeren' });
     }
     const archive = await readProjectArchive();
     const userRecord = archive.users[email] || {
@@ -1883,11 +2714,14 @@ app.get('/api/user-projects', async (req, res) => {
   }
 });
 
-app.post('/api/user-projects/sync', async (req, res) => {
+app.post('/api/user-projects/sync', requireUserAuth, async (req, res) => {
   try {
     const email = normalizeEmail(req.body?.email);
     if (!isValidEmail(email)) {
       return res.status(400).json({ error: 'Ugyldig e-post' });
+    }
+    if (email !== req.userAuth.email) {
+      return res.status(403).json({ error: 'Ingen tilgang til denne brukeren' });
     }
     if (!Array.isArray(req.body?.projects)) {
       return res.status(400).json({ error: 'Mangler prosjekter' });
@@ -1923,9 +2757,177 @@ app.post('/api/user-projects/sync', async (req, res) => {
   }
 });
 
+app.get('/api/customer-database', requireUserAuth, async (_req, res) => {
+  try {
+    const database = await buildMergedCustomerDatabase();
+    return res.json(database);
+  } catch (err) {
+    console.error('Henting av kundedatabase feilet', err);
+    return res.status(500).json({ error: 'Kunne ikke hente kundedatabase' });
+  }
+});
+
+app.get('/api/admin/customer-database', requireAdminAuth, async (_req, res) => {
+  try {
+    const database = await buildMergedCustomerDatabase();
+    return res.json({
+      generatedAt: new Date().toISOString(),
+      customers: database.customers
+    });
+  } catch (err) {
+    console.error('Henting av admin kundedatabase feilet', err);
+    return res.status(500).json({ error: 'Kunne ikke hente kundedatabase' });
+  }
+});
+
+app.post('/api/admin/customer-database/upsert', requireAdminAuth, async (req, res) => {
+  try {
+    const originalCustomer = safeString(req.body?.originalCustomer);
+    const originalContactPerson = safeString(req.body?.originalContactPerson);
+    const customerName = safeString(req.body?.customer);
+    const address = safeString(req.body?.address);
+    const postalPlace = safeString(req.body?.postalPlace);
+    const contactPerson = safeString(req.body?.contactPerson);
+    const phone = safeString(req.body?.phone);
+    const isContactUpdate = Boolean(originalContactPerson || contactPerson || phone);
+    if (!customerName) {
+      return res.status(400).json({ error: 'Kunde mangler' });
+    }
+
+    const result = await withCustomerDatabaseLock(async () => {
+      const database = await readCustomerDatabase();
+      const customers = database.customers;
+      const findCustomerIndex = name => customers.findIndex(customer => normalizeLookupKey(customer.name) === normalizeLookupKey(name));
+      let customerIndex = originalCustomer ? findCustomerIndex(originalCustomer) : -1;
+      if (customerIndex < 0) customerIndex = findCustomerIndex(customerName);
+      let customer = customerIndex >= 0 ? customers[customerIndex] : null;
+      if (!customer) {
+        customer = {
+          id: generateRecordId('customer'),
+          name: customerName,
+          address,
+          postalPlace,
+          contacts: []
+        };
+        customers.push(customer);
+      }
+      customer.name = customerName;
+      customer.address = address;
+      customer.postalPlace = postalPlace;
+      if (isContactUpdate) {
+        const findContactIndex = name => customer.contacts.findIndex(contact => normalizeLookupKey(contact.name) === normalizeLookupKey(name));
+        let contactIndex = originalContactPerson ? findContactIndex(originalContactPerson) : -1;
+        if (contactIndex < 0) contactIndex = findContactIndex(contactPerson);
+        let contact = contactIndex >= 0 ? customer.contacts[contactIndex] : null;
+        if (!contact) {
+          contact = { id: generateRecordId('contact'), name: contactPerson, phone };
+          customer.contacts.push(contact);
+        }
+        contact.name = contactPerson;
+        contact.phone = phone;
+      }
+      await writeCustomerDatabase({ customers });
+
+      let updatedProjects = 0;
+      const archive = await readProjectArchive();
+      Object.values(archive.users || {}).forEach(user => {
+        (Array.isArray(user.projects) ? user.projects : []).forEach(project => {
+          const customerMatches = originalCustomer
+            ? normalizeLookupKey(project.customer) === normalizeLookupKey(originalCustomer)
+            : false;
+          if (!customerMatches) return;
+          if (!isContactUpdate) {
+            project.customer = customerName;
+            project.customerAddress = address;
+            project.customerPostalPlace = postalPlace;
+          }
+          if (isContactUpdate && normalizeLookupKey(project.contactPerson) === normalizeLookupKey(originalContactPerson || contactPerson)) {
+            project.contactPerson = contactPerson;
+            project.contactPhone = phone;
+          }
+          project.updatedAt = new Date().toISOString();
+          updatedProjects += 1;
+        });
+      });
+      if (originalCustomer) {
+        await writeProjectArchive(archive);
+      }
+      return { updatedProjects };
+    });
+
+    const merged = await buildMergedCustomerDatabase();
+    return res.json({
+      ...result,
+      customers: merged.customers
+    });
+  } catch (err) {
+    console.error('Oppdatering av kundedatabase feilet', err);
+    return res.status(500).json({ error: 'Kunne ikke oppdatere kundedatabase' });
+  }
+});
+
+app.post('/api/admin/customer-database/delete', requireAdminAuth, async (req, res) => {
+  try {
+    const customerName = safeString(req.body?.customer);
+    const contactPerson = safeString(req.body?.contactPerson);
+    if (!customerName) {
+      return res.status(400).json({ error: 'Kunde mangler' });
+    }
+
+    const result = await withCustomerDatabaseLock(async () => {
+      const database = await readCustomerDatabase();
+      const customers = database.customers;
+      const customerIndex = customers.findIndex(customer => normalizeLookupKey(customer.name) === normalizeLookupKey(customerName));
+      if (customerIndex >= 0) {
+        if (contactPerson) {
+          customers[customerIndex].contacts = customers[customerIndex].contacts.filter(
+            contact => normalizeLookupKey(contact.name) !== normalizeLookupKey(contactPerson)
+          );
+        } else {
+          customers.splice(customerIndex, 1);
+        }
+        await writeCustomerDatabase({ customers });
+      }
+
+      let updatedProjects = 0;
+      const archive = await readProjectArchive();
+      Object.values(archive.users || {}).forEach(user => {
+        (Array.isArray(user.projects) ? user.projects : []).forEach(project => {
+          if (normalizeLookupKey(project.customer) !== normalizeLookupKey(customerName)) return;
+          if (contactPerson) {
+            if (normalizeLookupKey(project.contactPerson) !== normalizeLookupKey(contactPerson)) return;
+            project.contactPerson = '';
+            project.contactPhone = '';
+          } else {
+            project.customer = '';
+            project.customerAddress = '';
+            project.customerPostalPlace = '';
+            project.contactPerson = '';
+            project.contactPhone = '';
+          }
+          project.updatedAt = new Date().toISOString();
+          updatedProjects += 1;
+        });
+      });
+      await writeProjectArchive(archive);
+      return { updatedProjects };
+    });
+
+    const merged = await buildMergedCustomerDatabase();
+    return res.json({
+      ...result,
+      customers: merged.customers
+    });
+  } catch (err) {
+    console.error('Sletting i kundedatabase feilet', err);
+    return res.status(500).json({ error: 'Kunne ikke slette fra kundedatabase' });
+  }
+});
+
 app.get('/api/admin/project-overview', requireAdminAuth, async (req, res) => {
   try {
     const archive = await readProjectArchive();
+    const authStore = await readUserAuthStore();
     const users = Object.values(archive.users).map(user => {
       const projects = Array.isArray(user.projects) ? user.projects : [];
       const projectsWithCounts = projects.map(project => ({
@@ -1937,6 +2939,8 @@ app.get('/api/admin/project-overview', requireAdminAuth, async (req, res) => {
       }, 0);
       return {
         email: user.email,
+        profile: authStore.users[user.email]?.profile || null,
+        registered: Boolean(authStore.users[user.email]),
         updatedAt: user.updatedAt,
         projectCount: projectsWithCounts.length,
         lineCount,
@@ -2024,24 +3028,36 @@ app.post('/api/send-calculation-email', async (req, res) => {
   }
 });
 
-app.post('/api/generate-offer', async (req, res) => {
+app.post('/api/generate-offer', requireUserAuth, async (req, res) => {
   try {
     const project = (req.body && typeof req.body === 'object') ? req.body.project : null;
     if (!project || typeof project !== 'object') {
       return res.status(400).json({ error: 'Mangler prosjektdata' });
     }
+    const authStore = await readUserAuthStore();
+    const userRecord = authStore.users[req.userAuth.email];
+    if (!userRecord) {
+      return res.status(401).json({ error: 'Logg inn for å generere tilbud' });
+    }
 
     const now = new Date();
     const { offerNumber, revision } = await allocateOfferIdentity(project, now);
-    const buffer = await generateOfferDocxBuffer(project, offerNumber, now, revision);
+    const generated = await generateOfferDocx(project, offerNumber, now, revision, {
+      email: userRecord.email,
+      ...userRecord.profile
+    });
     const projectName = sanitizeFileName(project.name || 'prosjekt');
-    const fileName = `Tilbud-${projectName}-${offerNumber}-rev${revision}.docx`;
+    const fileName = `Tilbud-${projectName}-${offerNumber}-revisjon${revision}.docx`;
+    const encodedFileName = encodeURIComponent(fileName);
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
-    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"; filename*=UTF-8''${encodedFileName}`);
     res.setHeader('X-Offer-Number', offerNumber);
     res.setHeader('X-Offer-Revision', String(revision));
-    res.status(200).send(buffer);
+    res.setHeader('X-Offer-Filename', fileName);
+    res.setHeader('X-Offer-Template', path.basename(generated.templateFile));
+    res.setHeader('X-Offer-Template-Path', generated.templateFile);
+    res.status(200).send(generated.buffer);
   } catch (err) {
     console.error('Tilbudsgenerering feilet', err);
     if (err && err.code === 'ENOENT') {
@@ -2052,7 +3068,14 @@ app.post('/api/generate-offer', async (req, res) => {
 });
 
 const staticDir = path.resolve(__dirname, '..');
-app.use(express.static(staticDir));
+app.use(express.static(staticDir, {
+  setHeaders(res, filePath) {
+    const ext = path.extname(filePath).toLowerCase();
+    if (['.html', '.js', '.css'].includes(ext)) {
+      res.setHeader('Cache-Control', 'no-store');
+    }
+  }
+}));
 
 const port = Number(process.env.PORT) || 5500;
 const host = String(process.env.HOST || '0.0.0.0').trim() || '0.0.0.0';

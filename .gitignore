@@ -4,3 +4,5 @@ node_modules/
 dist/
 coverage/
 *.log
+data/user-auth.json
+data/customer-database.json

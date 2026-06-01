@@ -390,6 +390,13 @@ a.nav-page-btn{
   justify-content:center;
 }
 
+a.nav-page-btn.is-disabled,
+a.nav-page-btn[aria-disabled="true"]{
+  opacity:0.55;
+  cursor:not-allowed;
+  pointer-events:none;
+}
+
 .project-pill{
   display:flex;
   align-items:center;
@@ -573,6 +580,19 @@ header p{margin:0 0 16px 0;color:var(--muted)}
   min-height:1em;
   margin:0;
   color:var(--warning);
+}
+.register-inline{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  flex-wrap:wrap;
+  color:var(--muted);
+  font-size:0.9rem;
+}
+.btn.btn-small{
+  padding:6px 10px;
+  font-size:0.85rem;
 }
 .project-form .actions{
   margin-top:4px;
@@ -850,6 +870,40 @@ tbody tr:hover{background:rgba(255,255,255,0.03)}
   justify-self:start;
   white-space:nowrap;
 }
+.tap-off-offer-rows{
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+  margin-top:-12px;
+  margin-bottom:18px;
+  padding:12px;
+  border:1px solid var(--card-border);
+  border-radius:10px;
+  background:rgba(43,58,88,0.18);
+}
+.tap-off-offer-rows[hidden]{
+  display:none;
+}
+.tap-off-offer-row{
+  grid-template-columns:repeat(3, minmax(220px,1fr));
+  align-items:center;
+}
+.tap-off-margin-item{
+  grid-template-columns:max-content 88px max-content;
+}
+.tap-off-total-item{
+  display:flex;
+  align-items:center;
+  gap:6px;
+  justify-content:flex-start;
+}
+.tap-off-delete-btn{
+  margin-left:10px;
+}
+.tap-off-summary-row{
+  padding-top:8px;
+  border-top:1px solid var(--card-border);
+}
 .aligned-total-right{
   padding-left:12px;
 }
@@ -914,6 +968,27 @@ footer{margin-top:20px;color:var(--muted)}
   gap:var(--form-gap);
   align-items:center;
   flex-wrap:wrap;
+}
+.admin-form-grid{
+  display:grid;
+  grid-template-columns:repeat(5, minmax(160px, 1fr));
+  gap:12px;
+}
+.admin-customer-form .actions{
+  justify-content:flex-start;
+  flex-wrap:wrap;
+}
+.admin-table td:last-child{
+  white-space:nowrap;
+}
+.admin-row-actions{
+  display:flex;
+  gap:8px;
+  align-items:center;
+}
+.missing-details-list{
+  margin:0 0 12px 20px;
+  color:var(--warning);
 }
 .line-number-field{
   max-width:240px;

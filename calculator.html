@@ -96,7 +96,7 @@ input[type="number"]::-webkit-inner-spin-button{
         <span class="market-status" id="marketStatus">Henter...</span>
       </div>
     </div>
-    <p>Leser rå CSV fra <code>data/busbar-webapp-embedded-v2.csv</code>, <code>data/busbar-webapp-embedded-v2.1.csv</code> og <code>data/XAP_busbar_prisliste_ekstrakt_5W_clean.csv</code>.</p>
+    <p>Leser rå CSV fra <code>data/busbar-webapp-embedded-v2.csv</code>, <code>data/busbar-webapp-embedded-v2.1.csv</code>, <code>data/busbar-webapp-embedded-v2.2.csv</code> og <code>data/XAP_busbar_prisliste_ekstrakt_5W_clean.csv</code>.</p>
   </header>
 
   <main class="app-views">
@@ -128,9 +128,9 @@ input[type="number"]::-webkit-inner-spin-button{
         <label>System*<br>
           <select id="series">
             <option value="">Velg…</option>
-              <option value="XCM">XCM Legrand (160-1000A)</option>
-            <option value="XCP-S">XCP-S Legrand (1250-5000A)</option>
-            <option value="XAP-B">XAP-B Eaton (400-5000A)</option>
+              <option value="XCM">Metallkapslet IP55 (160-1000A)</option>
+            <option value="XCP-S">Metallkapslet IP55 (1250-5000A)</option>
+            <option value="RCP-IP68">Epoxy IP68 (1250A-5000A)</option>
             
           </select>
         </label>
@@ -157,6 +157,7 @@ input[type="number"]::-webkit-inner-spin-button{
         <label>Ledere*<br>
           <select id="ledere">
             <option value="">Velg…</option>
+            <option>3F+N</option>
             <option>3F+N+PE</option>
             <option>3F+PE</option>
           </select>
@@ -184,6 +185,10 @@ input[type="number"]::-webkit-inner-spin-button{
 
       <!-- Rad 3 -->
       <div class="row">
+        <label>Brannelement (antall)<br>
+          <input id="fbQty" type="number" step="1" inputmode="numeric" placeholder="0">
+        </label>
+
         <label>Med avtappingspunkter<br>
           <select id="dist">
             <option value="">Velg…</option>
@@ -191,21 +196,32 @@ input[type="number"]::-webkit-inner-spin-button{
             <option>Nei</option>
           </select>
         </label>
+      </div>
 
-        <label>Avtappingsbokser (antall)<br>
-          <input id="boxQty" type="number" step="1" inputmode="numeric" placeholder="0">
-        </label>
-
+      <div class="row" id="tapOffConfigRow" hidden>
         <label>Type boks<br>
           <select id="boxSel">
             <option value="">Velg...</option>
           </select>
         </label>
 
-        <label>Brannelement (antall)<br>
-          <input id="fbQty" type="number" step="1" inputmode="numeric" placeholder="0">
-            </label>
-          </div>
+        <label>Avtappingsbokser (antall)<br>
+          <input id="boxQty" type="number" step="1" inputmode="numeric" placeholder="0">
+        </label>
+
+        <label>Sum innmat<br>
+          <input id="boxInnmatSum" type="number" step="0.01" inputmode="decimal" min="0" placeholder="0">
+        </label>
+
+        <label>&nbsp;<br>
+          <button id="addBoxItemBtn" type="button" class="btn alt">Legg til</button>
+        </label>
+      </div>
+      <div class="row" id="boxItemsRow" hidden>
+        <div class="full-width">
+          <div id="boxItemsPreview" class="muted-text"></div>
+        </div>
+      </div>
         <p class="muted-text">* er obligatoriske felt.</p>
       </div>
 
@@ -352,6 +368,7 @@ input[type="number"]::-webkit-inner-spin-button{
           <div class="total-item"><strong>Total opphengsmateriell:</strong> <span id="total"></span> NOK eks. mva</div>
         </div>
       </div>
+      <div id="tapOffOfferRows" class="tap-off-offer-rows" hidden></div>
       <div class="totals-line totals-selectors">
         <div class="addon-selectors" role="group" aria-label="Inkluder i tilbud">
           <span class="addon-selectors-title"><strong>Inkluder i tilbud:</strong></span>
@@ -421,10 +438,48 @@ input[type="number"]::-webkit-inner-spin-button{
         <label for="loginPassword">Passord
           <input id="loginPassword" type="password" autocomplete="current-password" required>
         </label>
+        <div class="register-inline">
+          <span>Ved første innlogging opprett ny bruker</span>
+          <button id="registerSubmit" type="button" class="btn alt btn-small">Opprett bruker</button>
+        </div>
         <p id="loginError" class="login-error" role="alert"></p>
         <div class="actions">
           <button id="loginCancel" type="button" class="btn alt">Avbryt</button>
           <button id="loginSubmit" type="button" class="btn">Logg på</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id="registerModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="registerTitle">
+    <div class="modal">
+      <h3 id="registerTitle">Opprett bruker</h3>
+      <form class="login-form" onsubmit="return false;" autocomplete="off">
+        <label for="registerName">Navn *
+          <input id="registerName" type="text" autocomplete="name" placeholder="Ola Nordmann" required>
+        </label>
+        <label for="registerEmail">E-post *
+          <input id="registerEmail" type="email" inputmode="email" autocomplete="email" placeholder="ola@busbar.no" required>
+        </label>
+        <label for="registerPhone">Telefon *
+          <input id="registerPhone" type="tel" autocomplete="tel" placeholder="+47 12 34 56 78" required>
+        </label>
+        <label for="registerCompany">Selskap *
+          <input id="registerCompany" type="text" autocomplete="organization" placeholder="Busbar AS" required>
+        </label>
+        <label for="registerPosition">Stilling *
+          <input id="registerPosition" type="text" autocomplete="organization-title" placeholder="Prosjektleder" required>
+        </label>
+        <label for="registerPassword">Passord *
+          <input id="registerPassword" type="password" autocomplete="new-password" required>
+        </label>
+        <label for="registerConfirmPassword">Bekreft passord *
+          <input id="registerConfirmPassword" type="password" autocomplete="new-password" required>
+        </label>
+        <p id="registerError" class="login-error" role="alert"></p>
+        <div class="actions">
+          <button id="registerCancel" type="button" class="btn alt">Avbryt</button>
+          <button id="registerCreateBtn" type="button" class="btn">Opprett bruker</button>
         </div>
       </form>
     </div>
@@ -459,6 +514,47 @@ input[type="number"]::-webkit-inner-spin-button{
           <button id="projectSubmit" type="button" class="btn" disabled>Fortsett</button>
         </div>
       </form>
+    </div>
+  </div>
+
+  <div id="projectDetailsModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="projectDetailsTitle">
+    <div class="modal">
+      <h3 id="projectDetailsTitle">Kundeinformasjon</h3>
+      <form class="project-form" onsubmit="return false;" autocomplete="off">
+        <label for="projectDetailsCustomer">Kunde
+          <input id="projectDetailsCustomer" type="text" disabled>
+        </label>
+        <label for="projectDetailsAddress">Adresse
+          <input id="projectDetailsAddress" type="text" autocomplete="street-address" required>
+        </label>
+        <label for="projectDetailsPostalPlace">Postnummer og sted
+          <input id="projectDetailsPostalPlace" type="text" autocomplete="postal-code" required>
+        </label>
+        <label for="projectDetailsContact">Kontaktperson
+          <input id="projectDetailsContact" type="text" disabled>
+        </label>
+        <label for="projectDetailsPhone">Telefon
+          <input id="projectDetailsPhone" type="tel" autocomplete="tel" required>
+        </label>
+        <p id="projectDetailsError" class="login-error project-error" role="alert"></p>
+        <div class="actions">
+          <button id="projectDetailsCancel" type="button" class="btn alt">Avbryt</button>
+          <button id="projectDetailsSubmit" type="button" class="btn">Lagre</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id="offerDetailsWarningModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="offerDetailsWarningTitle">
+    <div class="modal">
+      <h3 id="offerDetailsWarningTitle">Mangler detaljer</h3>
+      <p class="muted-text">Prosjektet mangler følgende felt:</p>
+      <ul id="offerDetailsMissingList" class="missing-details-list"></ul>
+      <p>Kontakt administrator for å legge til detaljer</p>
+      <div class="actions">
+        <button id="offerDetailsCancel" type="button" class="btn alt">Avbryt</button>
+        <button id="offerDetailsContinue" type="button" class="btn">Generer likevel</button>
+      </div>
     </div>
   </div>
 

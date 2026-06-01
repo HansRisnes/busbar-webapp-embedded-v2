@@ -49,6 +49,7 @@
           <p id="adminGeneratedAt" class="muted-text">Sist oppdatert: -</p>
         </div>
         <div class="dashboard-actions">
+          <button id="adminCustomersBtn" type="button" class="btn alt">Kundedatabase</button>
           <button id="adminRefreshBtn" type="button" class="btn alt">Oppdater</button>
         </div>
       </div>
@@ -61,6 +62,10 @@
           <thead>
             <tr>
               <th><button type="button" class="admin-col-sort-btn" data-table="projects" data-key="email" data-type="text">Epost <span class="sort-indicator">↕</span></button></th>
+              <th><button type="button" class="admin-col-sort-btn" data-table="projects" data-key="userName" data-type="text">Navn <span class="sort-indicator">↕</span></button></th>
+              <th><button type="button" class="admin-col-sort-btn" data-table="projects" data-key="userPhone" data-type="text">Telefon <span class="sort-indicator">↕</span></button></th>
+              <th><button type="button" class="admin-col-sort-btn" data-table="projects" data-key="userCompany" data-type="text">Selskap <span class="sort-indicator">↕</span></button></th>
+              <th><button type="button" class="admin-col-sort-btn" data-table="projects" data-key="userPosition" data-type="text">Stilling <span class="sort-indicator">↕</span></button></th>
               <th><button type="button" class="admin-col-sort-btn" data-table="projects" data-key="name" data-type="text">Prosjekt <span class="sort-indicator">↕</span></button></th>
               <th><button type="button" class="admin-col-sort-btn" data-table="projects" data-key="customer" data-type="text">Kunde <span class="sort-indicator">↕</span></button></th>
               <th><button type="button" class="admin-col-sort-btn" data-table="projects" data-key="contactPerson" data-type="text">Kontaktperson <span class="sort-indicator">↕</span></button></th>
@@ -81,6 +86,10 @@
           <thead>
             <tr>
               <th><button type="button" class="admin-col-sort-btn" data-table="lines" data-key="email" data-type="text">Epost <span class="sort-indicator">↕</span></button></th>
+              <th><button type="button" class="admin-col-sort-btn" data-table="lines" data-key="userName" data-type="text">Navn <span class="sort-indicator">↕</span></button></th>
+              <th><button type="button" class="admin-col-sort-btn" data-table="lines" data-key="userPhone" data-type="text">Telefon <span class="sort-indicator">↕</span></button></th>
+              <th><button type="button" class="admin-col-sort-btn" data-table="lines" data-key="userCompany" data-type="text">Selskap <span class="sort-indicator">↕</span></button></th>
+              <th><button type="button" class="admin-col-sort-btn" data-table="lines" data-key="userPosition" data-type="text">Stilling <span class="sort-indicator">↕</span></button></th>
               <th><button type="button" class="admin-col-sort-btn" data-table="lines" data-key="projectName" data-type="text">Prosjekt <span class="sort-indicator">↕</span></button></th>
               <th><button type="button" class="admin-col-sort-btn" data-table="lines" data-key="lineNumber" data-type="text">Linje <span class="sort-indicator">↕</span></button></th>
               <th><button type="button" class="admin-col-sort-btn" data-table="lines" data-key="series" data-type="text">Serie <span class="sort-indicator">↕</span></button></th>
@@ -89,6 +98,76 @@
               <th><button type="button" class="admin-col-sort-btn" data-table="lines" data-key="totalExFreightRaw" data-type="number">Total stroemskinne ink. frakt <span class="sort-indicator">↕</span></button></th>
               <th><button type="button" class="admin-col-sort-btn" data-table="lines" data-key="dgPercentRaw" data-type="number">DG % <span class="sort-indicator">↕</span></button></th>
               <th><button type="button" class="admin-col-sort-btn" data-table="lines" data-key="updatedAtRaw" data-type="date">Oppdatert <span class="sort-indicator">↕</span></button></th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="adminCustomerCard" class="card dashboard-card" hidden>
+      <div class="dashboard-header">
+        <div class="dashboard-intro">
+          <h2>Kundedatabase</h2>
+          <p id="adminCustomerGeneratedAt" class="muted-text">Sist oppdatert: -</p>
+        </div>
+        <div class="dashboard-actions">
+          <button id="adminOverviewBtn" type="button" class="btn alt">Tilbake til oversikt</button>
+          <button id="adminCustomerRefreshBtn" type="button" class="btn alt">Oppdater</button>
+        </div>
+      </div>
+
+      <form id="adminCustomerForm" class="project-form admin-customer-form" onsubmit="return false;" autocomplete="off">
+        <input id="adminCustomerOriginalCustomer" type="hidden">
+        <input id="adminCustomerOriginalContact" type="hidden">
+        <div class="admin-form-grid">
+          <label for="adminCustomerName">Kunde
+            <input id="adminCustomerName" type="text" required>
+          </label>
+          <label for="adminCustomerAddress">Adresse
+            <input id="adminCustomerAddress" type="text">
+          </label>
+          <label for="adminCustomerPostalPlace">Postnummer og sted
+            <input id="adminCustomerPostalPlace" type="text">
+          </label>
+          <label for="adminCustomerContact">Kontaktperson
+            <input id="adminCustomerContact" type="text">
+          </label>
+          <label for="adminCustomerPhone">Telefon kontaktperson
+            <input id="adminCustomerPhone" type="tel">
+          </label>
+        </div>
+        <div class="actions">
+          <button id="adminCustomerClearBtn" type="button" class="btn alt">Tøm skjema</button>
+          <button id="adminCustomerSaveBtn" type="submit" class="btn">Lagre</button>
+        </div>
+      </form>
+      <p id="adminCustomerStatus" class="login-error project-error" role="alert"></p>
+
+      <h3>Kunde</h3>
+      <div class="admin-table-wrap">
+        <table id="adminCustomersTable" class="admin-table">
+          <thead>
+            <tr>
+              <th><button type="button" class="admin-col-sort-btn" data-table="customers" data-key="customer" data-type="text">Kunde <span class="sort-indicator">↕</span></button></th>
+              <th><button type="button" class="admin-col-sort-btn" data-table="customers" data-key="address" data-type="text">Adresse <span class="sort-indicator">↕</span></button></th>
+              <th><button type="button" class="admin-col-sort-btn" data-table="customers" data-key="postalPlace" data-type="text">Postnummer og sted <span class="sort-indicator">↕</span></button></th>
+              <th>Handling</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <h3>Kontaktperson</h3>
+      <div class="admin-table-wrap">
+        <table id="adminCustomerContactsTable" class="admin-table">
+          <thead>
+            <tr>
+              <th><button type="button" class="admin-col-sort-btn" data-table="customerContacts" data-key="contactPerson" data-type="text">Kontaktperson <span class="sort-indicator">↕</span></button></th>
+              <th><button type="button" class="admin-col-sort-btn" data-table="customerContacts" data-key="phone" data-type="text">Telefon <span class="sort-indicator">↕</span></button></th>
+              <th><button type="button" class="admin-col-sort-btn" data-table="customerContacts" data-key="customer" data-type="text">Selskap <span class="sort-indicator">↕</span></button></th>
+              <th>Handling</th>
             </tr>
           </thead>
           <tbody></tbody>

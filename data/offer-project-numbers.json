@@ -6,5 +6,17 @@
   "id:0c15e6bd-a85b-4601-a3a5-174a2fd8f756": "2026-1039",
   "id:19ff2b1b-15ca-415c-9940-d24f52dd77a0": "2026-1040",
   "id:35e3ddaa-23b7-4670-9ec8-fd4698d67494": "2026-1041",
-  "id:486cbdb4-4316-4302-81e1-d80ce9eb7903": "2026-1042"
+  "id:486cbdb4-4316-4302-81e1-d80ce9eb7903": "2026-1042",
+  "meta:test-proj|test-kunde|test": "2026-1043",
+  "id:codex-template-test": "2026-1044",
+  "id:codex-template-test-2": "2026-1045",
+  "id:codex-template-test-headers": "2026-1046",
+  "id:browser-origin-test": "2026-1047",
+  "id:c9b78278-e91b-4c24-a33c-ffa81a4723a8": "2026-1048",
+  "id:tapoff-price-test": "2026-1049",
+  "id:tapoff-format-test": "2026-1050",
+  "id:tapoff-innmat-fallback-test": "2026-1051",
+  "id:tapoff-separate-bom-test": "2026-1052",
+  "id:02ad2c26-a878-48bc-a2a7-fc5c61b03b77": "2026-1053",
+  "id:58506e74-1735-4e5f-ab89-e13dce6a2096": "2026-1054"
 }

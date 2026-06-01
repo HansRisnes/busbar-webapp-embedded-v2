@@ -13,8 +13,13 @@ const adminViewState = {
   users: [],
   projectRows: [],
   lineRows: [],
+  customers: [],
+  customerRows: [],
+  customerContactRows: [],
   projectColumnSort: { key: '', type: 'text', direction: 'asc' },
-  lineColumnSort: { key: '', type: 'text', direction: 'asc' }
+  lineColumnSort: { key: '', type: 'text', direction: 'asc' },
+  customerColumnSort: { key: '', type: 'text', direction: 'asc' },
+  customerContactColumnSort: { key: '', type: 'text', direction: 'asc' }
 };
 
 const $ = id => document.getElementById(id);
@@ -39,30 +44,32 @@ function isLocalDevelopmentHost(){
 }
 
 function resolveApiBaseUrl(){
+  let fromQuery = '';
+  try{
+    fromQuery = new URLSearchParams(window.location.search).get('apiBase') || '';
+  }catch(_err){}
+  const normalizedQuery = normalizeApiBaseUrl(fromQuery);
+  if (fromQuery && normalizedQuery){
+    try{
+      localStorage.setItem('busbar.api.base', normalizedQuery);
+    }catch(_err){}
+    return normalizedQuery;
+  }
+
+  if (isLocalDevelopmentHost()){
+    return window.location.origin;
+  }
+
   let fromStorage = '';
   try{
     fromStorage = localStorage.getItem('busbar.api.base') || '';
   }catch(_err){}
 
-  let fromQuery = '';
-  try{
-    fromQuery = new URLSearchParams(window.location.search).get('apiBase') || '';
-  }catch(_err){}
-
   const fromMeta = document.querySelector('meta[name="busbar-api-base"]')?.getAttribute('content') || '';
   const fromGlobal = typeof window.BUSBAR_API_BASE === 'string' ? window.BUSBAR_API_BASE : '';
-  const normalized = normalizeApiBaseUrl(fromQuery || fromMeta || fromGlobal || fromStorage);
-
-  if (fromQuery && normalized){
-    try{
-      localStorage.setItem('busbar.api.base', normalized);
-    }catch(_err){}
-  }
+  const normalized = normalizeApiBaseUrl(fromMeta || fromGlobal || fromStorage);
   if (normalized) return normalized;
 
-  if (isLocalDevelopmentHost()){
-    return 'http://localhost:5500';
-  }
   return '';
 }
 
@@ -94,6 +101,8 @@ function compareNoText(left, right){
 function renderTablesFromState(){
   renderProjectsTable(getSortedProjectRows());
   renderLinesTable(getSortedLineRows());
+  renderCustomersTable(getSortedCustomerRows());
+  renderCustomerContactsTable(getSortedCustomerContactRows());
 }
 
 function compareValuesByType(aValue, bValue, type = 'text'){
@@ -140,12 +149,46 @@ function getSortedLineRows(){
   return rows;
 }
 
+function getSortedCustomerRows(){
+  const rows = Array.isArray(adminViewState.customerRows) ? [...adminViewState.customerRows] : [];
+  const colSort = adminViewState.customerColumnSort;
+  if (colSort?.key){
+    rows.sort((a, b)=>{
+      const cmp = compareValuesByType(a?.[colSort.key], b?.[colSort.key], colSort.type);
+      return colSort.direction === 'desc' ? -cmp : cmp;
+    });
+  }
+  return rows;
+}
+
+function getSortedCustomerContactRows(){
+  const rows = Array.isArray(adminViewState.customerContactRows) ? [...adminViewState.customerContactRows] : [];
+  const colSort = adminViewState.customerContactColumnSort;
+  if (colSort?.key){
+    rows.sort((a, b)=>{
+      const cmp = compareValuesByType(a?.[colSort.key], b?.[colSort.key], colSort.type);
+      return colSort.direction === 'desc' ? -cmp : cmp;
+    });
+  }
+  return rows;
+}
+
 function setColumnSort(table, key, type){
-  const normalizedTable = table === 'lines' ? 'lines' : 'projects';
+  const normalizedTable = table === 'lines'
+    ? 'lines'
+    : table === 'customers'
+      ? 'customers'
+      : table === 'customerContacts'
+        ? 'customerContacts'
+        : 'projects';
   const normalizedType = type || 'text';
   const current = normalizedTable === 'lines'
     ? adminViewState.lineColumnSort
-    : adminViewState.projectColumnSort;
+    : normalizedTable === 'customers'
+      ? adminViewState.customerColumnSort
+      : normalizedTable === 'customerContacts'
+        ? adminViewState.customerContactColumnSort
+        : adminViewState.projectColumnSort;
   const next = { ...current };
   if (next.key === key){
     next.direction = next.direction === 'asc' ? 'desc' : 'asc';
@@ -156,6 +199,10 @@ function setColumnSort(table, key, type){
   }
   if (normalizedTable === 'lines'){
     adminViewState.lineColumnSort = next;
+  } else if (normalizedTable === 'customers'){
+    adminViewState.customerColumnSort = next;
+  } else if (normalizedTable === 'customerContacts'){
+    adminViewState.customerContactColumnSort = next;
   } else {
     adminViewState.projectColumnSort = next;
   }
@@ -166,9 +213,21 @@ function setColumnSort(table, key, type){
 function updateColumnSortUi(){
   const buttons = Array.from(document.querySelectorAll('.admin-col-sort-btn'));
   buttons.forEach(button=>{
-    const table = button.dataset.table === 'lines' ? 'lines' : 'projects';
+    const table = button.dataset.table === 'lines'
+      ? 'lines'
+      : button.dataset.table === 'customers'
+        ? 'customers'
+        : button.dataset.table === 'customerContacts'
+          ? 'customerContacts'
+          : 'projects';
     const key = button.dataset.key || '';
-    const state = table === 'lines' ? adminViewState.lineColumnSort : adminViewState.projectColumnSort;
+    const state = table === 'lines'
+      ? adminViewState.lineColumnSort
+      : table === 'customers'
+        ? adminViewState.customerColumnSort
+        : table === 'customerContacts'
+          ? adminViewState.customerContactColumnSort
+          : adminViewState.projectColumnSort;
     const active = Boolean(state?.key) && state.key === key;
     const direction = active ? state.direction : '';
     button.classList.toggle('is-active', active);
@@ -348,6 +407,7 @@ function buildProjectRows(users){
   const rows = [];
   (Array.isArray(users) ? users : []).forEach(user => {
     const email = String(user?.email || '-');
+    const profile = user?.profile && typeof user.profile === 'object' ? user.profile : {};
     const projects = Array.isArray(user?.projects) ? user.projects : [];
     projects.forEach(project => {
       const metrics = aggregateProjectMetrics(project);
@@ -356,6 +416,10 @@ function buildProjectRows(users){
       const projectDgRaw = toFiniteNumber(metrics.projectDgRate);
       rows.push({
         email,
+        userName: profile.name || '-',
+        userPhone: profile.phone || '-',
+        userCompany: profile.company || '-',
+        userPosition: profile.position || '-',
         name: project?.name || '-',
         customer: project?.customer || '-',
         contactPerson: project?.contactPerson || '-',
@@ -378,6 +442,7 @@ function buildLineRows(users){
   const rows = [];
   (Array.isArray(users) ? users : []).forEach(user => {
     const email = String(user?.email || '-');
+    const profile = user?.profile && typeof user.profile === 'object' ? user.profile : {};
     const projects = Array.isArray(user?.projects) ? user.projects : [];
     projects.forEach(project => {
       const projectName = project?.name || '-';
@@ -392,6 +457,10 @@ function buildLineRows(users){
         const dgRaw = toFiniteNumber(resolveLineDgRate(line));
         rows.push({
           email,
+          userName: profile.name || '-',
+          userPhone: profile.phone || '-',
+          userCompany: profile.company || '-',
+          userPosition: profile.position || '-',
           projectName,
           lineNumber: line?.lineNumber || '-',
           series: inputs?.series || '-',
@@ -418,6 +487,33 @@ function rebuildRowsFromUsers(){
   adminViewState.lineRows = buildLineRows(adminViewState.users);
 }
 
+function buildCustomerRows(customers){
+  const rows = [];
+  (Array.isArray(customers) ? customers : []).forEach(customer => {
+    rows.push({
+      customer: customer?.name || '-',
+      address: customer?.address || '-',
+      postalPlace: customer?.postalPlace || '-'
+    });
+  });
+  return rows;
+}
+
+function buildCustomerContactRows(customers){
+  const rows = [];
+  (Array.isArray(customers) ? customers : []).forEach(customer => {
+    const contacts = Array.isArray(customer?.contacts) ? customer.contacts : [];
+    contacts.forEach(contact => {
+      rows.push({
+        customer: customer?.name || '-',
+        contactPerson: contact?.name || '-',
+        phone: contact?.phone || '-'
+      });
+    });
+  });
+  return rows;
+}
+
 function renderProjectsTable(rowsInput){
   const tbody = document.querySelector('#adminProjectsTable tbody');
   if (!tbody) return;
@@ -426,7 +522,7 @@ function renderProjectsTable(rowsInput){
 
   if (!rows.length){
     const tr = document.createElement('tr');
-    tr.innerHTML = '<td colspan="9">Ingen prosjekter er synkronisert enna.</td>';
+    tr.innerHTML = '<td colspan="13">Ingen prosjekter er synkronisert enna.</td>';
     tbody.appendChild(tr);
     return;
   }
@@ -435,6 +531,10 @@ function renderProjectsTable(rowsInput){
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td>${escapeHtml(row.email)}</td>
+      <td>${escapeHtml(row.userName)}</td>
+      <td>${escapeHtml(row.userPhone)}</td>
+      <td>${escapeHtml(row.userCompany)}</td>
+      <td>${escapeHtml(row.userPosition)}</td>
       <td>${escapeHtml(row.name)}</td>
       <td>${escapeHtml(row.customer)}</td>
       <td>${escapeHtml(row.contactPerson)}</td>
@@ -456,7 +556,7 @@ function renderLinesTable(rowsInput){
 
   if (!rows.length){
     const tr = document.createElement('tr');
-    tr.innerHTML = '<td colspan="9">Ingen linjer er synkronisert enna.</td>';
+    tr.innerHTML = '<td colspan="13">Ingen linjer er synkronisert enna.</td>';
     tbody.appendChild(tr);
     return;
   }
@@ -465,6 +565,10 @@ function renderLinesTable(rowsInput){
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td>${escapeHtml(row.email)}</td>
+      <td>${escapeHtml(row.userName)}</td>
+      <td>${escapeHtml(row.userPhone)}</td>
+      <td>${escapeHtml(row.userCompany)}</td>
+      <td>${escapeHtml(row.userPosition)}</td>
       <td>${escapeHtml(row.projectName)}</td>
       <td>${escapeHtml(String(row.lineNumber))}</td>
       <td>${escapeHtml(String(row.series))}</td>
@@ -473,6 +577,58 @@ function renderLinesTable(rowsInput){
       <td>${escapeHtml(row.totalExFreight)}</td>
       <td>${escapeHtml(row.dgPercent)}</td>
       <td>${escapeHtml(row.updatedAt)}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+function renderCustomersTable(rowsInput){
+  const tbody = document.querySelector('#adminCustomersTable tbody');
+  if (!tbody) return;
+  tbody.textContent = '';
+  const rows = Array.isArray(rowsInput) ? rowsInput : [];
+  if (!rows.length){
+    const tr = document.createElement('tr');
+    tr.innerHTML = '<td colspan="4">Ingen kunder er registrert.</td>';
+    tbody.appendChild(tr);
+    return;
+  }
+  rows.forEach(row => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${escapeHtml(row.customer)}</td>
+      <td>${escapeHtml(row.address)}</td>
+      <td>${escapeHtml(row.postalPlace)}</td>
+      <td class="admin-row-actions">
+        <button type="button" class="btn alt btn-small" data-customer-edit="true" data-customer="${escapeHtml(row.customer)}">Endre</button>
+        <button type="button" class="btn danger btn-small" data-customer-delete="true" data-customer="${escapeHtml(row.customer)}">Slett</button>
+      </td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+function renderCustomerContactsTable(rowsInput){
+  const tbody = document.querySelector('#adminCustomerContactsTable tbody');
+  if (!tbody) return;
+  tbody.textContent = '';
+  const rows = Array.isArray(rowsInput) ? rowsInput : [];
+  if (!rows.length){
+    const tr = document.createElement('tr');
+    tr.innerHTML = '<td colspan="4">Ingen kontaktpersoner er registrert.</td>';
+    tbody.appendChild(tr);
+    return;
+  }
+  rows.forEach(row => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${escapeHtml(row.contactPerson)}</td>
+      <td>${escapeHtml(row.phone)}</td>
+      <td>${escapeHtml(row.customer)}</td>
+      <td class="admin-row-actions">
+        <button type="button" class="btn alt btn-small" data-customer-contact-edit="true" data-customer="${escapeHtml(row.customer)}" data-contact="${escapeHtml(row.contactPerson)}">Endre</button>
+        <button type="button" class="btn danger btn-small" data-customer-contact-delete="true" data-customer="${escapeHtml(row.customer)}" data-contact="${escapeHtml(row.contactPerson)}">Slett</button>
+      </td>
     `;
     tbody.appendChild(tr);
   });
@@ -493,6 +649,106 @@ function setAuthError(message){
   el.textContent = message || '';
 }
 
+function setCustomerStatus(message){
+  const el = $('adminCustomerStatus');
+  if (!el) return;
+  el.textContent = message || '';
+}
+
+function getStoredAuthOrWarn(){
+  const stored = readStoredAdminAuth();
+  if (!stored?.authHeader){
+    setCustomerStatus('Logg inn som admin først.');
+    return null;
+  }
+  return stored;
+}
+
+function showAdminCustomerView(){
+  const overview = $('adminDataCard');
+  const customerCard = $('adminCustomerCard');
+  if (overview) overview.hidden = true;
+  if (customerCard) customerCard.hidden = false;
+}
+
+function showAdminOverviewView(){
+  const overview = $('adminDataCard');
+  const customerCard = $('adminCustomerCard');
+  if (overview) overview.hidden = false;
+  if (customerCard) customerCard.hidden = true;
+}
+
+function clearCustomerForm(){
+  ['adminCustomerOriginalCustomer','adminCustomerOriginalContact','adminCustomerName','adminCustomerAddress','adminCustomerPostalPlace','adminCustomerContact','adminCustomerPhone'].forEach(id=>{
+    const el = $(id);
+    if (el) el.value = '';
+  });
+  setCustomerFormMode('new');
+  setCustomerStatus('');
+}
+
+function setCustomerFormMode(mode){
+  const isCustomerMode = mode === 'customer';
+  const isContactMode = mode === 'contact';
+  const customerInput = $('adminCustomerName');
+  const addressInput = $('adminCustomerAddress');
+  const postalInput = $('adminCustomerPostalPlace');
+  const contactInput = $('adminCustomerContact');
+  const phoneInput = $('adminCustomerPhone');
+  if (customerInput) customerInput.disabled = isContactMode;
+  if (addressInput) addressInput.disabled = isContactMode;
+  if (postalInput) postalInput.disabled = isContactMode;
+  if (contactInput) contactInput.disabled = isCustomerMode;
+  if (phoneInput) phoneInput.disabled = isCustomerMode;
+}
+
+function fillCustomerForm(row){
+  const customer = String(row?.customer || '').trim();
+  const contact = String(row?.contactPerson || '').trim();
+  const customerRecord = adminViewState.customers.find(item=>String(item?.name || '') === customer) || {};
+  const values = {
+    adminCustomerOriginalCustomer: customer,
+    adminCustomerOriginalContact: contact,
+    adminCustomerName: customer,
+    adminCustomerAddress: row?.address === '-' ? '' : row?.address || customerRecord.address || '',
+    adminCustomerPostalPlace: row?.postalPlace === '-' ? '' : row?.postalPlace || customerRecord.postalPlace || '',
+    adminCustomerContact: contact === '-' ? '' : contact,
+    adminCustomerPhone: row?.phone === '-' ? '' : row?.phone || ''
+  };
+  Object.entries(values).forEach(([id, value])=>{
+    const el = $(id);
+    if (el) el.value = value;
+  });
+  setCustomerFormMode(contact ? 'contact' : 'customer');
+  setCustomerStatus('');
+}
+
+function findCustomerRow(customer, contact){
+  if (contact){
+    return adminViewState.customerContactRows.find(row=>
+      String(row.customer || '') === String(customer || '') &&
+      String(row.contactPerson || '') === String(contact || '')
+    ) || null;
+  }
+  return adminViewState.customerRows.find(row=>String(row.customer || '') === String(customer || '')) || null;
+}
+
+function getCustomerFormPayload(){
+  return {
+    originalCustomer: String($('adminCustomerOriginalCustomer')?.value || '').trim(),
+    originalContactPerson: String($('adminCustomerOriginalContact')?.value || '').trim(),
+    customer: String($('adminCustomerName')?.value || '').trim(),
+    address: String($('adminCustomerAddress')?.value || '').trim(),
+    postalPlace: String($('adminCustomerPostalPlace')?.value || '').trim(),
+    contactPerson: String($('adminCustomerContact')?.value || '').trim(),
+    phone: String($('adminCustomerPhone')?.value || '').trim()
+  };
+}
+
+function getCustomerRecordByName(name){
+  return adminViewState.customers.find(customer=>String(customer?.name || '') === String(name || '')) || null;
+}
+
 async function fetchAdminOverview(authHeader){
   const res = await fetch(buildApiUrl('/api/admin/project-overview'), {
     method: 'GET',
@@ -509,6 +765,52 @@ async function fetchAdminOverview(authHeader){
   }
   if (!res.ok){
     let message = `Kunne ikke hente adminoversikt (${res.status})`;
+    try{
+      const data = await res.json();
+      if (data && typeof data.error === 'string' && data.error.trim()){
+        message += `: ${data.error.trim()}`;
+      }
+    }catch(_err){}
+    throw new Error(appendApiBaseHint(message, res.status));
+  }
+  return res.json();
+}
+
+async function fetchAdminCustomerDatabase(authHeader){
+  const res = await fetch(buildApiUrl('/api/admin/customer-database'), {
+    method: 'GET',
+    headers: { Authorization: authHeader },
+    cache: 'no-store'
+  });
+  if (res.status === 401){
+    const err = new Error('Ugyldig admin brukernavn/passord.');
+    err.code = 'AUTH';
+    throw err;
+  }
+  if (!res.ok){
+    let message = `Kunne ikke hente kundedatabase (${res.status})`;
+    try{
+      const data = await res.json();
+      if (data && typeof data.error === 'string' && data.error.trim()){
+        message += `: ${data.error.trim()}`;
+      }
+    }catch(_err){}
+    throw new Error(appendApiBaseHint(message, res.status));
+  }
+  return res.json();
+}
+
+async function postAdminCustomerMutation(path, authHeader, body){
+  const res = await fetch(buildApiUrl(path), {
+    method: 'POST',
+    headers: {
+      Authorization: authHeader,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(body || {})
+  });
+  if (!res.ok){
+    let message = `Kundedatabase-operasjon feilet (${res.status})`;
     try{
       const data = await res.json();
       if (data && typeof data.error === 'string' && data.error.trim()){
@@ -545,6 +847,26 @@ async function loadOverview(authHeader){
   }
 }
 
+async function loadCustomerDatabase(authHeader){
+  const refreshBtn = $('adminCustomerRefreshBtn');
+  if (refreshBtn) refreshBtn.disabled = true;
+  try{
+    const data = await fetchAdminCustomerDatabase(authHeader);
+    adminViewState.customers = Array.isArray(data?.customers) ? data.customers : [];
+    adminViewState.customerRows = buildCustomerRows(adminViewState.customers);
+    adminViewState.customerContactRows = buildCustomerContactRows(adminViewState.customers);
+    renderCustomersTable(getSortedCustomerRows());
+    renderCustomerContactsTable(getSortedCustomerContactRows());
+    const generatedEl = $('adminCustomerGeneratedAt');
+    if (generatedEl){
+      generatedEl.textContent = `Sist oppdatert: ${formatTimestamp(data?.generatedAt)}`;
+    }
+    setCustomerStatus('');
+  }finally{
+    if (refreshBtn) refreshBtn.disabled = false;
+  }
+}
+
 async function handleAdminLoginSubmit(){
   const username = String($('adminUsername')?.value || '').trim();
   const password = String($('adminPassword')?.value || '');
@@ -567,7 +889,78 @@ function handleAdminLogout(){
   clearStoredAdminAuth();
   const dataCard = $('adminDataCard');
   if (dataCard) dataCard.hidden = true;
+  const customerCard = $('adminCustomerCard');
+  if (customerCard) customerCard.hidden = true;
   setAuthError('Logget ut.');
+}
+
+async function handleCustomerSave(){
+  const stored = getStoredAuthOrWarn();
+  if (!stored) return;
+  const payload = getCustomerFormPayload();
+  if (!payload.customer){
+    setCustomerStatus('Kunde må fylles ut.');
+    return;
+  }
+  if (payload.originalContactPerson){
+    const customerRecord = getCustomerRecordByName(payload.originalCustomer || payload.customer);
+    payload.customer = payload.originalCustomer || payload.customer;
+    payload.address = customerRecord?.address || '';
+    payload.postalPlace = customerRecord?.postalPlace || '';
+  } else if (payload.originalCustomer){
+    payload.contactPerson = '';
+    payload.phone = '';
+  }
+  try{
+    const result = await postAdminCustomerMutation('/api/admin/customer-database/upsert', stored.authHeader, payload);
+    adminViewState.customers = Array.isArray(result?.customers) ? result.customers : [];
+    adminViewState.customerRows = buildCustomerRows(adminViewState.customers);
+    adminViewState.customerContactRows = buildCustomerContactRows(adminViewState.customers);
+    renderCustomersTable(getSortedCustomerRows());
+    renderCustomerContactsTable(getSortedCustomerContactRows());
+    clearCustomerForm();
+    setCustomerStatus(`Lagret. Oppdaterte ${Number(result?.updatedProjects || 0)} prosjekt(er).`);
+    await loadOverview(stored.authHeader);
+    showAdminCustomerView();
+  }catch(err){
+    setCustomerStatus(err?.message || 'Lagring feilet.');
+  }
+}
+
+async function handleCustomerDelete(deleteContactOnly){
+  const stored = getStoredAuthOrWarn();
+  if (!stored) return;
+  const payload = getCustomerFormPayload();
+  if (!payload.customer){
+    setCustomerStatus('Velg eller fyll inn kunde først.');
+    return;
+  }
+  if (deleteContactOnly && !payload.originalContactPerson && !payload.contactPerson){
+    setCustomerStatus('Velg kontaktperson først.');
+    return;
+  }
+  const body = {
+    customer: payload.originalCustomer || payload.customer,
+    contactPerson: deleteContactOnly ? (payload.originalContactPerson || payload.contactPerson) : ''
+  };
+  const text = deleteContactOnly
+    ? `Fjerne kontaktpersonen "${body.contactPerson}" fra "${body.customer}"? Feltene tømmes i alle prosjekter som bruker denne kontaktpersonen.`
+    : `Fjerne kunden "${body.customer}"? Kunde-, adresse-, kontakt- og telefonfelt tømmes i alle prosjekter som bruker kunden.`;
+  if (!window.confirm(text)) return;
+  try{
+    const result = await postAdminCustomerMutation('/api/admin/customer-database/delete', stored.authHeader, body);
+    adminViewState.customers = Array.isArray(result?.customers) ? result.customers : [];
+    adminViewState.customerRows = buildCustomerRows(adminViewState.customers);
+    adminViewState.customerContactRows = buildCustomerContactRows(adminViewState.customers);
+    renderCustomersTable(getSortedCustomerRows());
+    renderCustomerContactsTable(getSortedCustomerContactRows());
+    clearCustomerForm();
+    setCustomerStatus(`Fjernet. Oppdaterte ${Number(result?.updatedProjects || 0)} prosjekt(er).`);
+    await loadOverview(stored.authHeader);
+    showAdminCustomerView();
+  }catch(err){
+    setCustomerStatus(err?.message || 'Sletting feilet.');
+  }
 }
 
 function bindUi(){
@@ -600,15 +993,82 @@ function bindUi(){
       }
     });
   }
+  const customersBtn = $('adminCustomersBtn');
+  if (customersBtn){
+    customersBtn.addEventListener('click', async () => {
+      const stored = readStoredAdminAuth();
+      if (!stored?.authHeader){
+        setAuthError('Logg inn som admin for å åpne kundedatabase.');
+        return;
+      }
+      showAdminCustomerView();
+      try{
+        await loadCustomerDatabase(stored.authHeader);
+      }catch(err){
+        setCustomerStatus(err?.message || 'Kunne ikke laste kundedatabase.');
+      }
+    });
+  }
+  const overviewBtn = $('adminOverviewBtn');
+  if (overviewBtn){
+    overviewBtn.addEventListener('click', showAdminOverviewView);
+  }
+  const customerRefreshBtn = $('adminCustomerRefreshBtn');
+  if (customerRefreshBtn){
+    customerRefreshBtn.addEventListener('click', async () => {
+      const stored = getStoredAuthOrWarn();
+      if (!stored) return;
+      try{
+        await loadCustomerDatabase(stored.authHeader);
+      }catch(err){
+        setCustomerStatus(err?.message || 'Oppdatering feilet.');
+      }
+    });
+  }
   document.addEventListener('click', evt=>{
     const button = evt.target?.closest?.('.admin-col-sort-btn');
-    if (!button) return;
-    const key = String(button.dataset.key || '').trim();
-    if (!key) return;
-    const table = button.dataset.table === 'lines' ? 'lines' : 'projects';
-    const type = String(button.dataset.type || 'text').trim().toLowerCase();
-    setColumnSort(table, key, type);
+    if (button){
+      const key = String(button.dataset.key || '').trim();
+      if (!key) return;
+      const table = button.dataset.table === 'lines'
+        ? 'lines'
+        : button.dataset.table === 'customers'
+          ? 'customers'
+          : button.dataset.table === 'customerContacts'
+            ? 'customerContacts'
+            : 'projects';
+      const type = String(button.dataset.type || 'text').trim().toLowerCase();
+      setColumnSort(table, key, type);
+      return;
+    }
+    const editButton = evt.target?.closest?.('[data-customer-edit], [data-customer-contact-edit]');
+    if (editButton){
+      const row = findCustomerRow(editButton.dataset.customer, editButton.dataset.contact);
+      if (row) fillCustomerForm(row);
+      return;
+    }
+    const deleteCustomerButton = evt.target?.closest?.('[data-customer-delete]');
+    if (deleteCustomerButton){
+      fillCustomerForm({ customer: deleteCustomerButton.dataset.customer || '' });
+      void handleCustomerDelete(false);
+      return;
+    }
+    const deleteContactButton = evt.target?.closest?.('[data-customer-contact-delete]');
+    if (deleteContactButton){
+      const row = findCustomerRow(deleteContactButton.dataset.customer, deleteContactButton.dataset.contact);
+      if (row) fillCustomerForm(row);
+      void handleCustomerDelete(true);
+    }
   });
+  const customerForm = $('adminCustomerForm');
+  if (customerForm){
+    customerForm.addEventListener('submit', evt=>{
+      evt.preventDefault();
+      void handleCustomerSave();
+    });
+  }
+  const clearBtn = $('adminCustomerClearBtn');
+  if (clearBtn) clearBtn.addEventListener('click', clearCustomerForm);
   const logoutBtn = $('adminLogoutBtn');
   if (logoutBtn){
     logoutBtn.addEventListener('click', handleAdminLogout);
