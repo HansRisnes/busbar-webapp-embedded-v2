@@ -2580,6 +2580,12 @@ async function sendMail({ subject, html }) {
 app.get('/api/health', async (_req, res) => {
   const now = new Date().toISOString();
   let offerTemplate = null;
+  let runtimeData = {
+    dir: RUNTIME_DATA_DIR,
+    userAuthFile: USER_AUTH_FILE,
+    userAuthFileExists: false,
+    writable: false
+  };
   try {
     const filePath = await resolveOfferTemplateFile();
     offerTemplate = {
@@ -2591,11 +2597,26 @@ app.get('/api/health', async (_req, res) => {
       error: err?.message || 'Fant ikke tilbudsmal'
     };
   }
+  try {
+    await fs.mkdir(RUNTIME_DATA_DIR, { recursive: true });
+    await fs.access(RUNTIME_DATA_DIR);
+    runtimeData.writable = true;
+  } catch (err) {
+    runtimeData.writable = false;
+    runtimeData.error = err?.message || 'Runtime data-mappen er ikke skrivbar';
+  }
+  try {
+    await fs.access(USER_AUTH_FILE);
+    runtimeData.userAuthFileExists = true;
+  } catch (_err) {
+    runtimeData.userAuthFileExists = false;
+  }
   return res.json({
     ok: true,
     service: 'busbar-api',
     time: now,
     runtimeDataDir: RUNTIME_DATA_DIR,
+    runtimeData,
     offerTemplate
   });
 });
