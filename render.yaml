@@ -2,7 +2,7 @@ services:
   - type: web
     name: busbar-webapp-embedded-v2
     env: node
-    plan: free
+    plan: starter
     rootDir: .
     buildCommand: npm install
     startCommand: npm start
@@ -30,3 +30,7 @@ services:
         sync: false
       - key: MAIL_TO
         sync: false
+    disk:
+      name: busbar-data
+      mountPath: /var/data
+      sizeGB: 1
