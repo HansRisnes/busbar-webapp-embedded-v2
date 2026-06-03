@@ -1463,6 +1463,11 @@ function buildEmptyUnitPricePlaceholders() {
   return Object.fromEntries(keys.map(key=>[key, '']));
 }
 
+function hasPositiveQuantity(value) {
+  const qty = toFiniteNumber(value);
+  return Number.isFinite(qty) && qty > 0;
+}
+
 function buildUnitPricePlaceholders(line, input, lineTotals, fireBarrierPriceIndex) {
   const empty = buildEmptyUnitPricePlaceholders();
   const selectedAddonConfig = resolveLineSelectedAddonConfig(line, lineTotals);
@@ -1479,24 +1484,34 @@ function buildUnitPricePlaceholders(line, input, lineTotals, fireBarrierPriceInd
   const endType = safeString(input?.sluttEl);
   const tapOffTypes = ['plug_in_box', 'tap_off_box', 'bolt_on_box'];
   const fireUnit = resolveFireBarrierUnitPrice(line, fireBarrierPriceIndex, input);
+  const meterQty = toFiniteNumber(input?.meter);
+  const verticalAngleQty = toFiniteNumber(input?.v90_v ?? input?.v90v);
+  const horizontalAngleQty = toFiniteNumber(input?.v90_h ?? input?.v90h);
+  const brannQty = toFiniteNumber(input?.fbQty ?? input?.fireBarrierQty);
+  const expansionQty = resolveExpansionQtyFromLine(line, input);
+  const tapOffQty = resolveTapOffItemsFromLine(line, input).reduce((sum, item)=>sum + (toFiniteNumber(item?.qty) || 0), 0);
   const values = {
-    meter: formatMaterialOfferUnitPrice(rawUnit('meter') || resolveBomUnitByType(line, [
+    meter: hasPositiveQuantity(meterQty) ? formatMaterialOfferUnitPrice(rawUnit('meter') || resolveBomUnitByType(line, [
       'straight_500_1000',
       'straight_500_1000_dist',
       'xcm_feeder_600_1500',
       'xcm_dist_1000_1500'
-    ]), input, lineTotals),
-    vinkelVertikal: formatMaterialOfferUnitPrice(rawUnit('vinkelVertikal') || rawUnit('vinkel') || resolveBomUnitByType(line, 'elbow_vertical_90'), input, lineTotals),
-    vinkelHorisontal: formatMaterialOfferUnitPrice(rawUnit('vinkelHorisontal') || resolveBomUnitByType(line, 'elbow_horizontal_90'), input, lineTotals),
+    ]), input, lineTotals) : '',
+    vinkelVertikal: hasPositiveQuantity(verticalAngleQty)
+      ? formatMaterialOfferUnitPrice(rawUnit('vinkelVertikal') || rawUnit('vinkel') || resolveBomUnitByType(line, 'elbow_vertical_90'), input, lineTotals)
+      : '',
+    vinkelHorisontal: hasPositiveQuantity(horizontalAngleQty)
+      ? formatMaterialOfferUnitPrice(rawUnit('vinkelHorisontal') || resolveBomUnitByType(line, 'elbow_horizontal_90'), input, lineTotals)
+      : '',
     tavleelement: startType && startType !== 'none'
       ? formatMaterialOfferUnitPrice(rawUnit('tavleelement') || resolveBomUnitByType(line, startType), input, lineTotals)
       : '',
     sluttelement: endType && endType !== 'none'
       ? formatMaterialOfferUnitPrice(rawUnit('sluttelement') || resolveBomUnitByType(line, endType), input, lineTotals)
       : '',
-    brann: formatMaterialOfferUnitPrice(rawUnit('brann') || fireUnit, input, lineTotals),
-    ekspansjon: formatMaterialOfferUnitPrice(rawUnit('ekspansjon') || resolveBomUnitByType(line, 'expansion_unit'), input, lineTotals),
-    avtappingsboks: formatMaterialOfferUnitPrice(rawUnit('avtappingsboks') || resolveBomUnitByType(line, tapOffTypes), input, lineTotals)
+    brann: hasPositiveQuantity(brannQty) ? formatMaterialOfferUnitPrice(rawUnit('brann') || fireUnit, input, lineTotals) : '',
+    ekspansjon: hasPositiveQuantity(expansionQty) ? formatMaterialOfferUnitPrice(rawUnit('ekspansjon') || resolveBomUnitByType(line, 'expansion_unit'), input, lineTotals) : '',
+    avtappingsboks: hasPositiveQuantity(tapOffQty) ? formatMaterialOfferUnitPrice(rawUnit('avtappingsboks') || resolveBomUnitByType(line, tapOffTypes), input, lineTotals) : ''
   };
 
   return {
@@ -2084,22 +2099,52 @@ function xmlContainsPlaceholder(xml, key) {
   return pattern.test(String(xml || ''));
 }
 
+function getXmlElementRanges(xml, tagName) {
+  const source = String(xml || '');
+  const escapedTag = escapeRegex(tagName);
+  const tagPattern = new RegExp(`<\\/?${escapedTag}\\b[^>]*>`, 'g');
+  const ranges = [];
+  const stack = [];
+  let match;
+  while ((match = tagPattern.exec(source)) !== null) {
+    const token = match[0];
+    if (token.startsWith(`</`)) {
+      const start = stack.pop();
+      if (start !== undefined && stack.length === 0) {
+        ranges.push({ start, end: tagPattern.lastIndex });
+      }
+    } else if (!token.endsWith('/>')) {
+      stack.push(match.index);
+    }
+  }
+  return ranges;
+}
+
 function removeXmlContainersForEmptyPlaceholders(xml, placeholders, specs) {
   let output = String(xml || '');
   specs.forEach(spec=>{
     const keys = Array.isArray(spec.keys) ? spec.keys : [];
     if (!keys.length || hasUsablePlaceholderValue(placeholders, keys)) return;
-    const containerPattern = spec.container === 'tbl'
-      ? /<w:tbl\b[\s\S]*?<\/w:tbl>/g
-      : /<w:p\b[\s\S]*?<\/w:p>/g;
-    output = output.replace(containerPattern, match=>{
-      return keys.some(key=>xmlContainsPlaceholder(match, key)) ? '' : match;
+    const tagName = spec.container === 'tbl'
+      ? 'w:tbl'
+      : (spec.container === 'tr' ? 'w:tr' : 'w:p');
+    const ranges = getXmlElementRanges(output, tagName).reverse();
+    ranges.forEach(range=>{
+      const fragment = output.slice(range.start, range.end);
+      if (!keys.some(key=>xmlContainsPlaceholder(fragment, key))) return;
+      output = `${output.slice(0, range.start)}${output.slice(range.end)}`;
     });
+  });
+  getXmlElementRanges(output, 'w:tbl').reverse().forEach(range=>{
+    const fragment = output.slice(range.start, range.end);
+    if (/<w:tr\b/i.test(fragment)) return;
+    output = `${output.slice(0, range.start)}${output.slice(range.end)}`;
   });
   return output;
 }
 
 function removeUnusedOfferPlaceholderContainers(xml, placeholders) {
+  const unitPriceKeys = Object.keys(buildEmptyUnitPricePlaceholders());
   const specs = [
     { container: 'p', keys: ['ekspansjonselement', 'exp', 'EXPANSJONSELEMENT'] },
     { container: 'p', keys: ['bre'] },
@@ -2109,7 +2154,9 @@ function removeUnusedOfferPlaceholderContainers(xml, placeholders) {
     { container: 'tbl', keys: ['itl', 'itp'] },
     { container: 'p', keys: ['tti', 'timer_totalt_ingenior'] },
     { container: 'tbl', keys: ['tol', 'top'] },
-    { container: 'p', keys: ['tod'] }
+    { container: 'p', keys: ['tod'] },
+    ...unitPriceKeys.map(key=>({ container: 'tr', keys: [key] })),
+    ...unitPriceKeys.map(key=>({ container: 'p', keys: [key] }))
   ];
   return removeXmlContainersForEmptyPlaceholders(xml, placeholders, specs);
 }
