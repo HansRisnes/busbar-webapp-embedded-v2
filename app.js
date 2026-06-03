@@ -2994,7 +2994,7 @@ async function generateProjectOffer(project){
   const offerNumber = String(res.headers.get('X-Offer-Number') || '').trim();
   const revision = String(res.headers.get('X-Offer-Revision') || '').trim();
   const projectName = sanitizeDownloadFileName(project?.name || 'prosjekt');
-  const fallbackName = `Tilbud-${projectName}${offerNumber ? `-${offerNumber}` : ''}${revision ? `-revisjon${revision}` : ''}.docx`;
+  const fallbackName = `Tilbud-${projectName}${offerNumber ? `-${offerNumber}` : ''}${revision ? `-rev${revision}` : ''}.docx`;
   return {
     blob,
     fileName: headerName || fallbackName,

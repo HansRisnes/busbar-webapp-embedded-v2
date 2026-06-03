@@ -3348,7 +3348,7 @@ app.post('/api/generate-offer', requireUserAuth, async (req, res) => {
       ...userRecord.profile
     });
     const projectName = sanitizeFileName(project.name || 'prosjekt');
-    const fileName = `Tilbud-${projectName}-${offerNumber}-revisjon${revision}.docx`;
+    const fileName = `Tilbud-${projectName}-${offerNumber}-rev${revision}.docx`;
     const encodedFileName = encodeURIComponent(fileName);
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
