@@ -338,6 +338,13 @@ main.app-views{
   white-space:nowrap;
 }
 
+.project-line-row .line-material{
+  flex:0 0 auto;
+  color:var(--muted);
+  font-size:0.9rem;
+  white-space:nowrap;
+}
+
 .project-line-row .line-updated{
   flex:0 0 auto;
   color:var(--muted);

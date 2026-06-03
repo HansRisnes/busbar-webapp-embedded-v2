@@ -1405,6 +1405,14 @@ function buildTapOffOfferText(line, input = {}) {
   }).join(' | ');
 }
 
+function formatTapOffOfferPricePlaceholder(value, qty = 0) {
+  const amount = toFiniteNumber(value);
+  const count = toFiniteNumber(qty);
+  if (!Number.isFinite(amount) || amount <= 0) return '';
+  if (Number.isFinite(count) && count <= 0) return '';
+  return formatNoCurrencyWithKr(amount);
+}
+
 function resolveExpansionQtyFromBom(line) {
   const bom = Array.isArray(line?.bom) ? line.bom : [];
   return bom.reduce((sum, entry)=>{
@@ -1567,6 +1575,10 @@ function buildOfferPlaceholderValues(project, offerNumber, offerDate, revision =
   const inputSummary = collectProjectInputSummary(lines);
   const offerDatePlus30 = addDays(offerDate, 30);
   const revisionNumber = Number.isInteger(Number(revision)) ? Number(revision) : 0;
+  const tapOffPricePlaceholder = formatTapOffOfferPricePlaceholder(
+    inputSummary.tapOffPriceTotal,
+    inputSummary.tapOffTotal
+  );
 
   const placeholders = {
     tilbud_nr: offerNumber,
@@ -1637,13 +1649,13 @@ function buildOfferPlaceholderValues(project, offerNumber, offerDate, revision =
     avb_tekst: inputSummary.tapOffTexts,
     avtappingsbokser_tekst: inputSummary.tapOffTexts,
     AVTAPPINGSBOKSER_TEKST: inputSummary.tapOffTexts,
-    avb_pris: formatNoCurrencyWithKr(inputSummary.tapOffPriceTotal),
-    avb_pris_nok: formatNoCurrencyWithKr(inputSummary.tapOffPriceTotal),
-    avb_sum: formatNoCurrencyWithKr(inputSummary.tapOffPriceTotal),
-    avb_sum_nok: formatNoCurrencyWithKr(inputSummary.tapOffPriceTotal),
-    avtappingsbokser_pris: formatNoCurrencyWithKr(inputSummary.tapOffPriceTotal),
-    avtappingsbokser_pris_nok: formatNoCurrencyWithKr(inputSummary.tapOffPriceTotal),
-    AVTAPPINGSBOKSER_PRIS: formatNoCurrencyWithKr(inputSummary.tapOffPriceTotal),
+    avb_pris: tapOffPricePlaceholder,
+    avb_pris_nok: tapOffPricePlaceholder,
+    avb_sum: tapOffPricePlaceholder,
+    avb_sum_nok: tapOffPricePlaceholder,
+    avtappingsbokser_pris: tapOffPricePlaceholder,
+    avtappingsbokser_pris_nok: tapOffPricePlaceholder,
+    AVTAPPINGSBOKSER_PRIS: tapOffPricePlaceholder,
     bre: inputSummary.brannElementTotal,
     exp: Number(inputSummary.expansionElementTotal) > 0
       ? `${inputSummary.expansionElementTotal} stk. Ekspansjonselement`
@@ -1757,6 +1769,7 @@ async function buildOfferLinePlaceholderValues(project) {
     const tapOffText = buildTapOffOfferText(line, input);
     const tapOffTotalQty = tapOffItems.reduce((sum, item)=>sum + Number(item.qty || 0), 0);
     const tapOffPriceTotal = resolveTapOffOfferPriceTotal(line, input);
+    const tapOffPricePlaceholder = formatTapOffOfferPricePlaceholder(tapOffPriceTotal, tapOffTotalQty);
 
     linePlaceholderSets.push({
       lnr: lineNumber,
@@ -1776,13 +1789,13 @@ async function buildOfferLinePlaceholderValues(project) {
       avb_tekst: tapOffText,
       avtappingsbokser_tekst: tapOffText,
       AVTAPPINGSBOKSER_TEKST: tapOffText,
-      avb_pris: formatNoCurrencyWithKr(tapOffPriceTotal),
-      avb_pris_nok: formatNoCurrencyWithKr(tapOffPriceTotal),
-      avb_sum: formatNoCurrencyWithKr(tapOffPriceTotal),
-      avb_sum_nok: formatNoCurrencyWithKr(tapOffPriceTotal),
-      avtappingsbokser_pris: formatNoCurrencyWithKr(tapOffPriceTotal),
-      avtappingsbokser_pris_nok: formatNoCurrencyWithKr(tapOffPriceTotal),
-      AVTAPPINGSBOKSER_PRIS: formatNoCurrencyWithKr(tapOffPriceTotal),
+      avb_pris: tapOffPricePlaceholder,
+      avb_pris_nok: tapOffPricePlaceholder,
+      avb_sum: tapOffPricePlaceholder,
+      avb_sum_nok: tapOffPricePlaceholder,
+      avtappingsbokser_pris: tapOffPricePlaceholder,
+      avtappingsbokser_pris_nok: tapOffPricePlaceholder,
+      AVTAPPINGSBOKSER_PRIS: tapOffPricePlaceholder,
       bre: hasBrannElements
         ? `${formatNoInteger(brannQty)} stk. Branngjennomforing EI 60/90/120`
         : '',
@@ -1934,6 +1947,45 @@ function replacePlaceholdersInXml(xml, placeholders) {
   return output;
 }
 
+function hasUsablePlaceholderValue(placeholders, keys) {
+  return keys.some(key=>safeString(placeholders?.[key]));
+}
+
+function xmlContainsPlaceholder(xml, key) {
+  const pattern = new RegExp(`\\{\\{\\s*${escapeRegex(key)}\\s*\\}\\}`, 'i');
+  return pattern.test(String(xml || ''));
+}
+
+function removeXmlContainersForEmptyPlaceholders(xml, placeholders, specs) {
+  let output = String(xml || '');
+  specs.forEach(spec=>{
+    const keys = Array.isArray(spec.keys) ? spec.keys : [];
+    if (!keys.length || hasUsablePlaceholderValue(placeholders, keys)) return;
+    const containerPattern = spec.container === 'tbl'
+      ? /<w:tbl\b[\s\S]*?<\/w:tbl>/g
+      : /<w:p\b[\s\S]*?<\/w:p>/g;
+    output = output.replace(containerPattern, match=>{
+      return keys.some(key=>xmlContainsPlaceholder(match, key)) ? '' : match;
+    });
+  });
+  return output;
+}
+
+function removeUnusedOfferPlaceholderContainers(xml, placeholders) {
+  const specs = [
+    { container: 'p', keys: ['ekspansjonselement', 'exp', 'EXPANSJONSELEMENT'] },
+    { container: 'p', keys: ['bre'] },
+    { container: 'tbl', keys: ['avb_tekst', 'avtappingsbokser_tekst', 'AVTAPPINGSBOKSER_TEKST', 'avb_pris', 'avb_pris_nok', 'avb_sum', 'avb_sum_nok', 'avtappingsbokser_pris', 'avtappingsbokser_pris_nok', 'AVTAPPINGSBOKSER_PRIS'] },
+    { container: 'tbl', keys: ['mtl', 'mtp'] },
+    { container: 'p', keys: ['ttm', 'timer_totalt_montasje'] },
+    { container: 'tbl', keys: ['itl', 'itp'] },
+    { container: 'p', keys: ['tti', 'timer_totalt_ingenior'] },
+    { container: 'tbl', keys: ['tol', 'top'] },
+    { container: 'p', keys: ['tod'] }
+  ];
+  return removeXmlContainersForEmptyPlaceholders(xml, placeholders, specs);
+}
+
 function expandRepeatBlock(xml, options) {
   const {
     startAliases,
@@ -1969,7 +2021,7 @@ function expandRepeatBlock(xml, options) {
   const renderBlock = (blockTemplate)=>{
     if (!Array.isArray(placeholderSets) || placeholderSets.length === 0) return '';
     return placeholderSets
-      .map(placeholders=>replacePlaceholdersInXml(blockTemplate, placeholders))
+      .map(placeholders=>replacePlaceholdersInXml(removeUnusedOfferPlaceholderContainers(blockTemplate, placeholders), placeholders))
       .join('');
   };
 
@@ -2054,7 +2106,8 @@ async function generateOfferDocx(project, offerNumber, offerDate, revision = 0, 
     const withExpandedLineBlocks = expandLineRepeatBlocks(xml, linePlaceholderSets);
     const withExpandedFireBlocks = expandFireRepeatBlocks(withExpandedLineBlocks, firePlaceholderSets);
     const withExpandedOpphengBlocks = expandOpphengRepeatBlocks(withExpandedFireBlocks, opphengPlaceholderSets);
-    const replaced = replacePlaceholdersInXml(withExpandedOpphengBlocks, placeholders);
+    const withoutUnusedPlaceholders = removeUnusedOfferPlaceholderContainers(withExpandedOpphengBlocks, placeholders);
+    const replaced = replacePlaceholdersInXml(withoutUnusedPlaceholders, placeholders);
     if (replaced !== xml) {
       zip.updateFile(entry.entryName, Buffer.from(replaced, 'utf8'));
     }

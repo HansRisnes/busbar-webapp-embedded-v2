@@ -173,10 +173,25 @@ function matchesLedere(row, ledere){
   const implied = c.includes('-3W') ? '3F+PE' : '3F+N+PE';
   return ledere === implied || !c;
 }
+function isThreeWireRow(row){
+  return String(row?.code || '').toUpperCase().includes('-3W');
+}
+function hasConductorVariants(rows){
+  return rows.some(isThreeWireRow);
+}
 function byTypeAmpSeries(rows, type, amp, series){ return rows.find(r=>r.type===type && r.series===series && Number(deriveAmp(r))===Number(amp)); }
 function byTypeAmpSeriesL(rows, type, amp, series, ledere){
-  const m = rows.find(r=>r.type===type && r.series===series && Number(deriveAmp(r))===Number(amp) && matchesLedere(r, ledere));
-  return m || rows.find(r=>r.type===type && r.series===series && Number(deriveAmp(r))===Number(amp)) || rows.find(r=>r.type===type && r.series===series);
+  const exactAmp = rows.filter(r=>r.type===type && r.series===series && Number(deriveAmp(r))===Number(amp));
+  const exactMatch = exactAmp.find(r=>matchesLedere(r, ledere));
+  if (exactMatch) return exactMatch;
+  if (hasConductorVariants(exactAmp)) return null;
+  if (exactAmp.length) return exactAmp[0];
+
+  const sameTypeSeries = rows.filter(r=>r.type===type && r.series===series);
+  const looseMatch = sameTypeSeries.find(r=>matchesLedere(r, ledere));
+  if (looseMatch) return looseMatch;
+  if (hasConductorVariants(sameTypeSeries)) return null;
+  return sameTypeSeries[0] || null;
 }
 function byBoxAll(catalog, kind, amp, prefSeries){
   const list = catalog.filter(r=>r.type===kind && (amp ? Number(deriveAmp(r))===Number(amp) : true));
@@ -279,7 +294,7 @@ function planWithFallback(m, avail){
 // Finn ut om type finnes for valgt konfig
 function hasType(catRows, series, amp, ledere, type){
   const rows = catRows.filter(r=>r.series===series);
-  const r = findByTypeSeriesAmp(rows, type, series, amp) || byTypeAmpSeriesL(rows,type,amp,series,ledere);
+  const r = byTypeAmpSeriesL(rows,type,amp,series,ledere);
   return !!r;
 }
 
@@ -289,6 +304,12 @@ function needAnyAmp(rows, type, amp, series){
   return byTypeAmpSeries(rows, type, amp, series)
       || rows.find(r => r.type===type && r.series===series); // ingen amp i CSV
 }
+function needAnyAmpL(rows, type, amp, series, ledere){
+  const sameTypeSeries = rows.filter(r=>r.type===type && r.series===series);
+  return byTypeAmpSeriesL(rows, type, amp, series, ledere)
+      || sameTypeSeries.find(r => matchesLedere(r, ledere))
+      || (!hasConductorVariants(sameTypeSeries) ? sameTypeSeries[0] : null);
+}
 
 function price(cat, input){
   const bom=[];
@@ -297,27 +318,27 @@ function price(cat, input){
 
   // Startelement
 if (input.startEl === 'board_feed'){
-  const bf = needAnyAmp(cat.rows, 'board_feed', input.ampere, input.series);
+  const bf = needAnyAmpL(cat.rows, 'board_feed', input.ampere, input.series, input.ledere);
   if (!bf) throw new Error(`Mangler board_feed for ${input.series}.`);
   push(bf,1);
 } else if (input.startEl === 'end_feed_unit'){
-  const ef = needAnyAmp(cat.rows, 'end_feed_unit', input.ampere, input.series);
+  const ef = needAnyAmpL(cat.rows, 'end_feed_unit', input.ampere, input.series, input.ledere);
   if (!ef) throw new Error(`Mangler end_feed_unit for ${input.series}.`);
   push(ef,1);
 }
 
 // Sluttelement
 if (input.sluttEl === 'board_feed'){
-  const bf = needAnyAmp(cat.rows, 'board_feed', input.ampere, input.series);
+  const bf = needAnyAmpL(cat.rows, 'board_feed', input.ampere, input.series, input.ledere);
   if (!bf) throw new Error(`Mangler board_feed for ${input.series}.`);
   push(bf,1);
 } else if (input.sluttEl === 'crt_board_feed'){
   if (input.series !== 'XCP-S') throw new Error('Trafoelement er kun for XCP-S.');
-  const crt = needAnyAmp(cat.rows, 'crt_board_feed', input.ampere, input.series);
+  const crt = needAnyAmpL(cat.rows, 'crt_board_feed', input.ampere, input.series, input.ledere);
   if (!crt) throw new Error(`Mangler crt_board_feed for ${input.series}.`);
   push(crt,1);
 } else if (input.sluttEl === 'end_cover'){
-  const ec = needAnyAmp(cat.rows, 'end_cover', input.ampere, input.series);
+  const ec = needAnyAmpL(cat.rows, 'end_cover', input.ampere, input.series, input.ledere);
   if (!ec) throw new Error(`Mangler end_cover for ${input.series}.`);
   push(ec,1);
 }
@@ -333,17 +354,17 @@ const pf = planWithFallback(input.meter, avail);
 
 // legg til linjer etter plan
 if (pf.n3){
-  const r = findByTypeSeriesAmp(cat.rows, tmap.L3, input.series, input.ampere) || byTypeAmpSeriesL(cat.rows,tmap.L3,input.ampere,input.series,input.ledere);
+  const r = byTypeAmpSeriesL(cat.rows,tmap.L3,input.ampere,input.series,input.ledere);
   if(!r) throw new Error(`Mangler ${tmap.L3}.`);
   push(r, pf.n3);
 }
 if (pf.n2){
-  const r = findByTypeSeriesAmp(cat.rows, tmap.L2, input.series, input.ampere) || byTypeAmpSeriesL(cat.rows,tmap.L2,input.ampere,input.series,input.ledere);
+  const r = byTypeAmpSeriesL(cat.rows,tmap.L2,input.ampere,input.series,input.ledere);
   if(!r) throw new Error(`Mangler ${tmap.L2}.`);
   push(r, pf.n2);
 }
 if (pf.n1){
-  const r = findByTypeSeriesAmp(cat.rows, tmap.L1, input.series, input.ampere) || byTypeAmpSeriesL(cat.rows,tmap.L1,input.ampere,input.series,input.ledere);
+  const r = byTypeAmpSeriesL(cat.rows,tmap.L1,input.ampere,input.series,input.ledere);
   if(!r) throw new Error(`Mangler ${tmap.L1}.`);
   push(r, pf.n1);
 }
@@ -382,7 +403,7 @@ if (pf.n1){
 
   // Ekspansjon
   if (input.meter > 30 && input.expansionYes){
-    const exp = byTypeAmpSeries(cat.rows,'expansion_unit',input.ampere,input.series);
+    const exp = byTypeAmpSeriesL(cat.rows,'expansion_unit',input.ampere,input.series,input.ledere);
     if (!exp) throw new Error(`Mangler expansion_unit for ${input.series} ${input.ampere}.`);
     push(exp,1);
   }

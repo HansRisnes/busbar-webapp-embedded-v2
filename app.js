@@ -2888,6 +2888,18 @@ function formatLineTotal(line){
   return Number.isFinite(total) ? `${fmtNO.format(total)} NOK` : 'Ingen sum';
 }
 
+function resolveLineSkinMaterialCost(line){
+  const totalsMaterial = Number(line?.totals?.material);
+  if (Number.isFinite(totalsMaterial)) return round2(totalsMaterial);
+  const directMaterial = Number(line?.material);
+  return Number.isFinite(directMaterial) ? round2(directMaterial) : NaN;
+}
+
+function formatLineSkinMaterialCost(line){
+  const material = resolveLineSkinMaterialCost(line);
+  return Number.isFinite(material) ? `Materiell skinne: ${fmtNO.format(material)} NOK` : 'Materiell skinne: -';
+}
+
 function sanitizeDownloadFileName(value, fallback = 'tilbud'){
   const raw = String(value || '').trim() || fallback;
   const cleaned = raw.replace(/[<>:"/\\|?*\u0000-\u001F]/g, '-').replace(/\s+/g, ' ').trim();
@@ -3071,6 +3083,10 @@ function renderProjectDashboard(){
       const lineTotal = resolveLineDisplayTotal(line);
       return Number.isFinite(lineTotal) ? sum + lineTotal : sum;
     }, 0));
+    const projectSkinMaterialTotal = round2(projectLines.reduce((sum, line)=>{
+      const material = resolveLineSkinMaterialCost(line);
+      return Number.isFinite(material) ? sum + material : sum;
+    }, 0));
     const row = document.createElement('section');
     row.className = 'project-row';
     if (expanded) row.classList.add('is-expanded');
@@ -3091,7 +3107,7 @@ function renderProjectDashboard(){
     const summary = document.createElement('p');
     summary.className = 'project-row-meta';
     const lineCount = projectLines.length;
-    summary.textContent = `Linjer: ${lineCount} | Totalsum linjer: ${fmtNO.format(projectTotal)} NOK`;
+    summary.textContent = `Linjer: ${lineCount} | Materiell skinne: ${fmtNO.format(projectSkinMaterialTotal)} NOK | Totalsum linjer: ${fmtNO.format(projectTotal)} NOK`;
     const marginBadge = document.createElement('p');
     marginBadge.className = 'project-margin-badge';
     marginBadge.textContent = formatProjectMarginBadgeText(project);
@@ -3216,12 +3232,17 @@ function renderProjectDashboard(){
         totalSpan.className = 'line-total';
         totalSpan.textContent = formatLineTotal(line);
 
+        const materialSpan = document.createElement('span');
+        materialSpan.className = 'line-material';
+        materialSpan.textContent = formatLineSkinMaterialCost(line);
+
         const updatedSpan = document.createElement('span');
         updatedSpan.className = 'line-updated';
         updatedSpan.textContent = formatLineUpdatedText(line);
 
         lineBtn.appendChild(nameSpan);
         lineBtn.appendChild(infoSpan);
+        lineBtn.appendChild(materialSpan);
         lineBtn.appendChild(totalSpan);
         lineBtn.appendChild(updatedSpan);
         const lineAddonControl = buildAddonSelectorControl(
@@ -5178,10 +5199,25 @@ function matchesLedere(row, ledere){
   const implied = c.includes('-3W') ? '3F+PE' : '3F+N+PE';
   return ledere === implied || !c;
 }
+function isThreeWireRow(row){
+  return String(row?.code || '').toUpperCase().includes('-3W');
+}
+function hasConductorVariants(rows){
+  return rows.some(isThreeWireRow);
+}
 function byTypeAmpSeries(rows, type, amp, series){ return rows.find(r=>r.type===type && r.series===series && Number(deriveAmp(r))===Number(amp)); }
 function byTypeAmpSeriesL(rows, type, amp, series, ledere){
-  const m = rows.find(r=>r.type===type && r.series===series && Number(deriveAmp(r))===Number(amp) && matchesLedere(r, ledere));
-  return m || rows.find(r=>r.type===type && r.series===series && Number(deriveAmp(r))===Number(amp)) || rows.find(r=>r.type===type && r.series===series);
+  const exactAmp = rows.filter(r=>r.type===type && r.series===series && Number(deriveAmp(r))===Number(amp));
+  const exactMatch = exactAmp.find(r=>matchesLedere(r, ledere));
+  if (exactMatch) return exactMatch;
+  if (hasConductorVariants(exactAmp)) return null;
+  if (exactAmp.length) return exactAmp[0];
+
+  const sameTypeSeries = rows.filter(r=>r.type===type && r.series===series);
+  const looseMatch = sameTypeSeries.find(r=>matchesLedere(r, ledere));
+  if (looseMatch) return looseMatch;
+  if (hasConductorVariants(sameTypeSeries)) return null;
+  return sameTypeSeries[0] || null;
 }
 function byBoxAll(catalog, kind, amp, prefSeries){
   const list = catalog.filter(r=>r.type===kind && (amp ? Number(deriveAmp(r))===Number(amp) : true));
@@ -5320,7 +5356,7 @@ function planWithFallback(m, avail){
 function findLengthVariant(catRows, series, amp, ledere, typeSpec){
   const rows = catRows.filter(r=>r.series===series);
   for (const type of toTypeArray(typeSpec)){
-    const row = findByTypeSeriesAmp(rows, type, series, amp) || byTypeAmpSeriesL(rows,type,amp,series,ledere);
+    const row = byTypeAmpSeriesL(rows,type,amp,series,ledere);
     if (row) return row;
   }
   return null;
@@ -5335,6 +5371,12 @@ function hasType(catRows, series, amp, ledere, typeSpec){
 function needAnyAmp(rows, type, amp, series){
   return byTypeAmpSeries(rows, type, amp, series)
       || rows.find(r => r.type===type && r.series===series); // ingen amp i CSV
+}
+function needAnyAmpL(rows, type, amp, series, ledere){
+  const sameTypeSeries = rows.filter(r=>r.type===type && r.series===series);
+  return byTypeAmpSeriesL(rows, type, amp, series, ledere)
+      || sameTypeSeries.find(r => matchesLedere(r, ledere))
+      || (!hasConductorVariants(sameTypeSeries) ? sameTypeSeries[0] : null);
 }
 
 function epoxyMonoblocFactor(amp){
@@ -5397,27 +5439,27 @@ function price(cat, input){
 
   // Startelement
 if (input.startEl === 'board_feed'){
-  const bf = needAnyAmp(cat.rows, 'board_feed', input.ampere, input.series);
+  const bf = needAnyAmpL(cat.rows, 'board_feed', input.ampere, input.series, input.ledere);
   if (!bf) throw new Error(`Mangler board_feed for ${input.series}.`);
   push(bf,1);
 } else if (input.startEl === 'end_feed_unit'){
-  const ef = needAnyAmp(cat.rows, 'end_feed_unit', input.ampere, input.series);
+  const ef = needAnyAmpL(cat.rows, 'end_feed_unit', input.ampere, input.series, input.ledere);
   if (!ef) throw new Error(`Mangler end_feed_unit for ${input.series}.`);
   push(ef,1);
 }
 
 // Sluttelement
 if (input.sluttEl === 'board_feed'){
-  const bf = needAnyAmp(cat.rows, 'board_feed', input.ampere, input.series);
+  const bf = needAnyAmpL(cat.rows, 'board_feed', input.ampere, input.series, input.ledere);
   if (!bf) throw new Error(`Mangler board_feed for ${input.series}.`);
   push(bf,1);
 } else if (input.sluttEl === 'crt_board_feed'){
   if (!seriesSupportsCrtFeed(input.series)) throw new Error('Trafoelement er ikke tilgjengelig for valgt system.');
-  const crt = needAnyAmp(cat.rows, 'crt_board_feed', input.ampere, input.series);
+  const crt = needAnyAmpL(cat.rows, 'crt_board_feed', input.ampere, input.series, input.ledere);
   if (!crt) throw new Error(`Mangler crt_board_feed for ${input.series}.`);
   push(crt,1);
 } else if (input.sluttEl === 'end_cover'){
-  const ec = needAnyAmp(cat.rows, 'end_cover', input.ampere, input.series);
+  const ec = needAnyAmpL(cat.rows, 'end_cover', input.ampere, input.series, input.ledere);
   if (!ec) throw new Error(`Mangler end_cover for ${input.series}.`);
   push(ec,1);
 }
@@ -5500,7 +5542,7 @@ if (pf.n1){
 
   // Ekspansjon
   if (input.meter > 30 && input.expansionYes){
-    const exp = byTypeAmpSeries(cat.rows,'expansion_unit',input.ampere,input.series);
+    const exp = byTypeAmpSeriesL(cat.rows,'expansion_unit',input.ampere,input.series,input.ledere);
     if (!exp) throw new Error(`Mangler expansion_unit for ${input.series} ${input.ampere}.`);
     push(exp,1);
   }
