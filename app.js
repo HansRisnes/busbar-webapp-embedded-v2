@@ -2344,13 +2344,18 @@ function normalizeSelectedAddonConfig(config, fallbackConfig = null){
       )
     )
   );
+  const includeUnitPrices = resolveSelectedAddonFlag(
+    config?.includeUnitPrices,
+    resolveSelectedAddonFlag(fallback.includeUnitPrices, false)
+  );
   return {
     includeMontasje,
     includeEngineering,
     includeOppheng,
     showMontasje: includeMontasje && showMontasje,
     showEngineering: includeEngineering && showEngineering,
-    showOppheng: includeOppheng && showOppheng
+    showOppheng: includeOppheng && showOppheng,
+    includeUnitPrices
   };
 }
 
@@ -2371,7 +2376,8 @@ function getOfferAddonCheckboxValuesFromUI(){
     includeOppheng: Boolean($('includeOppheng')?.checked),
     showMontasje: Boolean($('showMontasje')?.checked),
     showEngineering: Boolean($('showEngineering')?.checked),
-    showOppheng: Boolean($('showOppheng')?.checked)
+    showOppheng: Boolean($('showOppheng')?.checked),
+    includeUnitPrices: Boolean($('includeUnitPrices')?.checked)
   }, null);
 }
 
@@ -2401,12 +2407,14 @@ function applySelectedAddonCheckboxes(line){
   const showMontasje = $('showMontasje');
   const showEngineering = $('showEngineering');
   const showOppheng = $('showOppheng');
+  const includeUnitPrices = $('includeUnitPrices');
   if (includeMontasje) includeMontasje.checked = config.includeMontasje;
   if (includeEngineering) includeEngineering.checked = config.includeEngineering;
   if (includeOppheng) includeOppheng.checked = config.includeOppheng;
   if (showMontasje) showMontasje.checked = config.showMontasje;
   if (showEngineering) showEngineering.checked = config.showEngineering;
   if (showOppheng) showOppheng.checked = config.showOppheng;
+  if (includeUnitPrices) includeUnitPrices.checked = config.includeUnitPrices;
   applyOfferAddonCheckboxConstraints();
   return config;
 }
@@ -2529,12 +2537,14 @@ function applyProjectAddonCheckboxesToCalculator(project){
   const showMontasje = $('showMontasje');
   const showEngineering = $('showEngineering');
   const showOppheng = $('showOppheng');
+  const includeUnitPrices = $('includeUnitPrices');
   if (includeMontasje) includeMontasje.checked = config.includeMontasje;
   if (includeEngineering) includeEngineering.checked = config.includeEngineering;
   if (includeOppheng) includeOppheng.checked = config.includeOppheng;
   if (showMontasje) showMontasje.checked = config.showMontasje;
   if (showEngineering) showEngineering.checked = config.showEngineering;
   if (showOppheng) showOppheng.checked = config.showOppheng;
+  if (includeUnitPrices) includeUnitPrices.checked = config.includeUnitPrices;
   applyOfferAddonCheckboxConstraints();
   updateSelectedAddonTotalUI();
 }
@@ -2880,6 +2890,32 @@ function buildAddonSelectorControl(config, options = {}){
 
   wrapper.appendChild(buildSelectorGroup('Inkluder i tilbud:', 'include', 'includeKey'));
   wrapper.appendChild(buildSelectorGroup('Synliggjør pris:', 'show', 'showKey'));
+  const unitGroup = document.createElement('div');
+  unitGroup.className = 'addon-selectors';
+  const unitTitle = document.createElement('span');
+  unitTitle.className = 'addon-selectors-title';
+  const unitStrong = document.createElement('strong');
+  unitStrong.textContent = 'Inkluder enhetspriser:';
+  unitTitle.appendChild(unitStrong);
+  unitGroup.appendChild(unitTitle);
+  const unitLabel = document.createElement('label');
+  const unitInput = document.createElement('input');
+  unitInput.type = 'checkbox';
+  unitInput.checked = Boolean(normalized.includeUnitPrices);
+  unitInput.dataset.addonField = 'includeUnitPrices';
+  unitInput.dataset.addonMode = 'unit';
+  if (options.scope === 'project'){
+    unitInput.dataset.projectAddon = '1';
+    unitInput.dataset.projectId = options.projectId || '';
+  } else if (options.scope === 'line'){
+    unitInput.dataset.lineAddon = '1';
+    unitInput.dataset.projectId = options.projectId || '';
+    unitInput.dataset.lineId = options.lineId || '';
+  }
+  unitLabel.appendChild(unitInput);
+  unitLabel.appendChild(document.createTextNode(' Enhetspriser'));
+  unitGroup.appendChild(unitLabel);
+  wrapper.appendChild(unitGroup);
   return wrapper;
 }
 
@@ -3342,8 +3378,7 @@ function applyCalculatorQueryContext(){
     applyProjectAddonCheckboxesToCalculator(project);
     const statusEl = $('status');
     if (statusEl) statusEl.textContent = 'Oppgi linjenummer for ny linje.';
-    const lineInput = $('lineNumberInput');
-    if (lineInput) lineInput.focus();
+    scrollPageToTop();
   }
 
   if (typeof history !== 'undefined' && history.replaceState){
@@ -3388,12 +3423,14 @@ function startNewLineForProject(projectId){
   resetCalculatorForm({ preserveProject: true });
   applyProjectAddonCheckboxesToCalculator(project);
   showCalculatorView();
-  const lineInput = $('lineNumberInput');
-  if (lineInput){
-    lineInput.focus();
-  }
+  scrollPageToTop();
   const statusEl = $('status');
   if (statusEl) statusEl.textContent = 'Oppgi linjenummer for ny linje.';
+}
+
+function scrollPageToTop(){
+  if (typeof window === 'undefined' || typeof window.scrollTo !== 'function') return;
+  window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
 }
 
 function ensureOption(selectEl, value, label){
@@ -3896,12 +3933,14 @@ function resetCalculatorForm(options = {}){
   const showMontasje = $('showMontasje');
   const showEngineering = $('showEngineering');
   const showOppheng = $('showOppheng');
+  const includeUnitPrices = $('includeUnitPrices');
   if (includeMontasje) includeMontasje.checked = true;
   if (includeEngineering) includeEngineering.checked = true;
   if (includeOppheng) includeOppheng.checked = true;
   if (showMontasje) showMontasje.checked = false;
   if (showEngineering) showEngineering.checked = false;
   if (showOppheng) showOppheng.checked = false;
+  if (includeUnitPrices) includeUnitPrices.checked = false;
   applyOfferAddonCheckboxConstraints();
   if (preserveProject && projectState.currentProjectId){
     const project = getProjectById(projectState.currentProjectId);
@@ -4331,6 +4370,10 @@ if (resetBtn){
   if (!checkbox) return;
   checkbox.addEventListener('change', applyOfferAddonCheckboxConstraints);
 });
+const includeUnitPricesEl = $('includeUnitPrices');
+if (includeUnitPricesEl){
+  includeUnitPricesEl.addEventListener('change', updateSelectedAddonTotalUI);
+}
 applyOfferAddonCheckboxConstraints();
 updateSelectedAddonTotalUI();
 
@@ -5249,6 +5292,57 @@ function getFireBarrier(rows, amp, series){
   return { code, unit };
 }
 
+function getUnitPriceFromRow(row){
+  if (!row) return NaN;
+  const unit = toNum(row.unit_price);
+  return Number.isFinite(unit) && unit > 0 ? unit : NaN;
+}
+
+function getUnitPriceForType(catRows, series, amp, ledere, typeSpec){
+  const row = findLengthVariant(catRows, series, amp, ledere, typeSpec)
+    || byTypeAmpSeriesL(catRows, Array.isArray(typeSpec) ? typeSpec[0] : typeSpec, amp, series, ledere);
+  return getUnitPriceFromRow(row);
+}
+
+function buildRawUnitPriceSnapshot(cat, input){
+  const startType = String(input.startEl || '').trim();
+  const endType = String(input.sluttEl || '').trim();
+  const meterUnit = getUnitPriceForType(cat.rows, input.series, input.ampere, input.ledere, [
+    'straight_500_1000',
+    'straight_500_1000_dist',
+    'xcm_feeder_600_1500',
+    'xcm_dist_1000_1500'
+  ]);
+  const vinkelVertikalUnit = getUnitPriceForType(cat.rows, input.series, input.ampere, input.ledere, 'elbow_vertical_90');
+  const vinkelHorisontalUnit = getUnitPriceForType(cat.rows, input.series, input.ampere, input.ledere, 'elbow_horizontal_90');
+  const startUnit = startType && startType !== 'none'
+    ? getUnitPriceForType(cat.rows, input.series, input.ampere, input.ledere, startType)
+    : NaN;
+  const endUnit = endType && endType !== 'none'
+    ? getUnitPriceForType(cat.rows, input.series, input.ampere, input.ledere, endType)
+    : NaN;
+  const fireBarrier = getFireBarrier(cat.rows, input.ampere, input.series);
+  const expansionUnit = getUnitPriceForType(cat.rows, input.series, input.ampere, input.ledere, 'expansion_unit');
+  const firstBoxItem = normalizeBoxItems(input.boxItems, input.boxSel, input.boxQty, input.boxInnmatSum)[0];
+  let tapOffUnit = NaN;
+  if (firstBoxItem?.boxSel){
+    const [kind, ampStr] = String(firstBoxItem.boxSel || '').split('|');
+    const row = byBoxAll(cat.catalog, kind, ampStr ? Number(ampStr) : undefined, input.series);
+    tapOffUnit = getUnitPriceFromRow(row);
+  }
+  return {
+    meter: Number.isFinite(meterUnit) ? round2(meterUnit) : null,
+    vinkel: Number.isFinite(vinkelVertikalUnit) ? round2(vinkelVertikalUnit) : null,
+    vinkelVertikal: Number.isFinite(vinkelVertikalUnit) ? round2(vinkelVertikalUnit) : null,
+    vinkelHorisontal: Number.isFinite(vinkelHorisontalUnit) ? round2(vinkelHorisontalUnit) : null,
+    tavleelement: Number.isFinite(startUnit) ? round2(startUnit) : null,
+    sluttelement: Number.isFinite(endUnit) ? round2(endUnit) : null,
+    brann: fireBarrier && Number.isFinite(fireBarrier.unit) ? round2(fireBarrier.unit) : null,
+    ekspansjon: Number.isFinite(expansionUnit) ? round2(expansionUnit) : null,
+    avtappingsboks: Number.isFinite(tapOffUnit) ? round2(tapOffUnit) : null
+  };
+}
+
 // plan
 function planSegments(m){
   let rem = Math.ceil(Number(m));
@@ -5582,9 +5676,11 @@ if (pf.n1){
     opphengCost: oppheng.cost,
     opphengMarginRate: input.opphengMarginRate
   });
+  const rawUnitPrices = buildRawUnitPriceSnapshot(cat, input);
   return {
     bom,
     material,
+    rawUnitPrices,
     tapOffBoxTotal,
     marginRate: totals.marginRate,
     marginFactor: totals.marginFactor,
@@ -5692,6 +5788,7 @@ function refreshCalculatedBoxItems(){
     totalInclEngineering: out.totalInclEngineering,
     totalInclOppheng: out.totalInclOppheng,
     total: out.total,
+    rawUnitPrices: deepClone(out.rawUnitPrices || {}),
     tapOffMarginRate: input.tapOffMarginRate,
     bom: deepClone(out.bom)
   });
@@ -5713,6 +5810,7 @@ function refreshCalculatedBoxItems(){
       totalInclMontasje: out.totalInclMontasje,
       totalInclEngineering: out.totalInclEngineering,
       totalInclOppheng: out.totalInclOppheng,
+      rawUnitPrices: deepClone(out.rawUnitPrices || {}),
       tapOffMarginRate: input.tapOffMarginRate,
       tapOffOfferTotal: lastCalc.tapOffOfferTotal
     });
@@ -6451,6 +6549,7 @@ if (calcBtn){
       engineeringDetail: engineeringDetailText,
       opphengDetail: opphengDetailText,
       total: totalInclOpphengVal,
+      rawUnitPrices: deepClone(out.rawUnitPrices || {}),
       bom: deepClone(out.bom)
     };
     lastCalc.tapOffOfferTotal = calculateTapOffOfferTotal(lastCalc);
@@ -6485,6 +6584,7 @@ if (calcBtn){
         totalInclMontasje: totalInclMontasjeVal,
         totalInclEngineering: totalInclEngineeringVal,
         totalInclOppheng: totalInclOpphengVal,
+        rawUnitPrices: deepClone(out.rawUnitPrices || {}),
         tapOffMarginRate: currentTapOffMarginRate,
         tapOffOfferTotal: calculateTapOffOfferTotal({ bom: out.bom, tapOffMarginRate: currentTapOffMarginRate })
       },

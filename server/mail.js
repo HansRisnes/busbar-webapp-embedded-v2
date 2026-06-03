@@ -870,13 +870,15 @@ function resolveLineSelectedAddonConfig(line, lineTotals = {}) {
     raw?.showOppheng,
     resolveSelectedAddonFlag(raw?.includeOppheng, false)
   );
+  const includeUnitPrices = resolveSelectedAddonFlag(raw?.includeUnitPrices, false);
   return {
     includeMontasje,
     includeEngineering,
     includeOppheng,
     showMontasje: includeMontasje && showMontasje,
     showEngineering: includeEngineering && showEngineering,
-    showOppheng: includeOppheng && showOppheng
+    showOppheng: includeOppheng && showOppheng,
+    includeUnitPrices
   };
 }
 
@@ -1413,6 +1415,130 @@ function formatTapOffOfferPricePlaceholder(value, qty = 0) {
   return formatNoCurrencyWithKr(amount);
 }
 
+function resolveBomUnitByType(line, typeNames) {
+  const types = new Set((Array.isArray(typeNames) ? typeNames : [typeNames])
+    .map(type=>safeString(type).toLowerCase())
+    .filter(Boolean));
+  if (!types.size) return NaN;
+  const bom = Array.isArray(line?.bom) ? line.bom : [];
+  const match = bom.find(entry=>{
+    const type = safeString(entry?.type || entry?.element_type || entry?.elementType).toLowerCase();
+    if (!types.has(type)) return false;
+    if (isTapOffInnmatBomLine(entry)) return false;
+    const unit = toFiniteNumber(entry?.enhet ?? entry?.unit ?? entry?.unit_price);
+    return Number.isFinite(unit) && unit > 0;
+  });
+  if (!match) return NaN;
+  return toFiniteNumber(match.enhet ?? match.unit ?? match.unit_price);
+}
+
+function applyMaterialOfferUnitPrice(unitCost, input = {}, lineTotals = {}) {
+  const unit = toFiniteNumber(unitCost);
+  if (!Number.isFinite(unit) || unit <= 0) return NaN;
+  const marginRate = normalizeMarginRate(lineTotals.marginRate ?? input.marginRate, 0.20);
+  const factor = 1 - marginRate;
+  if (!(factor > 0)) return NaN;
+  const freightRaw = toFiniteNumber(input.freightRate ?? lineTotals.freightRate);
+  const freightRate = Number.isFinite(freightRaw) ? Math.max(0, freightRaw) : 0;
+  return round2((unit / factor) + (unit * freightRate));
+}
+
+function formatMaterialOfferUnitPrice(unitCost, input = {}, lineTotals = {}) {
+  const price = applyMaterialOfferUnitPrice(unitCost, input, lineTotals);
+  return Number.isFinite(price) ? formatNoCurrencyWithKr(price) : '';
+}
+
+function buildEmptyUnitPricePlaceholders() {
+  const keys = [
+    'enhetspris_meter', 'meter_enhetspris', 'mtr_enhetspris', 'mtr_enhetspris_nok',
+    'enhetspris_vinkel', 'vinkel_enhetspris', 'vinkel_enhetspris_nok',
+    'enhetspris_vinkel_vertikal', 'vertikal_vinkel_enhetspris', 'vvk_enhetspris', 'vvk_enhetspris_nok',
+    'enhetspris_vinkel_horisontal', 'horisontal_vinkel_enhetspris', 'hvk_enhetspris', 'hvk_enhetspris_nok',
+    'enhetspris_tavleelement', 'tavleelement_enhetspris', 'ste_enhetspris', 'ste_enhetspris_nok',
+    'enhetspris_sluttelement', 'sluttelement_enhetspris', 'sle_enhetspris', 'sle_enhetspris_nok',
+    'enhetspris_brann', 'brann_enhetspris', 'bre_enhetspris', 'bre_enhetspris_nok',
+    'enhetspris_ekspansjon', 'ekspansjon_enhetspris', 'exp_enhetspris', 'exp_enhetspris_nok',
+    'enhetspris_avtappingsboks', 'avtappingsboks_enhetspris', 'avb_enhetspris', 'avb_enhetspris_nok'
+  ];
+  return Object.fromEntries(keys.map(key=>[key, '']));
+}
+
+function buildUnitPricePlaceholders(line, input, lineTotals, fireBarrierPriceIndex) {
+  const empty = buildEmptyUnitPricePlaceholders();
+  const selectedAddonConfig = resolveLineSelectedAddonConfig(line, lineTotals);
+  if (!selectedAddonConfig.includeUnitPrices) return empty;
+
+  const rawUnitPrices = (lineTotals?.rawUnitPrices && typeof lineTotals.rawUnitPrices === 'object')
+    ? lineTotals.rawUnitPrices
+    : {};
+  const rawUnit = key => {
+    const value = toFiniteNumber(rawUnitPrices[key]);
+    return Number.isFinite(value) && value > 0 ? value : NaN;
+  };
+  const startType = safeString(input?.startEl);
+  const endType = safeString(input?.sluttEl);
+  const tapOffTypes = ['plug_in_box', 'tap_off_box', 'bolt_on_box'];
+  const fireUnit = resolveFireBarrierUnitPrice(line, fireBarrierPriceIndex, input);
+  const values = {
+    meter: formatMaterialOfferUnitPrice(rawUnit('meter') || resolveBomUnitByType(line, [
+      'straight_500_1000',
+      'straight_500_1000_dist',
+      'xcm_feeder_600_1500',
+      'xcm_dist_1000_1500'
+    ]), input, lineTotals),
+    vinkelVertikal: formatMaterialOfferUnitPrice(rawUnit('vinkelVertikal') || rawUnit('vinkel') || resolveBomUnitByType(line, 'elbow_vertical_90'), input, lineTotals),
+    vinkelHorisontal: formatMaterialOfferUnitPrice(rawUnit('vinkelHorisontal') || resolveBomUnitByType(line, 'elbow_horizontal_90'), input, lineTotals),
+    tavleelement: startType && startType !== 'none'
+      ? formatMaterialOfferUnitPrice(rawUnit('tavleelement') || resolveBomUnitByType(line, startType), input, lineTotals)
+      : '',
+    sluttelement: endType && endType !== 'none'
+      ? formatMaterialOfferUnitPrice(rawUnit('sluttelement') || resolveBomUnitByType(line, endType), input, lineTotals)
+      : '',
+    brann: formatMaterialOfferUnitPrice(rawUnit('brann') || fireUnit, input, lineTotals),
+    ekspansjon: formatMaterialOfferUnitPrice(rawUnit('ekspansjon') || resolveBomUnitByType(line, 'expansion_unit'), input, lineTotals),
+    avtappingsboks: formatMaterialOfferUnitPrice(rawUnit('avtappingsboks') || resolveBomUnitByType(line, tapOffTypes), input, lineTotals)
+  };
+
+  return {
+    ...empty,
+    enhetspris_meter: values.meter,
+    meter_enhetspris: values.meter,
+    mtr_enhetspris: values.meter,
+    mtr_enhetspris_nok: values.meter,
+    enhetspris_vinkel: values.vinkelVertikal,
+    vinkel_enhetspris: values.vinkelVertikal,
+    vinkel_enhetspris_nok: values.vinkelVertikal,
+    enhetspris_vinkel_vertikal: values.vinkelVertikal,
+    vertikal_vinkel_enhetspris: values.vinkelVertikal,
+    vvk_enhetspris: values.vinkelVertikal,
+    vvk_enhetspris_nok: values.vinkelVertikal,
+    enhetspris_vinkel_horisontal: values.vinkelHorisontal,
+    horisontal_vinkel_enhetspris: values.vinkelHorisontal,
+    hvk_enhetspris: values.vinkelHorisontal,
+    hvk_enhetspris_nok: values.vinkelHorisontal,
+    enhetspris_tavleelement: values.tavleelement,
+    tavleelement_enhetspris: values.tavleelement,
+    ste_enhetspris: values.tavleelement,
+    ste_enhetspris_nok: values.tavleelement,
+    enhetspris_sluttelement: values.sluttelement,
+    sluttelement_enhetspris: values.sluttelement,
+    sle_enhetspris: values.sluttelement,
+    sle_enhetspris_nok: values.sluttelement,
+    enhetspris_brann: values.brann,
+    brann_enhetspris: values.brann,
+    bre_enhetspris: values.brann,
+    bre_enhetspris_nok: values.brann,
+    enhetspris_ekspansjon: values.ekspansjon,
+    ekspansjon_enhetspris: values.ekspansjon,
+    exp_enhetspris: values.ekspansjon,
+    exp_enhetspris_nok: values.ekspansjon,
+    enhetspris_avtappingsboks: values.avtappingsboks,
+    avtappingsboks_enhetspris: values.avtappingsboks,
+    avb_enhetspris: values.avtappingsboks,
+    avb_enhetspris_nok: values.avtappingsboks
+  };
+}
+
 function resolveExpansionQtyFromBom(line) {
   const bom = Array.isArray(line?.bom) ? line.bom : [];
   return bom.reduce((sum, entry)=>{
@@ -1770,8 +1896,10 @@ async function buildOfferLinePlaceholderValues(project) {
     const tapOffTotalQty = tapOffItems.reduce((sum, item)=>sum + Number(item.qty || 0), 0);
     const tapOffPriceTotal = resolveTapOffOfferPriceTotal(line, input);
     const tapOffPricePlaceholder = formatTapOffOfferPricePlaceholder(tapOffPriceTotal, tapOffTotalQty);
+    const unitPricePlaceholders = buildUnitPricePlaceholders(line, input, lineTotals, fireBarrierPriceIndex);
 
     linePlaceholderSets.push({
+      ...unitPricePlaceholders,
       lnr: lineNumber,
       linjenummer: lineNumber,
       sys: safeString(input.series),
