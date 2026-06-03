@@ -275,6 +275,12 @@ function formatNoInteger(value) {
   }).format(Math.round(amount));
 }
 
+function formatNoPositiveInteger(value) {
+  const amount = toFiniteNumber(value);
+  if (!Number.isFinite(amount) || amount <= 0) return '';
+  return formatNoInteger(amount);
+}
+
 function formatNoIntegerUp(value) {
   const amount = toFiniteNumber(value);
   if (!Number.isFinite(amount)) return '';
@@ -1919,8 +1925,8 @@ async function buildOfferLinePlaceholderValues(project) {
       linjenummer: lineNumber,
       sys: safeString(input.series),
       mtr: formatNoInteger(input.meter),
-      vvk: formatNoInteger(input.v90_v ?? input.v90v),
-      hvk: formatNoInteger(input.v90_h ?? input.v90h),
+      vvk: formatNoPositiveInteger(input.v90_v ?? input.v90v),
+      hvk: formatNoPositiveInteger(input.v90_h ?? input.v90h),
       amp,
       led: safeString(input.ledere),
       ste: normalizeElementLabel(input.startEl),
@@ -1928,7 +1934,7 @@ async function buildOfferLinePlaceholderValues(project) {
       ipg: ipGrade,
       ip_grad: ipGrade,
       IP_GRAD: ipGrade,
-      avb: formatNoInteger(tapOffTotalQty),
+      avb: formatNoPositiveInteger(tapOffTotalQty),
       avb_tekst: tapOffText,
       avtappingsbokser_tekst: tapOffText,
       AVTAPPINGSBOKSER_TEKST: tapOffText,
@@ -2095,8 +2101,17 @@ function hasUsablePlaceholderValue(placeholders, keys) {
 }
 
 function xmlContainsPlaceholder(xml, key) {
-  const pattern = new RegExp(`\\{\\{\\s*${escapeRegex(key)}\\s*\\}\\}`, 'i');
-  return pattern.test(String(xml || ''));
+  const source = String(xml || '');
+  const directPattern = new RegExp(`\\{\\{\\s*${escapeRegex(key)}\\s*\\}\\}`, 'i');
+  if (directPattern.test(source)) return true;
+
+  const normalizedKey = String(key || '');
+  if (!normalizedKey) return false;
+  const bridge = '(?:\\s|</w:t>(?:(?!<w:t)[\\s\\S])*<w:t[^>]*>)*';
+  const body = [...normalizedKey].map(ch=>`${escapeRegex(ch)}${bridge}`).join('');
+  const open = `\\{${bridge}\\{${bridge}`;
+  const close = `${bridge}\\}${bridge}\\}`;
+  return new RegExp(`${open}${body}${close}`, 'i').test(source);
 }
 
 function getXmlElementRanges(xml, tagName) {
@@ -2120,20 +2135,35 @@ function getXmlElementRanges(xml, tagName) {
   return ranges;
 }
 
+function rangeInsideAny(range, outerRanges) {
+  return outerRanges.some(outer=>range.start >= outer.start && range.end <= outer.end);
+}
+
+function removeRangesMatchingPlaceholders(xml, tagName, keys, options = {}) {
+  let output = String(xml || '');
+  const excludedRanges = Array.isArray(options.excludedRanges) ? options.excludedRanges : [];
+  getXmlElementRanges(output, tagName).reverse().forEach(range=>{
+    if (rangeInsideAny(range, excludedRanges)) return;
+    const fragment = output.slice(range.start, range.end);
+    if (!keys.some(key=>xmlContainsPlaceholder(fragment, key))) return;
+    output = `${output.slice(0, range.start)}${output.slice(range.end)}`;
+  });
+  return output;
+}
+
 function removeXmlContainersForEmptyPlaceholders(xml, placeholders, specs) {
   let output = String(xml || '');
   specs.forEach(spec=>{
     const keys = Array.isArray(spec.keys) ? spec.keys : [];
     if (!keys.length || hasUsablePlaceholderValue(placeholders, keys)) return;
-    const tagName = spec.container === 'tbl'
-      ? 'w:tbl'
-      : (spec.container === 'tr' ? 'w:tr' : 'w:p');
-    const ranges = getXmlElementRanges(output, tagName).reverse();
-    ranges.forEach(range=>{
-      const fragment = output.slice(range.start, range.end);
-      if (!keys.some(key=>xmlContainsPlaceholder(fragment, key))) return;
-      output = `${output.slice(0, range.start)}${output.slice(range.end)}`;
-    });
+    if (spec.container === 'p') {
+      output = removeRangesMatchingPlaceholders(output, 'w:tr', keys);
+      const rowRanges = getXmlElementRanges(output, 'w:tr');
+      output = removeRangesMatchingPlaceholders(output, 'w:p', keys, { excludedRanges: rowRanges });
+      return;
+    }
+    const tagName = spec.container === 'tbl' ? 'w:tbl' : 'w:tr';
+    output = removeRangesMatchingPlaceholders(output, tagName, keys);
   });
   getXmlElementRanges(output, 'w:tbl').reverse().forEach(range=>{
     const fragment = output.slice(range.start, range.end);
@@ -2144,19 +2174,19 @@ function removeXmlContainersForEmptyPlaceholders(xml, placeholders, specs) {
 }
 
 function removeUnusedOfferPlaceholderContainers(xml, placeholders) {
-  const unitPriceKeys = Object.keys(buildEmptyUnitPricePlaceholders());
   const specs = [
     { container: 'p', keys: ['ekspansjonselement', 'exp', 'EXPANSJONSELEMENT'] },
     { container: 'p', keys: ['bre'] },
+    { container: 'p', keys: ['vvk'] },
+    { container: 'p', keys: ['hvk'] },
+    { container: 'p', keys: ['avb'] },
     { container: 'tbl', keys: ['avb_tekst', 'avtappingsbokser_tekst', 'AVTAPPINGSBOKSER_TEKST', 'avb_pris', 'avb_pris_nok', 'avb_sum', 'avb_sum_nok', 'avtappingsbokser_pris', 'avtappingsbokser_pris_nok', 'AVTAPPINGSBOKSER_PRIS'] },
     { container: 'tbl', keys: ['mtl', 'mtp'] },
     { container: 'p', keys: ['ttm', 'timer_totalt_montasje'] },
     { container: 'tbl', keys: ['itl', 'itp'] },
     { container: 'p', keys: ['tti', 'timer_totalt_ingenior'] },
     { container: 'tbl', keys: ['tol', 'top'] },
-    { container: 'p', keys: ['tod'] },
-    ...unitPriceKeys.map(key=>({ container: 'tr', keys: [key] })),
-    ...unitPriceKeys.map(key=>({ container: 'p', keys: [key] }))
+    { container: 'p', keys: ['tod'] }
   ];
   return removeXmlContainersForEmptyPlaceholders(xml, placeholders, specs);
 }
