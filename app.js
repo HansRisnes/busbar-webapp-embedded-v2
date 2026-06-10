@@ -76,7 +76,9 @@ const offerDetailsWarningState = {
 };
 let lastEmailPayload = null;
 let pendingBoxItems = [];
+let pendingSpecialElementItems = [];
 let tapOffItemCounter = 0;
+let specialElementItemCounter = 0;
 
 // --- CSV ---
 function parseCSVAuto(text){
@@ -265,6 +267,35 @@ function generateTapOffItemId(){
   return `tapoff-${Date.now()}-${tapOffItemCounter}`;
 }
 
+function normalizeSpecialElementItem(item){
+  if (!item || typeof item !== 'object') return null;
+  const selection = String(item.selection || item.value || item.type || '').trim();
+  const qtyRaw = Number(item.qty ?? item.quantity ?? 0);
+  const qty = Number.isFinite(qtyRaw) ? Math.max(0, Math.round(qtyRaw)) : 0;
+  const unitSumRaw = toNum(item.unitSum ?? item.sum ?? item.elementSum ?? 0);
+  const unitSum = Number.isFinite(unitSumRaw) ? Math.max(0, round2(unitSumRaw)) : 0;
+  if (!selection || qty <= 0) return null;
+  const existingId = String(item.id || item.specialElementGroupId || '').trim();
+  return { id: existingId || generateSpecialElementItemId(), selection, qty, unitSum };
+}
+
+function normalizeSpecialElementItems(items){
+  if (!Array.isArray(items)) return [];
+  return items.map(normalizeSpecialElementItem).filter(Boolean);
+}
+
+function generateSpecialElementItemId(){
+  specialElementItemCounter += 1;
+  return `special-element-${Date.now()}-${specialElementItemCounter}`;
+}
+
+function specialElementLabelFromSelection(value){
+  const sel = $('specialElementType');
+  if (!sel || !value) return String(value || '');
+  const match = [...sel.options].find(opt=>opt.value === value);
+  return match ? String(match.textContent || value) : String(value);
+}
+
 function isSeparateTapOffBoxType(value){
   return ['plug_in_box', 'tap_off_box'].includes(String(value || '').trim().toLowerCase());
 }
@@ -276,6 +307,10 @@ function isTapOffInnmatType(value){
 function isSeparateTapOffBoxBomLine(entry){
   const type = entry?.type || entry?.element_type || entry?.elementType;
   return isSeparateTapOffBoxType(type) || isTapOffInnmatType(type);
+}
+
+function isSeparateSpecialElementBomLine(entry){
+  return Boolean(String(entry?.specialElementGroupId || '').trim());
 }
 
 function resolveBomLineSum(entry){
@@ -333,6 +368,32 @@ function calculateTapOffOfferTotal(source = lastCalc){
   return round2(resolveTapOffOfferRows(source).reduce((sum, row)=>sum + (Number(row.total) || 0), 0));
 }
 
+function resolveSpecialElementOfferRows(source = lastCalc){
+  const bomList = Array.isArray(source?.bom)
+    ? source.bom
+    : (Array.isArray(lastEmailPayload?.bom) ? lastEmailPayload.bom : []);
+  return bomList
+    .filter(isSeparateSpecialElementBomLine)
+    .map((entry, index)=>{
+      const cost = round2(resolveBomLineSum(entry));
+      const dgRate = normalizeMarginRate(source?.tapOffMarginRate ?? currentTapOffMarginRate, DEFAULT_MARGIN_RATE);
+      const pricing = calculateDgPricing(cost, dgRate);
+      return {
+        id: String(entry.specialElementGroupId || `special-element-row-${index}`),
+        label: String(entry.type || specialElementLabelFromSelection(entry.specialElementSelection) || 'Spesialelement'),
+        qty: Number(entry.antall ?? entry.qty ?? entry.quantity) || 0,
+        cost,
+        dgRate,
+        dg: pricing.dg,
+        total: pricing.totalWithDg
+      };
+    });
+}
+
+function calculateSpecialElementOfferTotal(source = lastCalc){
+  return round2(resolveSpecialElementOfferRows(source).reduce((sum, row)=>sum + (Number(row.total) || 0), 0));
+}
+
 function renderTapOffOfferRows(){
   const container = $('tapOffOfferRows');
   if (!container) return;
@@ -366,6 +427,39 @@ function renderTapOffOfferRows(){
   }
 }
 
+function renderSpecialElementOfferRows(){
+  const container = $('specialElementOfferRows');
+  if (!container) return;
+  const rows = resolveSpecialElementOfferRows(lastCalc);
+  container.innerHTML = '';
+  container.hidden = rows.length === 0;
+  rows.forEach(row=>{
+    const line = document.createElement('div');
+    line.className = 'totals-line tap-off-offer-row';
+    line.innerHTML = `
+      <div class="total-item"><strong>${row.label || 'Spesialelement'}${row.qty ? ` x ${fmtIntNO.format(row.qty)}` : ''}:</strong> <span>${fmtNO.format(row.cost)}</span></div>
+      <div class="total-item margin-item tap-off-margin-item">
+        <button type="button" class="btn alt margin-config-btn" data-special-element-dg>Endre</button>
+        <strong>DG ${fmtPercentNO.format(row.dgRate * 100)} %:</strong>
+        <span>${fmtNO.format(row.dg)}</span>
+      </div>
+      <div class="total-item tap-off-total-item"><strong>Total:</strong> <span>${fmtNO.format(row.total)}</span> NOK eks. mva <button type="button" class="btn danger btn-small tap-off-delete-btn" data-delete-special-element="${row.id}">Slett</button></div>
+    `;
+    container.appendChild(line);
+  });
+  const total = calculateSpecialElementOfferTotal(lastCalc);
+  if (total > 0){
+    const summary = document.createElement('div');
+    summary.className = 'totals-line tap-off-offer-row tap-off-summary-row';
+    summary.innerHTML = `
+      <div class="total-item"><strong>Total spesialelementer:</strong></div>
+      <div class="total-item"></div>
+      <div class="total-item tap-off-total-item"><strong><span id="specialElementOfferTotal">${fmtNO.format(total)}</span></strong> NOK eks. mva</div>
+    `;
+    container.appendChild(summary);
+  }
+}
+
 function syncSelectedAddonTotalToPayload(total){
   const safeTotal = round2(Number(total) || 0);
   if (lastCalc){
@@ -374,6 +468,7 @@ function syncSelectedAddonTotalToPayload(total){
   if (lastEmailPayload?.totals){
     lastEmailPayload.totals.selectedAddonTotal = safeTotal;
     lastEmailPayload.totals.tapOffOfferTotal = calculateTapOffOfferTotal(lastCalc);
+    lastEmailPayload.totals.specialElementOfferTotal = calculateSpecialElementOfferTotal(lastCalc);
     lastEmailPayload.totals.tapOffMarginRate = normalizeMarginRate(lastCalc?.tapOffMarginRate ?? currentTapOffMarginRate, DEFAULT_MARGIN_RATE);
   }
 }
@@ -395,6 +490,22 @@ function renderPendingBoxItems(){
     return `${boxTxt} · antall ${qtyTxt} · innmat ${innmatTxt} kr/stk`;
   }).join(' | ');
   preview.textContent = `Valgte bokser: ${text}`;
+}
+
+function renderPendingSpecialElementItems(){
+  const row = $('specialElementItemsRow');
+  const preview = $('specialElementItemsPreview');
+  if (!row || !preview) return;
+  if (!pendingSpecialElementItems.length){
+    row.hidden = true;
+    preview.textContent = '';
+    return;
+  }
+  row.hidden = false;
+  const text = pendingSpecialElementItems
+    .map(item=>`${specialElementLabelFromSelection(item.selection)} · antall ${fmtIntNO.format(item.qty)} · ${fmtNO.format(item.unitSum)} kr/stk`)
+    .join(' | ');
+  preview.textContent = `Valgte spesialelementer: ${text}`;
 }
 
 function convertUsdToNok(value){
@@ -529,12 +640,14 @@ function calculateSelectedAddonTotal(calc){
   if (includeEngineering && Number.isFinite(engineeringTotal)) sum += engineeringTotal;
   if (includeOppheng && Number.isFinite(opphengTotal)) sum += opphengTotal;
   sum += calculateTapOffOfferTotal(calc);
+  sum += calculateSpecialElementOfferTotal(calc);
   return { base: baseTotal, total: round2(sum) };
 }
 
 function updateSelectedAddonTotalUI(){
   const totalEl = $('selectedAddonTotal');
   renderTapOffOfferRows();
+  renderSpecialElementOfferRows();
   if (!totalEl) return;
   const sum = calculateSelectedAddonTotal(lastCalc);
   totalEl.textContent = fmtNO.format(Number.isFinite(sum.total) ? sum.total : 0);
@@ -657,6 +770,7 @@ function recalcLastTotalsFromCurrentRates(){
     total: recalculated.total
   });
   lastCalc.tapOffOfferTotal = calculateTapOffOfferTotal(lastCalc);
+  lastCalc.specialElementOfferTotal = calculateSpecialElementOfferTotal(lastCalc);
   if (lastCalcInput){
     lastCalcInput.marginRate = recalculated.marginRate;
     lastCalcInput.freightRate = recalculated.freightRate;
@@ -692,6 +806,7 @@ function recalcLastTotalsFromCurrentRates(){
     lastEmailPayload.totals.totalInclOppheng = recalculated.totalInclOppheng;
     lastEmailPayload.totals.total = recalculated.total;
     lastEmailPayload.totals.tapOffOfferTotal = lastCalc.tapOffOfferTotal || 0;
+    lastEmailPayload.totals.specialElementOfferTotal = lastCalc.specialElementOfferTotal || 0;
   }
   updateSelectedAddonTotalUI();
 }
@@ -701,6 +816,7 @@ function getDgModalTitleByTarget(target){
   if (target === 'engineering') return 'Endre DG for ingeniør';
   if (target === 'oppheng') return 'Endre DG for oppheng';
   if (target === 'tapoff') return 'Endre DG for avtappingsbokser';
+  if (target === 'special') return 'Endre DG for spesialelementer';
   return 'Endre DG for material';
 }
 
@@ -709,6 +825,7 @@ function getCurrentDgRateByTarget(target){
   if (target === 'engineering') return currentEngineeringMarginRate;
   if (target === 'oppheng') return currentOpphengMarginRate;
   if (target === 'tapoff') return currentTapOffMarginRate;
+  if (target === 'special') return currentTapOffMarginRate;
   return currentMarginRate;
 }
 
@@ -723,6 +840,9 @@ function setCurrentDgRateByTarget(target, rate){
     return setCurrentOpphengMarginRate(rate);
   }
   if (target === 'tapoff'){
+    return setCurrentTapOffMarginRate(rate);
+  }
+  if (target === 'special'){
     return setCurrentTapOffMarginRate(rate);
   }
   return setCurrentMarginRate(rate);
@@ -775,9 +895,10 @@ function submitMarginModal(){
   }
   setCurrentDgRateByTarget(currentDgModalTarget, nextRate);
   if (lastCalc){
-    if (currentDgModalTarget === 'tapoff'){
+    if (currentDgModalTarget === 'tapoff' || currentDgModalTarget === 'special'){
       lastCalc.tapOffMarginRate = currentTapOffMarginRate;
       lastCalc.tapOffOfferTotal = calculateTapOffOfferTotal(lastCalc);
+      lastCalc.specialElementOfferTotal = calculateSpecialElementOfferTotal(lastCalc);
       if (lastCalcInput){
         lastCalcInput.tapOffMarginRate = currentTapOffMarginRate;
       }
@@ -787,6 +908,7 @@ function submitMarginModal(){
       if (lastEmailPayload?.totals){
         lastEmailPayload.totals.tapOffMarginRate = currentTapOffMarginRate;
         lastEmailPayload.totals.tapOffOfferTotal = lastCalc.tapOffOfferTotal;
+        lastEmailPayload.totals.specialElementOfferTotal = lastCalc.specialElementOfferTotal;
       }
       updateSelectedAddonTotalUI();
     } else {
@@ -2479,6 +2601,7 @@ function resolveLineDisplayTotalWithConfig(line, config){
   const engineeringTotal = Number(totals.totalInclEngineering);
   const opphengTotal = Number(totals.totalInclOppheng ?? totals.total);
   const tapOffOfferTotal = Number(totals.tapOffOfferTotal);
+  const specialElementOfferTotal = Number(totals.specialElementOfferTotal);
   let total = baseTotal;
   if (includeMontasje && Number.isFinite(montasjeTotal)) total += montasjeTotal;
   if (includeEngineering && Number.isFinite(engineeringTotal)) total += engineeringTotal;
@@ -2487,6 +2610,14 @@ function resolveLineDisplayTotalWithConfig(line, config){
     total += tapOffOfferTotal;
   } else if (Array.isArray(line?.bom)){
     total += calculateTapOffOfferTotal({
+      bom: line.bom,
+      tapOffMarginRate: totals.tapOffMarginRate ?? line?.inputs?.tapOffMarginRate ?? totals.marginRate ?? line?.inputs?.marginRate
+    });
+  }
+  if (Number.isFinite(specialElementOfferTotal)){
+    total += specialElementOfferTotal;
+  } else if (Array.isArray(line?.bom)){
+    total += calculateSpecialElementOfferTotal({
       bom: line.bom,
       tapOffMarginRate: totals.tapOffMarginRate ?? line?.inputs?.tapOffMarginRate ?? totals.marginRate ?? line?.inputs?.marginRate
     });
@@ -3510,6 +3641,15 @@ function applyInputsToCalculator(input){
   }
   pendingBoxItems = normalizeBoxItems(input.boxItems, input.boxSel, input.boxQty, input.boxInnmatSum);
   renderPendingBoxItems();
+  pendingSpecialElementItems = normalizeSpecialElementItems(input.specialElementItems);
+  const specialElementEl = $('specialElement');
+  if (specialElementEl){
+    specialElementEl.value = pendingSpecialElementItems.length || input.specialElement === 'Ja' ? 'Ja' : 'Nei';
+  }
+  pendingSpecialElementItems.forEach(item=>{
+    ensureOption($('specialElementType'), item.selection, item.selection);
+  });
+  renderPendingSpecialElementItems();
   const freightSelect = $('freightRate');
   if (freightSelect){
     const freightValue = Number(input.freightRate);
@@ -3586,6 +3726,7 @@ function applyInputsToCalculator(input){
   }
   updateMontasjePreview();
   updateTapOffConfigVisibility();
+  updateSpecialElementConfigVisibility();
 }
 
 function applySavedTotalsToUI(line){
@@ -3670,6 +3811,7 @@ function applySavedTotalsToUI(line){
   if (lastCalc){
     lastCalc.bom = Array.isArray(line.bom) ? deepClone(line.bom) : [];
     lastCalc.tapOffOfferTotal = calculateTapOffOfferTotal(lastCalc);
+    lastCalc.specialElementOfferTotal = calculateSpecialElementOfferTotal(lastCalc);
     lastCalc.lineNumber = line.lineNumber || '';
     lastCalc.marginRate = savedMarginRate;
     lastCalc.marginFactor = marginFactorFromRate(savedMarginRate);
@@ -3694,6 +3836,7 @@ function applySavedTotalsToUI(line){
     totalsForPayload.opphengMarginRate = savedOpphengMarginRate;
     totalsForPayload.tapOffMarginRate = savedTapOffMarginRate;
     totalsForPayload.tapOffOfferTotal = calculateTapOffOfferTotal({ bom: line.bom || [], tapOffMarginRate: savedTapOffMarginRate });
+    totalsForPayload.specialElementOfferTotal = calculateSpecialElementOfferTotal({ bom: line.bom || [], tapOffMarginRate: savedTapOffMarginRate });
   }
   lastEmailPayload = {
     project: projectState.currentProject,
@@ -3877,14 +4020,14 @@ function saveCurrentLineToProject(){
 
 function resetCalculatorForm(options = {}){
   const { preserveProject = true } = options;
-  ['series','dist','ampSelect','ledere','startEl','sluttEl','boxSel'].forEach(id=>{
+  ['series','dist','ampSelect','ledere','startEl','sluttEl','boxSel','specialElementType'].forEach(id=>{
     const el = $(id);
     if (el){
       el.value = '';
       el.disabled = false;
     }
   });
-  ['meter','v90h','v90v','fbQty','boxQty','boxInnmatSum'].forEach(id=>{
+  ['meter','v90h','v90v','fbQty','boxQty','boxInnmatSum','specialElementQty','specialElementSum'].forEach(id=>{
     const el = $(id);
     if (el){
       el.value = '';
@@ -3892,7 +4035,12 @@ function resetCalculatorForm(options = {}){
   });
   pendingBoxItems = [];
   renderPendingBoxItems();
+  pendingSpecialElementItems = [];
+  const specialElementEl = $('specialElement');
+  if (specialElementEl) specialElementEl.value = 'Nei';
+  renderPendingSpecialElementItems();
   renderTapOffOfferRows();
+  renderSpecialElementOfferRows();
   const lineNumberEl = $('lineNumberInput');
   if (lineNumberEl){
     lineNumberEl.value = '';
@@ -3950,6 +4098,7 @@ function resetCalculatorForm(options = {}){
   }
   refreshUIBySeries();
   updateTapOffConfigVisibility();
+  updateSpecialElementConfigVisibility();
   setCurrentMarginRate(DEFAULT_MARGIN_RATE);
   setCurrentMontasjeMarginRate(DEFAULT_MARGIN_RATE);
   setCurrentEngineeringMarginRate(DEFAULT_MARGIN_RATE);
@@ -4334,6 +4483,54 @@ document.addEventListener('click', evt=>{
   const target = evt.target instanceof Element ? evt.target.closest('[data-tap-off-dg]') : null;
   if (!target) return;
   openMarginModal('tapoff');
+});
+
+document.addEventListener('click', evt=>{
+  const target = evt.target instanceof Element ? evt.target.closest('[data-special-element-dg]') : null;
+  if (!target) return;
+  openMarginModal('special');
+});
+
+document.addEventListener('click', evt=>{
+  const target = evt.target instanceof Element ? evt.target.closest('[data-delete-special-element]') : null;
+  if (!target) return;
+  const groupId = String(target.getAttribute('data-delete-special-element') || '').trim();
+  if (!groupId) return;
+  const removeItem = items=>normalizeSpecialElementItems(items)
+    .filter(item=>String(item.id || '') !== groupId);
+  pendingSpecialElementItems = removeItem(pendingSpecialElementItems);
+  if (lastCalcInput){
+    lastCalcInput.specialElementItems = removeItem(lastCalcInput.specialElementItems);
+  }
+  let refreshed = false;
+  try{
+    refreshed = refreshCalculatedBoxItems();
+  }catch(err){
+    const st = $('status');
+    if (st) st.textContent = String(err.message || err);
+  }
+  if (!refreshed){
+    if (lastCalc?.bom){
+      lastCalc.bom = lastCalc.bom.filter(entry=>String(entry.specialElementGroupId || '') !== groupId);
+      lastCalc.specialElementOfferTotal = calculateSpecialElementOfferTotal(lastCalc);
+      renderBomTable('bomTbl', lastCalc.bom);
+    }
+    if (lastEmailPayload?.bom){
+      lastEmailPayload.bom = lastEmailPayload.bom.filter(entry=>String(entry.specialElementGroupId || '') !== groupId);
+      if (lastEmailPayload.totals){
+        lastEmailPayload.totals.specialElementOfferTotal = calculateSpecialElementOfferTotal({
+          bom: lastEmailPayload.bom,
+          tapOffMarginRate: lastEmailPayload.totals.tapOffMarginRate ?? lastEmailPayload.inputs?.tapOffMarginRate
+        });
+      }
+    }
+    updateSelectedAddonTotalUI();
+  }
+  renderPendingSpecialElementItems();
+  const st = $('status');
+  if (st) st.textContent = 'Spesialelement slettet fra BOM og tilbudssum. Lagre linjen for å beholde endringen.';
+  const saveBtn = $('saveLineBtn');
+  if (saveBtn) saveBtn.disabled = false;
 });
 
 const lineNumberInputEl = $('lineNumberInput');
@@ -5627,6 +5824,18 @@ if (pf.n1){
     });
   }
 
+  // Spesialelementer prises manuelt per element.
+  const specialElementItems = normalizeSpecialElementItems(input.specialElementItems);
+  specialElementItems.forEach(item=>{
+    const selection = String(item.selection || '').trim();
+    const label = specialElementLabelFromSelection(selection);
+    const code = `SPECIAL-${selection.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toUpperCase()}`;
+    const line = makeCustomLine(code, label, input.series, input.ampere, input.ledere, item.unitSum, item.qty);
+    line.specialElementGroupId = item.id;
+    line.specialElementSelection = selection;
+    bom.push(line);
+  });
+
   // Brann
   if (input.fbQty>0){
     const fb = getFireBarrier(cat.rows, input.ampere, input.series);
@@ -5642,8 +5851,12 @@ if (pf.n1){
   }
 
   const tapOffBoxTotal = sumSeparateTapOffBoxTotal(bom);
+  const specialElementTotal = round2(bom.reduce((sum, entry)=>{
+    if (!isSeparateSpecialElementBomLine(entry)) return sum;
+    return sum + resolveBomLineSum(entry);
+  }, 0));
   const material = round2(bom.reduce((sum, entry)=>{
-    if (isSeparateTapOffBoxBomLine(entry)) return sum;
+    if (isSeparateTapOffBoxBomLine(entry) || isSeparateSpecialElementBomLine(entry)) return sum;
     return sum + resolveBomLineSum(entry);
   }, 0));
   const marginRate = normalizeMarginRate(input.marginRate, DEFAULT_MARGIN_RATE);
@@ -5682,6 +5895,7 @@ if (pf.n1){
     material,
     rawUnitPrices,
     tapOffBoxTotal,
+    specialElementTotal,
     marginRate: totals.marginRate,
     marginFactor: totals.marginFactor,
     margin: totals.margin,
@@ -5762,6 +5976,7 @@ function refreshCalculatedBoxItems(){
   const input = {
     ...deepClone(lastCalcInput),
     boxItems: normalizeBoxItems(pendingBoxItems),
+    specialElementItems: normalizeSpecialElementItems(pendingSpecialElementItems),
     boxQty: 0,
     boxSel: ''
   };
@@ -5778,6 +5993,7 @@ function refreshCalculatedBoxItems(){
   Object.assign(lastCalc, {
     material: out.material,
     tapOffBoxTotal: out.tapOffBoxTotal,
+    specialElementTotal: out.specialElementTotal,
     marginRate: out.marginRate,
     marginFactor: out.marginFactor,
     margin: out.margin,
@@ -5793,7 +6009,28 @@ function refreshCalculatedBoxItems(){
     bom: deepClone(out.bom)
   });
   lastCalc.tapOffOfferTotal = calculateTapOffOfferTotal(lastCalc);
+  lastCalc.specialElementOfferTotal = calculateSpecialElementOfferTotal(lastCalc);
   renderBomTable('bomTbl', out.bom);
+  [
+    ['mat', out.material],
+    ['margin', out.margin],
+    ['subtotal', out.subtotal],
+    ['freight', out.freight],
+    ['totalExMontasje', out.totalExMontasje],
+    ['montasje', out.montasje?.cost],
+    ['montasjeMargin', out.montasjeMargin],
+    ['totalInclMontasje', out.totalInclMontasje],
+    ['engineering', out.engineering?.cost],
+    ['engineeringMargin', out.engineeringMargin],
+    ['totalInclEngineering', out.totalInclEngineering],
+    ['oppheng', out.oppheng?.cost],
+    ['opphengMargin', out.opphengMargin],
+    ['total', out.totalInclOppheng]
+  ].forEach(([id, value])=>{
+    const el = $(id);
+    const number = Number(value);
+    if (el && Number.isFinite(number)) el.textContent = fmtNO.format(number);
+  });
   if (lastEmailPayload){
     lastEmailPayload.inputs = deepClone(input);
     lastEmailPayload.bom = deepClone(out.bom);
@@ -5801,6 +6038,7 @@ function refreshCalculatedBoxItems(){
     Object.assign(lastEmailPayload.totals, {
       material: out.material,
       tapOffBoxTotal: out.tapOffBoxTotal,
+      specialElementTotal: out.specialElementTotal,
       marginRate: out.marginRate,
       margin: out.margin,
       subtotal: out.subtotal,
@@ -5812,7 +6050,8 @@ function refreshCalculatedBoxItems(){
       totalInclOppheng: out.totalInclOppheng,
       rawUnitPrices: deepClone(out.rawUnitPrices || {}),
       tapOffMarginRate: input.tapOffMarginRate,
-      tapOffOfferTotal: lastCalc.tapOffOfferTotal
+      tapOffOfferTotal: lastCalc.tapOffOfferTotal,
+      specialElementOfferTotal: lastCalc.specialElementOfferTotal
     });
   }
   updateSelectedAddonTotalUI();
@@ -5900,6 +6139,22 @@ function updateTapOffConfigVisibility(){
   renderPendingBoxItems();
 }
 
+function updateSpecialElementConfigVisibility(){
+  const showConfig = ($('specialElement')?.value || 'Nei') === 'Ja';
+  const configRow = $('specialElementConfigRow');
+  if (configRow) configRow.hidden = !showConfig;
+  if (!showConfig){
+    pendingSpecialElementItems = [];
+    const typeEl = $('specialElementType');
+    const qtyEl = $('specialElementQty');
+    const sumEl = $('specialElementSum');
+    if (typeEl) typeEl.value = '';
+    if (qtyEl) qtyEl.value = '';
+    if (sumEl) sumEl.value = '';
+  }
+  renderPendingSpecialElementItems();
+}
+
 window.addEventListener('DOMContentLoaded', async ()=>{
   await initProjectDashboard();
   initMarketDataTicker();
@@ -5907,12 +6162,14 @@ window.addEventListener('DOMContentLoaded', async ()=>{
     return;
   }
   try{
-    ['meter','v90h','v90v','fbQty','boxQty','boxInnmatSum'].forEach(id=>{
+    ['meter','v90h','v90v','fbQty','boxQty','boxInnmatSum','specialElementQty','specialElementSum'].forEach(id=>{
       const el = $(id);
       if (el) el.value = '';
     });
     pendingBoxItems = [];
     renderPendingBoxItems();
+    pendingSpecialElementItems = [];
+    renderPendingSpecialElementItems();
 
     const all = [];
     for (const p of RAW_CSV_PATHS){
@@ -6063,6 +6320,14 @@ window.addEventListener('DOMContentLoaded', async ()=>{
         markDirty();
       });
     }
+    const specialElementEl = $('specialElement');
+    if (specialElementEl){
+      specialElementEl.value = 'Nei';
+      specialElementEl.addEventListener('change', ()=>{
+        updateSpecialElementConfigVisibility();
+        markDirty();
+      });
+    }
     const addBoxItemBtn = $('addBoxItemBtn');
     if (addBoxItemBtn){
       addBoxItemBtn.addEventListener('click', ()=>{
@@ -6113,8 +6378,62 @@ window.addEventListener('DOMContentLoaded', async ()=>{
         }
       });
     }
+    const addSpecialElementBtn = $('addSpecialElementBtn');
+    if (addSpecialElementBtn){
+      addSpecialElementBtn.addEventListener('click', ()=>{
+        if (($('specialElement')?.value || 'Nei') !== 'Ja') return;
+        const selection = String($('specialElementType')?.value || '').trim();
+        const qtyRaw = Number($('specialElementQty')?.value || 0);
+        const qty = Number.isFinite(qtyRaw) ? Math.max(0, Math.round(qtyRaw)) : 0;
+        const unitSumRaw = toNum($('specialElementSum')?.value || 0);
+        const unitSum = Number.isFinite(unitSumRaw) ? Math.max(0, round2(unitSumRaw)) : 0;
+        if (!selection){
+          const st = $('status');
+          if (st) st.textContent = 'Velg type element før du legger til.';
+          return;
+        }
+        if (!qty){
+          const st = $('status');
+          if (st) st.textContent = 'Angi antall elementer før du legger til.';
+          return;
+        }
+        if (!unitSum){
+          const st = $('status');
+          if (st) st.textContent = 'Angi sum per element før du legger til.';
+          return;
+        }
+        pendingSpecialElementItems.push({
+          id: generateSpecialElementItemId(),
+          selection,
+          qty,
+          unitSum
+        });
+        const typeEl = $('specialElementType');
+        const qtyEl = $('specialElementQty');
+        const sumEl = $('specialElementSum');
+        if (typeEl) typeEl.value = '';
+        if (qtyEl) qtyEl.value = '';
+        if (sumEl) sumEl.value = '';
+        renderPendingSpecialElementItems();
+        if (lastCalc && lastCalcInput){
+          try{
+            refreshCalculatedBoxItems();
+            const st = $('status');
+            if (st) st.textContent = 'Spesialelement lagt til i BOM og resultatsum. Lagre linjen for å beholde endringen.';
+            const saveBtn = $('saveLineBtn');
+            if (saveBtn) saveBtn.disabled = false;
+          }catch(err){
+            const st = $('status');
+            if (st) st.textContent = String(err.message || err);
+          }
+        } else {
+          markDirty();
+        }
+      });
+    }
     refreshUIBySeries();
     updateTapOffConfigVisibility();
+    updateSpecialElementConfigVisibility();
     setCurrentMarginRate(DEFAULT_MARGIN_RATE);
     setCurrentMontasjeMarginRate(DEFAULT_MARGIN_RATE);
     setCurrentEngineeringMarginRate(DEFAULT_MARGIN_RATE);
@@ -6150,7 +6469,8 @@ window.addEventListener('DOMContentLoaded', async ()=>{
     // Markér status som "Oppdater..." ved endringer i parametere
     const dirtySelectors = [
       '#series','#dist','#meter','#v90h','#v90v','#ampSelect','#ledere',
-      '#startEl','#sluttEl','#fbQty','#boxQty','#boxSel','#boxInnmatSum'
+      '#startEl','#sluttEl','#fbQty','#boxQty','#boxSel','#boxInnmatSum',
+      '#specialElement','#specialElementType','#specialElementQty','#specialElementSum'
     ];
     dirtySelectors.forEach(sel=>{
       const el = document.querySelector(sel);
@@ -6162,7 +6482,7 @@ window.addEventListener('DOMContentLoaded', async ()=>{
     });
 
   function enhanceNumberSteppers() {
-    const ids = ['meter','v90h','v90v','fbQty','boxQty'];
+    const ids = ['meter','v90h','v90v','fbQty','boxQty','specialElementQty'];
     ids.forEach(id=>{
       const input = document.getElementById(id);
       if (!input || input.dataset.enhanced) return;
@@ -6425,6 +6745,9 @@ if (calcBtn){
     const boxItems = (isEpoxySeries || distValue !== 'Ja')
       ? []
       : normalizeBoxItems(pendingBoxItems);
+    const specialElementItems = ($('specialElement')?.value || 'Nei') === 'Ja'
+      ? normalizeSpecialElementItems(pendingSpecialElementItems)
+      : [];
     const boxQty = 0;
     const boxSel = '';
 
@@ -6458,7 +6781,7 @@ if (calcBtn){
     const priceInput = {
       series, dist, meter, v90_h, v90_v, ampere: amp, ledere,
       startEl, sluttEl,
-      fbQty, boxQty, boxSel, boxItems,
+      fbQty, boxQty, boxSel, boxItems, specialElementItems,
       expansionYes, freightRate, marginRate: currentMarginRate,
       montasjeMarginRate: currentMontasjeMarginRate,
       engineeringMarginRate: currentEngineeringMarginRate,
@@ -6525,6 +6848,7 @@ if (calcBtn){
       timestamp: calcTimestamp,
       material: out.material,
       tapOffBoxTotal: out.tapOffBoxTotal,
+      specialElementTotal: out.specialElementTotal,
       marginRate: out.marginRate,
       marginFactor: out.marginFactor,
       margin: out.margin,
@@ -6553,6 +6877,7 @@ if (calcBtn){
       bom: deepClone(out.bom)
     };
     lastCalc.tapOffOfferTotal = calculateTapOffOfferTotal(lastCalc);
+    lastCalc.specialElementOfferTotal = calculateSpecialElementOfferTotal(lastCalc);
     updateSelectedAddonTotalUI();
     markClean();
 
@@ -6569,6 +6894,7 @@ if (calcBtn){
       totals: {
         material: out.material,
         tapOffBoxTotal: out.tapOffBoxTotal,
+        specialElementTotal: out.specialElementTotal,
         marginRate: out.marginRate,
         margin: out.margin,
         montasjeMarginRate: out.montasjeMarginRate,
@@ -6586,7 +6912,8 @@ if (calcBtn){
         totalInclOppheng: totalInclOpphengVal,
         rawUnitPrices: deepClone(out.rawUnitPrices || {}),
         tapOffMarginRate: currentTapOffMarginRate,
-        tapOffOfferTotal: calculateTapOffOfferTotal({ bom: out.bom, tapOffMarginRate: currentTapOffMarginRate })
+        tapOffOfferTotal: calculateTapOffOfferTotal({ bom: out.bom, tapOffMarginRate: currentTapOffMarginRate }),
+        specialElementOfferTotal: calculateSpecialElementOfferTotal({ bom: out.bom, tapOffMarginRate: currentTapOffMarginRate })
       },
       bom: out.bom
     };

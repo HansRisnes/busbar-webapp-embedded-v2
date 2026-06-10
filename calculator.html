@@ -196,6 +196,14 @@ input[type="number"]::-webkit-inner-spin-button{
             <option>Nei</option>
           </select>
         </label>
+
+        <label>Spesialelement<br>
+          <select id="specialElement">
+            <option value="">Velg...</option>
+            <option value="Ja">Ja</option>
+            <option value="Nei" selected>Nei</option>
+          </select>
+        </label>
       </div>
 
       <div class="row" id="tapOffConfigRow" hidden>
@@ -220,6 +228,34 @@ input[type="number"]::-webkit-inner-spin-button{
       <div class="row" id="boxItemsRow" hidden>
         <div class="full-width">
           <div id="boxItemsPreview" class="muted-text"></div>
+        </div>
+      </div>
+
+      <div class="row" id="specialElementConfigRow" hidden>
+        <label>Type element<br>
+          <select id="specialElementType">
+            <option value="">Velg...</option>
+            <option value="phase_change">Faseendring</option>
+            <option value="neutral_change">Nøytralendring</option>
+            <option value="epoxy_metal_transition">Overgang til epoxy-/metallkapslet</option>
+          </select>
+        </label>
+
+        <label>Element (antall)<br>
+          <input id="specialElementQty" type="number" step="1" inputmode="numeric" placeholder="0">
+        </label>
+
+        <label>Sum element<br>
+          <input id="specialElementSum" type="number" step="0.01" inputmode="decimal" min="0" placeholder="0">
+        </label>
+
+        <label>&nbsp;<br>
+          <button id="addSpecialElementBtn" type="button" class="btn alt">Legg til</button>
+        </label>
+      </div>
+      <div class="row" id="specialElementItemsRow" hidden>
+        <div class="full-width">
+          <div id="specialElementItemsPreview" class="muted-text"></div>
         </div>
       </div>
         <p class="muted-text">* er obligatoriske felt.</p>
@@ -369,6 +405,7 @@ input[type="number"]::-webkit-inner-spin-button{
         </div>
       </div>
       <div id="tapOffOfferRows" class="tap-off-offer-rows" hidden></div>
+      <div id="specialElementOfferRows" class="tap-off-offer-rows" hidden></div>
       <div class="totals-line totals-selectors">
         <div class="addon-selectors" role="group" aria-label="Inkluder i tilbud">
           <span class="addon-selectors-title"><strong>Inkluder i tilbud:</strong></span>

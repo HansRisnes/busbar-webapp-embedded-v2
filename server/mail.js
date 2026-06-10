@@ -1094,12 +1094,14 @@ function resolveLineSelectedAddonTotal(line) {
   const engineeringTotal = toFiniteNumber(lineTotals.totalInclEngineering);
   const opphengTotal = toFiniteNumber(lineTotals.totalInclOppheng ?? lineTotals.total);
   const tapOffOfferTotal = resolveTapOffOfferPriceTotal(line, line?.inputs);
+  const specialElementOfferTotal = resolveSpecialElementOfferPriceTotal(line, line?.inputs);
 
   let total = baseTotal;
   if (includeMontasje && Number.isFinite(montasjeTotal)) total += montasjeTotal;
   if (includeEngineering && Number.isFinite(engineeringTotal)) total += engineeringTotal;
   if (includeOppheng && Number.isFinite(opphengTotal)) total += opphengTotal;
   if (Number.isFinite(tapOffOfferTotal)) total += tapOffOfferTotal;
+  if (Number.isFinite(specialElementOfferTotal)) total += specialElementOfferTotal;
   return round2(total);
 }
 
@@ -1163,6 +1165,8 @@ function aggregateProjectOfferTotals(project) {
     opphengCount: 0,
     tapOffBoxTotal: 0,
     tapOffOfferTotal: 0,
+    specialElementTotal: 0,
+    specialElementOfferTotal: 0,
     selectedAddonTotal: 0,
     offerIncludedTotal: 0,
     offerMainVisibleTotal: 0,
@@ -1200,6 +1204,8 @@ function aggregateProjectOfferTotals(project) {
         : resolveTapOffBoxPriceTotal(line, line?.inputs)
     );
     add('tapOffOfferTotal', resolveTapOffOfferPriceTotal(line, line?.inputs));
+    add('specialElementTotal', resolveSpecialElementCostTotal(line, line?.inputs));
+    add('specialElementOfferTotal', resolveSpecialElementOfferPriceTotal(line, line?.inputs));
     const lineOfferAmounts = resolveLineOfferAmounts(line);
     add('selectedAddonTotal', lineOfferAmounts.includedTotal);
     add('offerIncludedTotal', lineOfferAmounts.includedTotal);
@@ -1421,6 +1427,84 @@ function formatTapOffOfferPricePlaceholder(value, qty = 0) {
   return formatNoCurrencyWithKr(amount);
 }
 
+function resolveSpecialElementLabel(selection) {
+  const labels = {
+    phase_change: 'Faseendring',
+    neutral_change: 'Nøytralendring',
+    epoxy_metal_transition: 'Overgang til epoxy-/metallkapslet'
+  };
+  const key = safeString(selection);
+  return labels[key] || key;
+}
+
+function resolveSpecialElementItemsFromLine(line, input = {}) {
+  const directItems = Array.isArray(input?.specialElementItems) ? input.specialElementItems : [];
+  const normalizedDirect = directItems
+    .map(item=>{
+      const selection = safeString(item?.selection || item?.value || item?.type);
+      const qtyRaw = toFiniteNumber(item?.qty ?? item?.quantity);
+      const qty = Number.isFinite(qtyRaw) ? Math.max(0, Math.round(qtyRaw)) : 0;
+      const unitSumRaw = toFiniteNumber(item?.unitSum ?? item?.sum ?? item?.elementSum);
+      const unitSum = Number.isFinite(unitSumRaw) ? Math.max(0, unitSumRaw) : 0;
+      if (!selection || qty <= 0) return null;
+      return { selection, label: resolveSpecialElementLabel(selection), qty, unitSum };
+    })
+    .filter(Boolean);
+  if (normalizedDirect.length) return normalizedDirect;
+
+  const bom = Array.isArray(line?.bom) ? line.bom : [];
+  return bom
+    .filter(entry=>safeString(entry?.specialElementGroupId))
+    .map(entry=>{
+      const selection = safeString(entry?.specialElementSelection || entry?.type);
+      const qtyRaw = toFiniteNumber(entry?.antall ?? entry?.qty ?? entry?.quantity);
+      const qty = Number.isFinite(qtyRaw) ? Math.max(0, Math.round(qtyRaw)) : 0;
+      const unitSumRaw = toFiniteNumber(entry?.enhet ?? entry?.unit ?? entry?.unit_price);
+      const unitSum = Number.isFinite(unitSumRaw) ? Math.max(0, unitSumRaw) : 0;
+      if (!selection || qty <= 0) return null;
+      return {
+        selection,
+        label: safeString(entry?.type) || resolveSpecialElementLabel(selection),
+        qty,
+        unitSum
+      };
+    })
+    .filter(Boolean);
+}
+
+function buildSpecialElementOfferText(line, input = {}) {
+  const items = resolveSpecialElementItemsFromLine(line, input);
+  if (!items.length) return '';
+  return items.map(item=>{
+    const qtyTxt = formatNoInteger(item.qty) || String(item.qty);
+    return `${item.label || 'Spesialelement'} · antall ${qtyTxt}`;
+  }).join(' | ');
+}
+
+function resolveSpecialElementCostTotal(line, input = {}) {
+  const bom = Array.isArray(line?.bom) ? line.bom : [];
+  const bomItems = bom.filter(entry=>safeString(entry?.specialElementGroupId));
+  if (bomItems.length) {
+    return round2(bomItems.reduce((sum, entry)=>sum + resolveBomLineSum(entry), 0));
+  }
+  return round2(resolveSpecialElementItemsFromLine(line, input).reduce(
+    (sum, item)=>sum + (Number(item.unitSum || 0) * Number(item.qty || 0)),
+    0
+  ));
+}
+
+function resolveSpecialElementOfferPriceTotal(line, input = {}) {
+  const lineTotals = (line && typeof line === 'object' && line.totals && typeof line.totals === 'object')
+    ? line.totals
+    : {};
+  const explicit = toFiniteNumber(lineTotals.specialElementOfferTotal);
+  if (Number.isFinite(explicit)) return round2(explicit);
+  const cost = resolveSpecialElementCostTotal(line, input);
+  if (!Number.isFinite(cost)) return NaN;
+  const rate = lineTotals.tapOffMarginRate ?? input?.tapOffMarginRate ?? lineTotals.marginRate ?? input?.marginRate;
+  return applyDgToCost(cost, rate);
+}
+
 function resolveBomUnitByType(line, typeNames) {
   const types = new Set((Array.isArray(typeNames) ? typeNames : [typeNames])
     .map(type=>safeString(type).toLowerCase())
@@ -1585,6 +1669,7 @@ function resolveExpansionQtyFromLine(line, input = {}) {
 
 function buildOfferLineDebugSummary(line, input = {}) {
   const tapOffText = buildTapOffOfferText(line, input);
+  const specialElementText = buildSpecialElementOfferText(line, input);
   const expansionQty = resolveExpansionQtyFromLine(line, input);
   const bom = Array.isArray(line?.bom) ? line.bom : [];
   return {
@@ -1593,6 +1678,8 @@ function buildOfferLineDebugSummary(line, input = {}) {
     bomBoxCount: resolveTapOffItemsFromLine(line, input).length,
     avbTekst: tapOffText,
     avbPris: resolveTapOffBoxPriceTotal(line, input),
+    speTekst: specialElementText,
+    spePris: resolveSpecialElementOfferPriceTotal(line, input),
     expansionQty,
     expansionBomRows: bom
       .filter(entry=>{
@@ -1624,9 +1711,12 @@ function collectProjectInputSummary(lines) {
   const sluttElements = [];
   const ipGrades = [];
   const tapOffTexts = [];
+  const specialElementTexts = [];
   let brannElementTotal = 0;
   let tapOffTotal = 0;
   let tapOffPriceTotal = 0;
+  let specialElementTotal = 0;
+  let specialElementPriceTotal = 0;
   let expansionElementTotal = 0;
   let meterTotal = 0;
   let verticalAnglesTotal = 0;
@@ -1660,6 +1750,10 @@ function collectProjectInputSummary(lines) {
     tapOffPriceTotal += resolveTapOffOfferPriceTotal(line, input);
     const tapOffText = buildTapOffOfferText(line, input);
     pushUnique(tapOffTexts, tapOffText);
+    const specialElementItems = resolveSpecialElementItemsFromLine(line, input);
+    specialElementTotal += specialElementItems.reduce((sum, item)=>sum + Number(item.qty || 0), 0);
+    specialElementPriceTotal += resolveSpecialElementOfferPriceTotal(line, input);
+    pushUnique(specialElementTexts, buildSpecialElementOfferText(line, input));
     expansionElementTotal += resolveExpansionQtyFromLine(line, input);
 
     const ampNum = toFiniteNumber(input.ampere ?? input.amp);
@@ -1685,7 +1779,10 @@ function collectProjectInputSummary(lines) {
     expansionElementTotal: formatNoInteger(expansionElementTotal),
     tapOffTotal: formatNoInteger(tapOffTotal),
     tapOffPriceTotal: round2(tapOffPriceTotal),
-    tapOffTexts: tapOffTexts.join(' | ')
+    tapOffTexts: tapOffTexts.join(' | '),
+    specialElementTotal: formatNoInteger(specialElementTotal),
+    specialElementPriceTotal: round2(specialElementPriceTotal),
+    specialElementTexts: specialElementTexts.join(' | ')
   };
 }
 
@@ -1725,6 +1822,10 @@ function buildOfferPlaceholderValues(project, offerNumber, offerDate, revision =
   const tapOffPricePlaceholder = formatTapOffOfferPricePlaceholder(
     inputSummary.tapOffPriceTotal,
     inputSummary.tapOffTotal
+  );
+  const specialElementPricePlaceholder = formatTapOffOfferPricePlaceholder(
+    inputSummary.specialElementPriceTotal,
+    inputSummary.specialElementTotal
   );
 
   const placeholders = {
@@ -1803,6 +1904,22 @@ function buildOfferPlaceholderValues(project, offerNumber, offerDate, revision =
     avtappingsbokser_pris: tapOffPricePlaceholder,
     avtappingsbokser_pris_nok: tapOffPricePlaceholder,
     AVTAPPINGSBOKSER_PRIS: tapOffPricePlaceholder,
+    spe: inputSummary.specialElementTotal,
+    spe_tekst: inputSummary.specialElementTexts,
+    spesialelement_tekst: inputSummary.specialElementTexts,
+    spesialelementer_tekst: inputSummary.specialElementTexts,
+    SPESIALELEMENT_TEKST: inputSummary.specialElementTexts,
+    SPESIALELEMENTER_TEKST: inputSummary.specialElementTexts,
+    spe_pris: specialElementPricePlaceholder,
+    spe_pris_nok: specialElementPricePlaceholder,
+    spe_sum: specialElementPricePlaceholder,
+    spe_sum_nok: specialElementPricePlaceholder,
+    spesialelement_pris: specialElementPricePlaceholder,
+    spesialelement_pris_nok: specialElementPricePlaceholder,
+    spesialelementer_pris: specialElementPricePlaceholder,
+    spesialelementer_pris_nok: specialElementPricePlaceholder,
+    SPESIALELEMENT_PRIS: specialElementPricePlaceholder,
+    SPESIALELEMENTER_PRIS: specialElementPricePlaceholder,
     bre: inputSummary.brannElementTotal,
     exp: Number(inputSummary.expansionElementTotal) > 0
       ? `${inputSummary.expansionElementTotal} stk. Ekspansjonselement`
@@ -1854,6 +1971,9 @@ function buildOfferPlaceholderValues(project, offerNumber, offerDate, revision =
     tap_off_box_offer_total_nok: formatNoCurrencyWithKr(totals.tapOffOfferTotal),
     total_avtappingsbokser_nok: formatNoCurrencyWithKr(totals.tapOffOfferTotal),
     avb_total_nok: formatNoCurrencyWithKr(totals.tapOffOfferTotal),
+    special_element_total_nok: formatNoCurrencyWithKr(totals.specialElementTotal),
+    special_element_offer_total_nok: formatNoCurrencyWithKr(totals.specialElementOfferTotal),
+    total_spesialelementer_nok: formatNoCurrencyWithKr(totals.specialElementOfferTotal),
     selected_addon_total_nok: formatNoCurrency(offerIncludedTotal),
     total_valgte_nok: formatNoCurrency(offerIncludedTotal),
     usd_nok_dagens: usdNokRate ? `USD ${usdNokRate}` : '',
@@ -1917,6 +2037,14 @@ async function buildOfferLinePlaceholderValues(project) {
     const tapOffTotalQty = tapOffItems.reduce((sum, item)=>sum + Number(item.qty || 0), 0);
     const tapOffPriceTotal = resolveTapOffOfferPriceTotal(line, input);
     const tapOffPricePlaceholder = formatTapOffOfferPricePlaceholder(tapOffPriceTotal, tapOffTotalQty);
+    const specialElementItems = resolveSpecialElementItemsFromLine(line, input);
+    const specialElementText = buildSpecialElementOfferText(line, input);
+    const specialElementTotalQty = specialElementItems.reduce((sum, item)=>sum + Number(item.qty || 0), 0);
+    const specialElementPriceTotal = resolveSpecialElementOfferPriceTotal(line, input);
+    const specialElementPricePlaceholder = formatTapOffOfferPricePlaceholder(
+      specialElementPriceTotal,
+      specialElementTotalQty
+    );
     const unitPricePlaceholders = buildUnitPricePlaceholders(line, input, lineTotals, fireBarrierPriceIndex);
 
     linePlaceholderSets.push({
@@ -1945,6 +2073,22 @@ async function buildOfferLinePlaceholderValues(project) {
       avtappingsbokser_pris: tapOffPricePlaceholder,
       avtappingsbokser_pris_nok: tapOffPricePlaceholder,
       AVTAPPINGSBOKSER_PRIS: tapOffPricePlaceholder,
+      spe: formatNoPositiveInteger(specialElementTotalQty),
+      spe_tekst: specialElementText,
+      spesialelement_tekst: specialElementText,
+      spesialelementer_tekst: specialElementText,
+      SPESIALELEMENT_TEKST: specialElementText,
+      SPESIALELEMENTER_TEKST: specialElementText,
+      spe_pris: specialElementPricePlaceholder,
+      spe_pris_nok: specialElementPricePlaceholder,
+      spe_sum: specialElementPricePlaceholder,
+      spe_sum_nok: specialElementPricePlaceholder,
+      spesialelement_pris: specialElementPricePlaceholder,
+      spesialelement_pris_nok: specialElementPricePlaceholder,
+      spesialelementer_pris: specialElementPricePlaceholder,
+      spesialelementer_pris_nok: specialElementPricePlaceholder,
+      SPESIALELEMENT_PRIS: specialElementPricePlaceholder,
+      SPESIALELEMENTER_PRIS: specialElementPricePlaceholder,
       bre: hasBrannElements
         ? `${formatNoInteger(brannQty)} stk. Branngjennomforing EI 60/90/120`
         : '',
@@ -2181,6 +2325,8 @@ function removeUnusedOfferPlaceholderContainers(xml, placeholders) {
     { container: 'p', keys: ['hvk'] },
     { container: 'p', keys: ['avb'] },
     { container: 'tbl', keys: ['avb_tekst', 'avtappingsbokser_tekst', 'AVTAPPINGSBOKSER_TEKST', 'avb_pris', 'avb_pris_nok', 'avb_sum', 'avb_sum_nok', 'avtappingsbokser_pris', 'avtappingsbokser_pris_nok', 'AVTAPPINGSBOKSER_PRIS'] },
+    { container: 'p', keys: ['spe'] },
+    { container: 'tbl', keys: ['spe_tekst', 'spesialelement_tekst', 'spesialelementer_tekst', 'SPESIALELEMENT_TEKST', 'SPESIALELEMENTER_TEKST', 'spe_pris', 'spe_pris_nok', 'spe_sum', 'spe_sum_nok', 'spesialelement_pris', 'spesialelement_pris_nok', 'spesialelementer_pris', 'spesialelementer_pris_nok', 'SPESIALELEMENT_PRIS', 'SPESIALELEMENTER_PRIS'] },
     { container: 'tbl', keys: ['mtl', 'mtp'] },
     { container: 'p', keys: ['ttm', 'timer_totalt_montasje'] },
     { container: 'tbl', keys: ['itl', 'itp'] },
