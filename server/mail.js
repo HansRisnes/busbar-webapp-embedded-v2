@@ -704,6 +704,7 @@ function normalizeProjectRecord(raw) {
     : {};
   return {
     id: safeString(raw.id) || generateRecordId('proj'),
+    projectNumber: safeString(raw.projectNumber || raw.project_number || raw.offerNumber || raw.offer_number),
     name: safeString(raw.name),
     customer: safeString(raw.customer),
     contactPerson: safeString(raw.contactPerson || raw.contact),
@@ -814,6 +815,69 @@ function resolveProjectOfferKey(project) {
   return `meta:${name}|${customer}|${contact}` || 'meta:unknown';
 }
 
+function isValidOfferNumber(value) {
+  return /^\d{4}-\d+$/.test(safeString(value));
+}
+
+function ensureProjectNumber(project, projectNumbers, counterState, date = new Date()) {
+  if (!project || typeof project !== 'object') return '';
+  const key = resolveProjectOfferKey(project);
+  let projectNumber = safeString(project.projectNumber);
+  const mappedNumber = safeString(projectNumbers?.[key]);
+
+  if (!isValidOfferNumber(projectNumber) && isValidOfferNumber(mappedNumber)) {
+    projectNumber = mappedNumber;
+  }
+  if (!isValidOfferNumber(projectNumber)) {
+    projectNumber = allocateOfferNumberFromState(counterState, date);
+  }
+
+  project.projectNumber = projectNumber;
+  if (projectNumbers && key) projectNumbers[key] = projectNumber;
+  return projectNumber;
+}
+
+function ensureProjectNumbersForArchive(archive, projectNumbers, counterState, date = new Date()) {
+  const stats = { users: 0, projects: 0, added: 0, preserved: 0 };
+  const users = (archive && typeof archive === 'object' && archive.users && typeof archive.users === 'object')
+    ? archive.users
+    : {};
+  Object.values(users).forEach(user=>{
+    stats.users += 1;
+    (Array.isArray(user?.projects) ? user.projects : []).forEach(project=>{
+      stats.projects += 1;
+      const before = safeString(project?.projectNumber);
+      ensureProjectNumber(project, projectNumbers, counterState, date);
+      if (isValidOfferNumber(before)) stats.preserved += 1;
+      else stats.added += 1;
+    });
+  });
+  return stats;
+}
+
+async function migrateProjectNumbersForAllUsersOnStartup() {
+  return withOfferNumberLock(async ()=>{
+    const [counterState, projectNumbersRaw] = await Promise.all([
+      readJsonFile(OFFER_COUNTER_FILE, { years: {} }),
+      readJsonFile(OFFER_PROJECT_NUMBERS_FILE, {})
+    ]);
+    const projectNumbers = (projectNumbersRaw && typeof projectNumbersRaw === 'object')
+      ? projectNumbersRaw
+      : {};
+    const stats = await withProjectArchiveLock(async ()=>{
+      const archive = await readProjectArchive();
+      const result = ensureProjectNumbersForArchive(archive, projectNumbers, counterState);
+      await writeProjectArchive(archive);
+      return result;
+    });
+    await Promise.all([
+      writeJsonFile(OFFER_COUNTER_FILE, counterState),
+      writeJsonFile(OFFER_PROJECT_NUMBERS_FILE, projectNumbers)
+    ]);
+    return stats;
+  });
+}
+
 async function allocateOfferIdentity(project, date = new Date()) {
   return withOfferNumberLock(async ()=>{
     const [counterState, projectNumbersRaw, revisionsRaw] = await Promise.all([
@@ -830,11 +894,12 @@ async function allocateOfferIdentity(project, date = new Date()) {
       : {};
     const key = resolveProjectOfferKey(project);
 
-    let offerNumber = safeString(projectNumbers[key]);
-    if (!/^\d{4}-\d+$/.test(offerNumber)) {
+    let offerNumber = safeString(project?.projectNumber);
+    if (!isValidOfferNumber(offerNumber)) offerNumber = safeString(projectNumbers[key]);
+    if (!isValidOfferNumber(offerNumber)) {
       offerNumber = allocateOfferNumberFromState(counterState, date);
-      projectNumbers[key] = offerNumber;
     }
+    projectNumbers[key] = offerNumber;
 
     const previousRevision = Number(revisions[key]);
     const revision = (Number.isInteger(previousRevision) && previousRevision >= 0)
@@ -849,6 +914,22 @@ async function allocateOfferIdentity(project, date = new Date()) {
     ]);
 
     return { offerNumber, revision };
+  });
+}
+
+async function persistProjectNumberForUser(email, projectId, projectNumber) {
+  const normalizedEmail = normalizeEmail(email);
+  const normalizedProjectId = safeString(projectId);
+  const normalizedProjectNumber = safeString(projectNumber);
+  if (!isValidEmail(normalizedEmail) || !normalizedProjectId || !isValidOfferNumber(normalizedProjectNumber)) return;
+  await withProjectArchiveLock(async ()=>{
+    const archive = await readProjectArchive();
+    const user = archive.users[normalizedEmail];
+    const projects = Array.isArray(user?.projects) ? user.projects : [];
+    const project = projects.find(entry=>safeString(entry?.id) === normalizedProjectId);
+    if (!project) return;
+    project.projectNumber = normalizedProjectNumber;
+    await writeProjectArchive(archive);
   });
 }
 
@@ -1538,19 +1619,42 @@ function formatMaterialOfferUnitPrice(unitCost, input = {}, lineTotals = {}) {
   return Number.isFinite(price) ? formatNoCurrencyWithKr(price) : '';
 }
 
+const UNIT_PRICE_PLACEHOLDER_GROUPS = [
+  ['enhetspris_meter', 'meter_enhetspris', 'mtr_enhetspris', 'mtr_enhetspris_nok'],
+  ['enhetspris_vinkel', 'vinkel_enhetspris', 'vinkel_enhetspris_nok'],
+  ['enhetspris_vinkel_vertikal', 'vertikal_vinkel_enhetspris', 'vvk_enhetspris', 'vvk_enhetspris_nok'],
+  ['enhetspris_vinkel_horisontal', 'horisontal_vinkel_enhetspris', 'hvk_enhetspris', 'hvk_enhetspris_nok'],
+  ['enhetspris_tavleelement', 'tavleelement_enhetspris', 'ste_enhetspris', 'ste_enhetspris_nok'],
+  ['enhetspris_sluttelement', 'sluttelement_enhetspris', 'sle_enhetspris', 'sle_enhetspris_nok'],
+  ['enhetspris_brann', 'brann_enhetspris', 'bre_enhetspris', 'bre_enhetspris_nok'],
+  ['enhetspris_ekspansjon', 'ekspansjon_enhetspris', 'exp_enhetspris', 'exp_enhetspris_nok'],
+  ['enhetspris_avtappingsboks', 'avtappingsboks_enhetspris', 'avb_enhetspris', 'avb_enhetspris_nok']
+];
+
 function buildEmptyUnitPricePlaceholders() {
-  const keys = [
-    'enhetspris_meter', 'meter_enhetspris', 'mtr_enhetspris', 'mtr_enhetspris_nok',
-    'enhetspris_vinkel', 'vinkel_enhetspris', 'vinkel_enhetspris_nok',
-    'enhetspris_vinkel_vertikal', 'vertikal_vinkel_enhetspris', 'vvk_enhetspris', 'vvk_enhetspris_nok',
-    'enhetspris_vinkel_horisontal', 'horisontal_vinkel_enhetspris', 'hvk_enhetspris', 'hvk_enhetspris_nok',
-    'enhetspris_tavleelement', 'tavleelement_enhetspris', 'ste_enhetspris', 'ste_enhetspris_nok',
-    'enhetspris_sluttelement', 'sluttelement_enhetspris', 'sle_enhetspris', 'sle_enhetspris_nok',
-    'enhetspris_brann', 'brann_enhetspris', 'bre_enhetspris', 'bre_enhetspris_nok',
-    'enhetspris_ekspansjon', 'ekspansjon_enhetspris', 'exp_enhetspris', 'exp_enhetspris_nok',
-    'enhetspris_avtappingsboks', 'avtappingsboks_enhetspris', 'avb_enhetspris', 'avb_enhetspris_nok'
-  ];
+  const keys = UNIT_PRICE_PLACEHOLDER_GROUPS.flat();
   return Object.fromEntries(keys.map(key=>[key, '']));
+}
+
+function buildAggregateUnitPricePlaceholders(linePlaceholderSets) {
+  const output = buildEmptyUnitPricePlaceholders();
+  const sets = Array.isArray(linePlaceholderSets) ? linePlaceholderSets : [];
+
+  UNIT_PRICE_PLACEHOLDER_GROUPS.forEach(keys=>{
+    const values = [];
+    sets.forEach(placeholders=>{
+      keys.forEach(key=>{
+        const value = safeString(placeholders?.[key]);
+        if (value && !values.includes(value)) values.push(value);
+      });
+    });
+    const aggregateValue = values.join(' / ');
+    keys.forEach(key=>{
+      output[key] = aggregateValue;
+    });
+  });
+
+  return output;
 }
 
 function hasPositiveQuantity(value) {
@@ -2439,12 +2543,15 @@ async function generateOfferDocx(project, offerNumber, offerDate, revision = 0, 
     return buildOfferLineDebugSummary(line, input);
   });
   console.log(`[offer-template] Prosjekt "${safeString(project?.name)}" plassholderdata: ${JSON.stringify(debugSummary)}`);
-  const placeholders = buildOfferPlaceholderValues(project, offerNumber, offerDate, revision, userProfile);
   const {
     linePlaceholderSets,
     firePlaceholderSets,
     opphengPlaceholderSets
   } = await buildOfferLinePlaceholderValues(project);
+  const placeholders = {
+    ...buildOfferPlaceholderValues(project, offerNumber, offerDate, revision, userProfile),
+    ...buildAggregateUnitPricePlaceholders(linePlaceholderSets)
+  };
   const zip = new AdmZip(offerTemplateFile);
   const entries = zip.getEntries().filter(entry=>
     !entry.isDirectory &&
@@ -3122,12 +3229,30 @@ app.get('/api/user-projects', requireUserAuth, async (req, res) => {
     if (email !== req.userAuth.email) {
       return res.status(403).json({ error: 'Ingen tilgang til denne brukeren' });
     }
-    const archive = await readProjectArchive();
-    const userRecord = archive.users[email] || {
-      email,
-      updatedAt: null,
-      projects: []
-    };
+    const userRecord = await withOfferNumberLock(async ()=>{
+      const [counterState, projectNumbersRaw] = await Promise.all([
+        readJsonFile(OFFER_COUNTER_FILE, { years: {} }),
+        readJsonFile(OFFER_PROJECT_NUMBERS_FILE, {})
+      ]);
+      const projectNumbers = (projectNumbersRaw && typeof projectNumbersRaw === 'object')
+        ? projectNumbersRaw
+        : {};
+      const archive = await withProjectArchiveLock(async ()=>{
+        const state = await readProjectArchive();
+        ensureProjectNumbersForArchive(state, projectNumbers, counterState);
+        await writeProjectArchive(state);
+        return state;
+      });
+      await Promise.all([
+        writeJsonFile(OFFER_COUNTER_FILE, counterState),
+        writeJsonFile(OFFER_PROJECT_NUMBERS_FILE, projectNumbers)
+      ]);
+      return archive.users[email] || {
+        email,
+        updatedAt: null,
+        projects: []
+      };
+    });
     return res.json({
       email,
       updatedAt: userRecord.updatedAt,
@@ -3160,15 +3285,32 @@ app.post('/api/user-projects/sync', requireUserAuth, async (req, res) => {
       .filter(Boolean);
     const updatedAt = new Date().toISOString();
 
-    const nextUserRecord = await withProjectArchiveLock(async () => {
-      const archive = await readProjectArchive();
-      archive.users[email] = {
-        email,
-        updatedAt,
-        projects: normalizedProjects
-      };
-      await writeProjectArchive(archive);
-      return archive.users[email];
+    const nextUserRecord = await withOfferNumberLock(async () => {
+      const [counterState, projectNumbersRaw] = await Promise.all([
+        readJsonFile(OFFER_COUNTER_FILE, { years: {} }),
+        readJsonFile(OFFER_PROJECT_NUMBERS_FILE, {})
+      ]);
+      const projectNumbers = (projectNumbersRaw && typeof projectNumbersRaw === 'object')
+        ? projectNumbersRaw
+        : {};
+      const record = await withProjectArchiveLock(async () => {
+        const archive = await readProjectArchive();
+        normalizedProjects.forEach(project=>{
+          ensureProjectNumber(project, projectNumbers, counterState);
+        });
+        archive.users[email] = {
+          email,
+          updatedAt,
+          projects: normalizedProjects
+        };
+        await writeProjectArchive(archive);
+        return archive.users[email];
+      });
+      await Promise.all([
+        writeJsonFile(OFFER_COUNTER_FILE, counterState),
+        writeJsonFile(OFFER_PROJECT_NUMBERS_FILE, projectNumbers)
+      ]);
+      return record;
     });
 
     return res.json({
@@ -3489,6 +3631,8 @@ app.post('/api/generate-offer', requireUserAuth, async (req, res) => {
 
     const now = new Date();
     const { offerNumber, revision } = await allocateOfferIdentity(project, now);
+    project.projectNumber = offerNumber;
+    await persistProjectNumberForUser(req.userAuth.email, project.id, offerNumber);
     const generated = await generateOfferDocx(project, offerNumber, now, revision, {
       email: userRecord.email,
       ...userRecord.profile
@@ -3534,6 +3678,13 @@ app.listen(port, host, () => {
   } else {
     console.log('[cors] Tillater alle origins (*)');
   }
+  migrateProjectNumbersForAllUsersOnStartup()
+    .then(stats=>{
+      console.log(`[project-number-migration] users=${stats.users} projects=${stats.projects} added=${stats.added} preserved=${stats.preserved}`);
+    })
+    .catch(err=>{
+      console.error('[project-number-migration] Feilet', err);
+    });
   initializeMarketDataAutomation().catch(err=>{
     console.error('[market-data] Init feilet', err);
     scheduleRetryMarketRefresh();

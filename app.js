@@ -28,7 +28,9 @@ const MARKET_STATUS_DEFAULT = 'Oppdateres daglig';
 const MARKET_STATUS_MANUAL = 'Oppdateres manuelt';
 const marketTickerState = { timerId: null };
 const DEFAULT_MARGIN_RATE = 0.20;
+const DEFAULT_MATERIAL_MARGIN_RATE = 0.25;
 const MAX_MARGIN_RATE = 0.95;
+const MAX_AUTO_MONTERING_MARGIN_RATE = 0.99;
 let lastCalc = null; // delsummer for live frakt-oppdatering
 let lastCalcInput = null;
 const AUTH_SESSION_KEY = 'busbar.auth.session.v1';
@@ -59,6 +61,7 @@ const projectState = {
   customerDatabase: [],
   projects: [],
   expandedProjectId: null,
+  projectSearchTerm: '',
   projectSort: 'date_newest',
   lineSort: 'date_newest'
 };
@@ -66,7 +69,8 @@ const projectModalState = {
   mode: 'create',
   projectId: null,
   saveLineAfterCreate: false,
-  pendingDetails: null
+  pendingDetails: null,
+  copySourceProjectId: null
 };
 const projectMarginModalState = {
   projectId: null
@@ -211,7 +215,8 @@ const fmtIntNO = new Intl.NumberFormat('no-NO', { maximumFractionDigits: 0 });
 const fmtFxNO = new Intl.NumberFormat('no-NO', { minimumFractionDigits: 4, maximumFractionDigits: 4 });
 const fmtTimestampNO = new Intl.DateTimeFormat('no-NO', { dateStyle: 'short', timeStyle: 'short' });
 const fmtPercentNO = new Intl.NumberFormat('no-NO', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
-let currentMarginRate = DEFAULT_MARGIN_RATE;
+const MIN_MONTERING_TOTAL = 30000;
+let currentMarginRate = DEFAULT_MATERIAL_MARGIN_RATE;
 let currentMontasjeMarginRate = DEFAULT_MARGIN_RATE;
 let currentEngineeringMarginRate = DEFAULT_MARGIN_RATE;
 let currentOpphengMarginRate = DEFAULT_MARGIN_RATE;
@@ -529,14 +534,15 @@ function deepClone(value){
   }
 }
 
-function normalizeMarginRate(value, fallback = DEFAULT_MARGIN_RATE){
+function normalizeMarginRate(value, fallback = DEFAULT_MARGIN_RATE, maxRate = MAX_MARGIN_RATE){
   const raw = Number(value);
   if (!Number.isFinite(raw)) return fallback;
   const asRate = raw > 1 ? raw / 100 : raw;
   if (!Number.isFinite(asRate)) return fallback;
   if (asRate < 0) return 0;
-  if (asRate >= 1) return MAX_MARGIN_RATE;
-  return Math.min(MAX_MARGIN_RATE, asRate);
+  const safeMaxRate = Number.isFinite(maxRate) && maxRate > 0 && maxRate < 1 ? maxRate : MAX_MARGIN_RATE;
+  if (asRate >= 1) return safeMaxRate;
+  return Math.min(safeMaxRate, asRate);
 }
 
 function marginFactorFromRate(rate){
@@ -551,9 +557,9 @@ function resolveMarginRateFromData({ totals, input } = {}){
   const material = Number(totals?.material);
   const subtotal = Number(totals?.subtotal);
   if (Number.isFinite(material) && Number.isFinite(subtotal) && subtotal > 0){
-    return normalizeMarginRate(1 - material / subtotal, DEFAULT_MARGIN_RATE);
+    return normalizeMarginRate(1 - material / subtotal, DEFAULT_MATERIAL_MARGIN_RATE);
   }
-  return DEFAULT_MARGIN_RATE;
+  return DEFAULT_MATERIAL_MARGIN_RATE;
 }
 
 function resolveDgRate(fromInput, fromTotals, fallback = DEFAULT_MARGIN_RATE){
@@ -564,8 +570,16 @@ function resolveDgRate(fromInput, fromTotals, fallback = DEFAULT_MARGIN_RATE){
   return fallback;
 }
 
-function updateDgLabel(labelId, rate){
-  const normalizedRate = normalizeMarginRate(rate, DEFAULT_MARGIN_RATE);
+function resolveMontasjeDgRate(fromInput, fromTotals, fallback = DEFAULT_MARGIN_RATE){
+  const inputRate = normalizeMarginRate(fromInput, NaN, MAX_AUTO_MONTERING_MARGIN_RATE);
+  if (Number.isFinite(inputRate)) return inputRate;
+  const totalsRate = normalizeMarginRate(fromTotals, NaN, MAX_AUTO_MONTERING_MARGIN_RATE);
+  if (Number.isFinite(totalsRate)) return totalsRate;
+  return fallback;
+}
+
+function updateDgLabel(labelId, rate, maxRate = MAX_MARGIN_RATE){
+  const normalizedRate = normalizeMarginRate(rate, DEFAULT_MARGIN_RATE, maxRate);
   const percentTxt = fmtPercentNO.format(normalizedRate * 100);
   const labelEl = $(labelId);
   if (labelEl){
@@ -575,7 +589,7 @@ function updateDgLabel(labelId, rate){
 
 function updateMarginUI(){
   updateDgLabel('marginLabel', currentMarginRate);
-  updateDgLabel('montasjeDgLabel', currentMontasjeMarginRate);
+  updateDgLabel('montasjeDgLabel', currentMontasjeMarginRate, MAX_AUTO_MONTERING_MARGIN_RATE);
   updateDgLabel('engineeringDgLabel', currentEngineeringMarginRate);
   updateDgLabel('opphengDgLabel', currentOpphengMarginRate);
   const marginBtn = $('marginConfigBtn');
@@ -597,13 +611,13 @@ function updateMarginUI(){
 }
 
 function setCurrentMarginRate(rate){
-  currentMarginRate = normalizeMarginRate(rate, DEFAULT_MARGIN_RATE);
+  currentMarginRate = normalizeMarginRate(rate, DEFAULT_MATERIAL_MARGIN_RATE);
   updateMarginUI();
   return currentMarginRate;
 }
 
 function setCurrentMontasjeMarginRate(rate){
-  currentMontasjeMarginRate = normalizeMarginRate(rate, DEFAULT_MARGIN_RATE);
+  currentMontasjeMarginRate = normalizeMarginRate(rate, DEFAULT_MARGIN_RATE, MAX_AUTO_MONTERING_MARGIN_RATE);
   updateMarginUI();
   return currentMontasjeMarginRate;
 }
@@ -654,16 +668,31 @@ function updateSelectedAddonTotalUI(){
   syncSelectedAddonTotalToPayload(sum.total);
 }
 
-function calculateDgPricing(baseCost, dgRate){
+function calculateDgPricing(baseCost, dgRate, maxRate = MAX_MARGIN_RATE){
   const base = round2(Number(baseCost) || 0);
-  const normalizedRate = normalizeMarginRate(dgRate, DEFAULT_MARGIN_RATE);
-  const factor = marginFactorFromRate(normalizedRate);
+  const normalizedRate = normalizeMarginRate(dgRate, DEFAULT_MARGIN_RATE, maxRate);
+  const factor = 1 - normalizedRate;
   if (!(factor > 0)){
     throw new Error('DG-faktor må være større enn 0.');
   }
   const totalWithDg = round2(base / factor);
   const dg = round2(totalWithDg - base);
   return { base, dgRate: normalizedRate, dg, totalWithDg };
+}
+
+function calculateMontasjePricing(baseCost, dgRate){
+  const regularPricing = calculateDgPricing(baseCost, dgRate, MAX_AUTO_MONTERING_MARGIN_RATE);
+  if (regularPricing.totalWithDg >= MIN_MONTERING_TOTAL || regularPricing.base <= 0){
+    return regularPricing;
+  }
+
+  const targetRatePercent = Math.ceil(((1 - (regularPricing.base / MIN_MONTERING_TOTAL)) * 100) - 1e-9);
+  const boundedRatePercent = Math.max(0, Math.min(Math.round(MAX_AUTO_MONTERING_MARGIN_RATE * 100), targetRatePercent));
+  const minPricing = calculateDgPricing(regularPricing.base, boundedRatePercent / 100, MAX_AUTO_MONTERING_MARGIN_RATE);
+
+  return minPricing.totalWithDg > regularPricing.totalWithDg
+    ? minPricing
+    : regularPricing;
 }
 
 function calculateTotalsFromMaterial({
@@ -677,7 +706,7 @@ function calculateTotalsFromMaterial({
   opphengCost = 0,
   opphengMarginRate = DEFAULT_MARGIN_RATE
 }){
-  const normalizedMarginRate = normalizeMarginRate(marginRate, DEFAULT_MARGIN_RATE);
+  const normalizedMarginRate = normalizeMarginRate(marginRate, DEFAULT_MATERIAL_MARGIN_RATE);
   const factor = marginFactorFromRate(normalizedMarginRate);
   if (!(factor > 0)){
     throw new Error('DG-faktor må være større enn 0.');
@@ -689,7 +718,7 @@ function calculateTotalsFromMaterial({
   const margin = round2(subtotal - safeMaterial);
   const freight = round2(safeMaterial * appliedFreightRate);
   const totalExMontasje = round2(subtotal + freight);
-  const montasjePricing = calculateDgPricing(montasjeCost, montasjeMarginRate);
+  const montasjePricing = calculateMontasjePricing(montasjeCost, montasjeMarginRate);
   const engineeringPricing = calculateDgPricing(engineeringCost, engineeringMarginRate);
   const opphengPricing = calculateDgPricing(opphengCost, opphengMarginRate);
   const totalInclMontasje = round2(montasjePricing.totalWithDg);
@@ -750,6 +779,8 @@ function recalcLastTotalsFromCurrentRates(){
   setText('totalInclMontasje', recalculated.totalInclMontasje);
   setText('totalInclEngineering', recalculated.totalInclEngineering);
   setText('total', recalculated.total);
+  currentMontasjeMarginRate = recalculated.montasjeMarginRate;
+  updateMarginUI();
   Object.assign(lastCalc, {
     marginRate: recalculated.marginRate,
     marginFactor: recalculated.marginFactor,
@@ -1572,6 +1603,7 @@ function normalizeProject(raw){
   const selectedAddonConfig = normalizeSelectedAddonConfig(raw.selectedAddonConfig || null, null);
   return {
     id: raw.id || generateProjectId(),
+    projectNumber: String(raw.projectNumber || raw.project_number || raw.offerNumber || raw.offer_number || '').trim(),
     name: String(raw.name || '').trim(),
     customer: String(raw.customer || '').trim(),
     contactPerson: String(raw.contactPerson || raw.contact || '').trim(),
@@ -1800,7 +1832,15 @@ async function flushProjectSync(){
   }
   projectSyncState.inFlight = true;
   try{
-    await pushUserProjectsToServer(email, projectState.projects);
+    const syncedProjects = await pushUserProjectsToServer(email, projectState.projects);
+    if (syncedProjects.length){
+      projectState.projects = mergeProjectsByLatest(projectState.projects, syncedProjects);
+      sortProjects();
+      updateProjectHistories();
+      saveProjectsToStorage({ skipRemoteSync: true });
+      renderProjectDashboard();
+      updateProjectMetaDisplay();
+    }
   }catch(err){
     console.warn('Kunne ikke synkronisere prosjekter mot server', err);
   }finally{
@@ -1850,7 +1890,15 @@ async function syncProjectsForCurrentUser(){
     saveProjectsToStorage({ skipRemoteSync: true });
     renderProjectDashboard();
     updateProjectMetaDisplay();
-    await pushUserProjectsToServer(email, projectState.projects);
+    const syncedProjects = await pushUserProjectsToServer(email, projectState.projects);
+    if (syncedProjects.length){
+      projectState.projects = mergeProjectsByLatest(projectState.projects, syncedProjects);
+      sortProjects();
+      updateProjectHistories();
+      saveProjectsToStorage({ skipRemoteSync: true });
+      renderProjectDashboard();
+      updateProjectMetaDisplay();
+    }
     projectState.customerDatabase = await fetchCustomerDatabaseFromServer();
     updateProjectHistories();
     cleanupMigratedProjectStorage(email);
@@ -1918,6 +1966,32 @@ function compareNoText(left, right){
     sensitivity: 'base',
     numeric: true
   });
+}
+
+function normalizeProjectSearchText(value){
+  return String(value || '').trim().toLowerCase();
+}
+
+function projectMatchesSearch(project, rawSearchTerm = projectState.projectSearchTerm){
+  const term = normalizeProjectSearchText(rawSearchTerm);
+  if (!term) return true;
+  const haystack = [
+    project?.name,
+    project?.customer,
+    project?.contactPerson
+  ].map(value=>String(value || '').toLowerCase()).join(' ');
+  return haystack.includes(term);
+}
+
+function setProjectSearchTerm(value, options = {}){
+  projectState.projectSearchTerm = normalizeProjectSearchText(value);
+  const input = $('projectSearchInput');
+  if (input && input.value !== value){
+    input.value = value || '';
+  }
+  if (options.render !== false){
+    renderProjectDashboard();
+  }
 }
 const registerModal = $('registerModal');
 if (registerModal){
@@ -2127,6 +2201,7 @@ function createProject(projectName, customerName, contactPerson, details = {}){
   const now = new Date().toISOString();
   const project = {
     id: generateProjectId(),
+    projectNumber: '',
     name: projectName,
     customer: customerName,
     contactPerson: contactPerson,
@@ -2137,6 +2212,37 @@ function createProject(projectName, customerName, contactPerson, details = {}){
     updatedAt: now,
     selectedAddonConfig: normalizeSelectedAddonConfig(null, null),
     lines: []
+  };
+  projectState.projects.push(project);
+  sortProjects();
+  saveProjectsToStorage();
+  addToHistory(projectState.projectHistory, project.name);
+  addToHistory(projectState.customerHistory, project.customer);
+  addToHistory(projectState.contactHistory, project.contactPerson);
+  renderProjectDashboard();
+  return project;
+}
+
+function copyProject(sourceProjectId, customerName, contactPerson, details = {}){
+  const source = getProjectById(sourceProjectId);
+  if (!source) return null;
+  const now = new Date().toISOString();
+  const project = {
+    id: generateProjectId(),
+    projectNumber: '',
+    name: source.name || 'Uten navn',
+    customer: String(customerName || '').trim(),
+    contactPerson: String(contactPerson || '').trim(),
+    customerAddress: String(details.customerAddress || '').trim(),
+    customerPostalPlace: String(details.customerPostalPlace || '').trim(),
+    contactPhone: String(details.contactPhone || '').trim(),
+    createdAt: now,
+    updatedAt: now,
+    selectedAddonConfig: normalizeSelectedAddonConfig(source.selectedAddonConfig || null, null),
+    lines: (Array.isArray(source.lines) ? source.lines : []).map(line=>({
+      ...deepClone(line),
+      id: generateProjectId()
+    }))
   };
   projectState.projects.push(project);
   sortProjects();
@@ -2300,6 +2406,7 @@ function openProjectModal(options = {}){
   projectModalState.mode = options.mode || 'create';
   projectModalState.projectId = options.projectId || null;
   projectModalState.saveLineAfterCreate = Boolean(options.saveLineAfterCreate);
+  projectModalState.copySourceProjectId = options.copySourceProjectId || null;
   const modal = $('projectModal');
   if (!modal) return;
   modal.style.display = 'flex';
@@ -2309,17 +2416,25 @@ function openProjectModal(options = {}){
   const customerInput = $('customerNameInput');
   const contactInput = $('contactPersonInput');
   const titleEl = $('projectTitle');
+  const sourceProject = projectModalState.mode === 'copy'
+    ? getProjectById(projectModalState.copySourceProjectId)
+    : null;
   if (titleEl){
-    titleEl.textContent = projectModalState.mode === 'edit' ? 'Oppdater prosjekt' : 'Nytt prosjekt';
+    titleEl.textContent = projectModalState.mode === 'edit'
+      ? 'Oppdater prosjekt'
+      : (projectModalState.mode === 'copy' ? 'Kopier prosjekt' : 'Nytt prosjekt');
   }
   if (projectInput){
-    if (projectModalState.mode === 'edit'){
+    projectInput.disabled = projectModalState.mode === 'copy';
+    if (projectModalState.mode === 'copy'){
+      projectInput.value = sourceProject?.name || '';
+    } else if (projectModalState.mode === 'edit'){
       const existing = getProjectById(projectModalState.projectId);
       projectInput.value = existing?.name || '';
     } else {
       projectInput.value = '';
     }
-    projectInput.focus();
+    if (projectModalState.mode !== 'copy') projectInput.focus();
     const len = projectInput.value.length;
     try{
       projectInput.setSelectionRange(len, len);
@@ -2328,7 +2443,9 @@ function openProjectModal(options = {}){
     }
   }
   if (customerInput){
-    if (projectModalState.mode === 'edit'){
+    if (projectModalState.mode === 'copy'){
+      customerInput.value = sourceProject?.customer || '';
+    } else if (projectModalState.mode === 'edit'){
       const existing = getProjectById(projectModalState.projectId);
       customerInput.value = existing?.customer || '';
     } else {
@@ -2336,13 +2453,16 @@ function openProjectModal(options = {}){
     }
   }
   if (contactInput){
-    if (projectModalState.mode === 'edit'){
+    if (projectModalState.mode === 'copy'){
+      contactInput.value = sourceProject?.contactPerson || '';
+    } else if (projectModalState.mode === 'edit'){
       const existing = getProjectById(projectModalState.projectId);
       contactInput.value = existing?.contactPerson || '';
     } else {
       contactInput.value = '';
     }
   }
+  if (projectModalState.mode === 'copy' && customerInput) customerInput.focus();
   updateContactSuggestionsForCustomer();
   updateProjectSubmitState();
 }
@@ -2356,10 +2476,13 @@ function closeProjectModal(){
   hideSuggestions($('projectSuggestions'));
   hideSuggestions($('customerSuggestions'));
   hideSuggestions($('contactSuggestions'));
+  const projectInput = $('projectNameInput');
+  if (projectInput) projectInput.disabled = false;
   projectModalState.mode = 'create';
   projectModalState.projectId = null;
   projectModalState.saveLineAfterCreate = false;
   projectModalState.pendingDetails = null;
+  projectModalState.copySourceProjectId = null;
 }
 
 function updateContactSuggestionsForCustomer(){
@@ -2394,6 +2517,15 @@ function persistProjectInfo(projectName, customerName, contactPerson, options = 
       contactPhone
     });
     setActiveProject(options.projectId);
+    return;
+  }
+  if (options.copySourceProjectId){
+    const copied = copyProject(options.copySourceProjectId, trimmedCustomer, trimmedContact, {
+      customerAddress,
+      customerPostalPlace,
+      contactPhone
+    });
+    if (copied) setActiveProject(copied);
     return;
   }
   const created = createProject(trimmedName, trimmedCustomer, trimmedContact, {
@@ -2611,7 +2743,7 @@ function resolveLineDisplayTotalWithConfig(line, config){
   } else if (Array.isArray(line?.bom)){
     total += calculateTapOffOfferTotal({
       bom: line.bom,
-      tapOffMarginRate: totals.tapOffMarginRate ?? line?.inputs?.tapOffMarginRate ?? totals.marginRate ?? line?.inputs?.marginRate
+      tapOffMarginRate: totals.tapOffMarginRate ?? line?.inputs?.tapOffMarginRate ?? DEFAULT_MARGIN_RATE
     });
   }
   if (Number.isFinite(specialElementOfferTotal)){
@@ -2619,7 +2751,7 @@ function resolveLineDisplayTotalWithConfig(line, config){
   } else if (Array.isArray(line?.bom)){
     total += calculateSpecialElementOfferTotal({
       bom: line.bom,
-      tapOffMarginRate: totals.tapOffMarginRate ?? line?.inputs?.tapOffMarginRate ?? totals.marginRate ?? line?.inputs?.marginRate
+      tapOffMarginRate: totals.tapOffMarginRate ?? line?.inputs?.tapOffMarginRate ?? DEFAULT_MARGIN_RATE
     });
   }
   return round2(total);
@@ -2723,7 +2855,7 @@ function resolveProjectMaterialMarginRate(project){
     const rate = resolveLineMaterialMarginRate(line);
     if (Number.isFinite(rate)) return rate;
   }
-  return DEFAULT_MARGIN_RATE;
+  return DEFAULT_MATERIAL_MARGIN_RATE;
 }
 
 function getProjectMaterialMarginStats(project){
@@ -2731,7 +2863,7 @@ function getProjectMaterialMarginStats(project){
   const rates = lines
     .map(resolveLineMaterialMarginRate)
     .filter(rate=>Number.isFinite(rate))
-    .map(rate=>normalizeMarginRate(rate, DEFAULT_MARGIN_RATE));
+    .map(rate=>normalizeMarginRate(rate, DEFAULT_MATERIAL_MARGIN_RATE));
   const roundedKeys = new Set(rates.map(rate=>rate.toFixed(6)));
   const minRate = rates.length ? Math.min(...rates) : NaN;
   const maxRate = rates.length ? Math.max(...rates) : NaN;
@@ -2774,8 +2906,8 @@ function shouldUseWarningForProjectMargin(stats){
   if (!Number.isFinite(stats.minRate) || !Number.isFinite(stats.maxRate)) return true;
   const epsilon = 0.000001;
   return (
-    Math.abs(stats.minRate - DEFAULT_MARGIN_RATE) > epsilon ||
-    Math.abs(stats.maxRate - DEFAULT_MARGIN_RATE) > epsilon
+    Math.abs(stats.minRate - DEFAULT_MATERIAL_MARGIN_RATE) > epsilon ||
+    Math.abs(stats.maxRate - DEFAULT_MATERIAL_MARGIN_RATE) > epsilon
   );
 }
 
@@ -2857,7 +2989,7 @@ function submitProjectMarginModal(){
 function applyProjectMarginRate(projectId, nextRate){
   const project = getProjectById(projectId);
   if (!project) return { updatedLines: 0, skippedLines: 0 };
-  const normalizedRate = normalizeMarginRate(nextRate, DEFAULT_MARGIN_RATE);
+  const normalizedRate = normalizeMarginRate(nextRate, DEFAULT_MATERIAL_MARGIN_RATE);
   const lines = Array.isArray(project.lines) ? project.lines : [];
   let updatedLines = 0;
   let skippedLines = 0;
@@ -2883,7 +3015,7 @@ function applyProjectMarginRate(projectId, nextRate){
     const montasjeCost = Number(totals?.montasje?.cost);
     const engineeringCost = Number(totals?.engineering?.cost);
     const opphengCost = Number(totals?.oppheng?.cost);
-    const montasjeMarginRate = resolveDgRate(inputs?.montasjeMarginRate, totals?.montasjeMarginRate, DEFAULT_MARGIN_RATE);
+    const montasjeMarginRate = resolveMontasjeDgRate(inputs?.montasjeMarginRate, totals?.montasjeMarginRate, DEFAULT_MARGIN_RATE);
     const engineeringMarginRate = resolveDgRate(inputs?.engineeringMarginRate, totals?.engineeringMarginRate, DEFAULT_MARGIN_RATE);
     const opphengMarginRate = resolveDgRate(inputs?.opphengMarginRate, totals?.opphengMarginRate, DEFAULT_MARGIN_RATE);
 
@@ -2962,7 +3094,7 @@ function promptAndApplyProjectMarginRate(projectId){
     if (statusEl) statusEl.textContent = 'Ugyldig DG-verdi.';
     return;
   }
-  const nextRate = normalizeMarginRate(parsed > 1 ? parsed / 100 : parsed, DEFAULT_MARGIN_RATE);
+  const nextRate = normalizeMarginRate(parsed > 1 ? parsed / 100 : parsed, DEFAULT_MATERIAL_MARGIN_RATE);
   const result = applyProjectMarginRate(projectId, nextRate);
   const appliedPercent = fmtPercentNO.format(result.appliedRate * 100);
   const statusEl = $('status');
@@ -3193,6 +3325,11 @@ async function requestGenerateProjectOffer(projectId, triggerBtn){
 
   try{
     const generated = await generateProjectOffer(project);
+    if (generated.offerNumber){
+      project.projectNumber = generated.offerNumber;
+      saveProjectsToStorage();
+      renderProjectDashboard();
+    }
     const blobUrl = URL.createObjectURL(generated.blob);
     const link = document.createElement('a');
     link.href = blobUrl;
@@ -3242,8 +3379,18 @@ function renderProjectDashboard(){
     projectState.expandedProjectId = null;
     return;
   }
+  const visibleProjects = projectState.projects.filter(project=>projectMatchesSearch(project));
+  if (!visibleProjects.length){
+    const empty = document.createElement('div');
+    empty.className = 'empty-state';
+    const text = document.createElement('p');
+    text.textContent = 'Ingen prosjekter matcher søket.';
+    empty.appendChild(text);
+    listEl.appendChild(empty);
+    return;
+  }
   const frag = document.createDocumentFragment();
-  projectState.projects.forEach(project=>{
+  visibleProjects.forEach(project=>{
     const expanded = projectState.expandedProjectId === project.id;
     const projectLines = Array.isArray(project.lines) ? project.lines : [];
     const projectTotal = round2(projectLines.reduce((sum, line)=>{
@@ -3256,6 +3403,7 @@ function renderProjectDashboard(){
     }, 0));
     const row = document.createElement('section');
     row.className = 'project-row';
+    row.dataset.projectRowId = project.id || '';
     if (expanded) row.classList.add('is-expanded');
 
     const head = document.createElement('div');
@@ -3263,7 +3411,10 @@ function renderProjectDashboard(){
     const titleWrap = document.createElement('div');
     titleWrap.className = 'project-row-title';
     const title = document.createElement('h3');
-    title.textContent = project.name || 'Uten navn';
+    const projectTitle = project.name || 'Uten navn';
+    title.textContent = project.projectNumber
+      ? `${project.projectNumber} - ${projectTitle}`
+      : projectTitle;
     const customer = document.createElement('p');
     customer.textContent = project.customer ? `Kunde: ${project.customer}` : 'Kunde: -';
     const contact = document.createElement('p');
@@ -3338,6 +3489,12 @@ function renderProjectDashboard(){
     generateOfferBtn.textContent = 'Generer tilbud';
     generateOfferBtn.disabled = !projectLines.length;
 
+    const copyBtn = document.createElement('button');
+    copyBtn.type = 'button';
+    copyBtn.className = 'btn alt';
+    copyBtn.dataset.projectCopy = project.id;
+    copyBtn.textContent = 'Kopier';
+
     const editBtn = document.createElement('button');
     editBtn.type = 'button';
     editBtn.className = 'btn alt';
@@ -3353,6 +3510,7 @@ function renderProjectDashboard(){
     actions.appendChild(detailBtn);
     actions.appendChild(newLineBtn);
     actions.appendChild(generateOfferBtn);
+    actions.appendChild(copyBtn);
     actions.appendChild(editBtn);
     actions.appendChild(deleteBtn);
 
@@ -3479,9 +3637,16 @@ function applyDashboardQueryContext(){
   if (!projectId) return;
   const project = getProjectById(projectId);
   if (!project) return;
+  const shouldFocusProject = params.get('focusProject') === '1';
+  if (shouldFocusProject && projectState.projectSearchTerm && !projectMatchesSearch(project)){
+    setProjectSearchTerm('', { render: false });
+  }
   setActiveProject(project);
   projectState.expandedProjectId = project.id;
   renderProjectDashboard();
+  if (shouldFocusProject){
+    setTimeout(()=>scrollProjectIntoView(project.id), 0);
+  }
 
   if (typeof history !== 'undefined' && history.replaceState){
     const cleanUrl = new URL(window.location.href);
@@ -3562,6 +3727,14 @@ function startNewLineForProject(projectId){
 function scrollPageToTop(){
   if (typeof window === 'undefined' || typeof window.scrollTo !== 'function') return;
   window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+}
+
+function scrollProjectIntoView(projectId){
+  if (!projectId || typeof document === 'undefined') return;
+  const row = Array.from(document.querySelectorAll('[data-project-row-id]'))
+    .find(el=>el.getAttribute('data-project-row-id') === String(projectId));
+  if (!row || typeof row.scrollIntoView !== 'function') return;
+  row.scrollIntoView({ block: 'start', inline: 'nearest', behavior: 'auto' });
 }
 
 function ensureOption(selectEl, value, label){
@@ -3660,10 +3833,10 @@ function applyInputsToCalculator(input){
     }
   }
   setCurrentMarginRate(resolveMarginRateFromData({ input }));
-  setCurrentMontasjeMarginRate(resolveDgRate(input?.montasjeMarginRate, NaN, DEFAULT_MARGIN_RATE));
+  setCurrentMontasjeMarginRate(resolveMontasjeDgRate(input?.montasjeMarginRate, NaN, DEFAULT_MARGIN_RATE));
   setCurrentEngineeringMarginRate(resolveDgRate(input?.engineeringMarginRate, NaN, DEFAULT_MARGIN_RATE));
   setCurrentOpphengMarginRate(resolveDgRate(input?.opphengMarginRate, NaN, DEFAULT_MARGIN_RATE));
-  setCurrentTapOffMarginRate(resolveDgRate(input?.tapOffMarginRate, NaN, resolveMarginRateFromData({ input })));
+  setCurrentTapOffMarginRate(resolveDgRate(input?.tapOffMarginRate, NaN, DEFAULT_MARGIN_RATE));
   const montasjeInput = $('montasjeHourlyRate');
   const opphengInput = $('opphengRate');
   const rateToggle = $('rateToggle');
@@ -3734,7 +3907,7 @@ function applySavedTotalsToUI(line){
   const totals = line.totals;
   applySelectedAddonCheckboxes(line);
   const savedMarginRate = resolveMarginRateFromData({ totals, input: line.inputs });
-  const savedMontasjeMarginRate = resolveDgRate(line.inputs?.montasjeMarginRate, totals?.montasjeMarginRate, DEFAULT_MARGIN_RATE);
+  const savedMontasjeMarginRate = resolveMontasjeDgRate(line.inputs?.montasjeMarginRate, totals?.montasjeMarginRate, DEFAULT_MARGIN_RATE);
   const savedEngineeringMarginRate = resolveDgRate(line.inputs?.engineeringMarginRate, totals?.engineeringMarginRate, DEFAULT_MARGIN_RATE);
   const savedOpphengMarginRate = resolveDgRate(line.inputs?.opphengMarginRate, totals?.opphengMarginRate, DEFAULT_MARGIN_RATE);
   const savedTapOffMarginRate = resolveDgRate(line.inputs?.tapOffMarginRate, totals?.tapOffMarginRate, savedMarginRate);
@@ -3754,7 +3927,7 @@ function applySavedTotalsToUI(line){
   setText('subtotal', totals.subtotal);
   setText('freight', totals.freight);
   setText('totalExMontasje', totals.totalExMontasje);
-  const montasjePricing = calculateDgPricing(totals.montasje?.cost, savedMontasjeMarginRate);
+  const montasjePricing = calculateMontasjePricing(totals.montasje?.cost, savedMontasjeMarginRate);
   const fallbackTotalInclMontasje = round2(Number(montasjePricing.totalWithDg || 0));
   setText('totalInclMontasje', totals.totalInclMontasje ?? fallbackTotalInclMontasje);
   const engineeringPricing = calculateDgPricing(totals.engineering?.cost, savedEngineeringMarginRate);
@@ -3932,13 +4105,16 @@ function showProjectOverview(projectId){
   }
   if (!hasDashboardUI()){
     if (project){
-      goToDashboard({ project: project.id });
+      goToDashboard({ project: project.id, focusProject: '1' });
     } else {
       goToDashboard();
     }
     return;
   }
   showDashboardView({ clearSelection: !project });
+  if (project){
+    setTimeout(()=>scrollProjectIntoView(project.id), 0);
+  }
 }
 
 function showCalculatorView(){
@@ -4099,7 +4275,7 @@ function resetCalculatorForm(options = {}){
   refreshUIBySeries();
   updateTapOffConfigVisibility();
   updateSpecialElementConfigVisibility();
-  setCurrentMarginRate(DEFAULT_MARGIN_RATE);
+  setCurrentMarginRate(DEFAULT_MATERIAL_MARGIN_RATE);
   setCurrentMontasjeMarginRate(DEFAULT_MARGIN_RATE);
   setCurrentEngineeringMarginRate(DEFAULT_MARGIN_RATE);
   setCurrentOpphengMarginRate(DEFAULT_MARGIN_RATE);
@@ -4136,7 +4312,8 @@ function submitProjectModal(){
     return;
   }
   const wasEditMode = projectModalState.mode === 'edit';
-  const shouldSaveLineAfterCreate = !wasEditMode && projectModalState.saveLineAfterCreate;
+  const wasCopyMode = projectModalState.mode === 'copy';
+  const shouldSaveLineAfterCreate = !wasEditMode && !wasCopyMode && projectModalState.saveLineAfterCreate;
   const knownDetails = getKnownProjectDetails(customerName, contactPerson);
   if (!wasEditMode && (!knownDetails.customerAddress || !knownDetails.contactPhone)){
     projectModalState.pendingDetails = {
@@ -4146,7 +4323,8 @@ function submitProjectModal(){
       customerAddress: knownDetails.customerAddress || '',
       customerPostalPlace: knownDetails.customerPostalPlace || '',
       contactPhone: knownDetails.contactPhone || '',
-      shouldSaveLineAfterCreate
+      shouldSaveLineAfterCreate,
+      copySourceProjectId: wasCopyMode ? projectModalState.copySourceProjectId : null
     };
     openProjectDetailsModal(projectModalState.pendingDetails);
     return;
@@ -4154,6 +4332,13 @@ function submitProjectModal(){
   if (wasEditMode && projectModalState.projectId){
     persistProjectInfo(projectName, customerName, contactPerson, {
       projectId: projectModalState.projectId,
+      customerAddress: knownDetails.customerAddress,
+      customerPostalPlace: knownDetails.customerPostalPlace,
+      contactPhone: knownDetails.contactPhone
+    });
+  } else if (wasCopyMode && projectModalState.copySourceProjectId){
+    persistProjectInfo(projectName, customerName, contactPerson, {
+      copySourceProjectId: projectModalState.copySourceProjectId,
       customerAddress: knownDetails.customerAddress,
       customerPostalPlace: knownDetails.customerPostalPlace,
       contactPhone: knownDetails.contactPhone
@@ -4216,6 +4401,7 @@ function submitProjectDetailsModal(){
     return;
   }
   persistProjectInfo(pending.projectName, pending.customerName, pending.contactPerson, {
+    copySourceProjectId: pending.copySourceProjectId || null,
     customerAddress: address,
     customerPostalPlace: postalPlace,
     contactPhone: phone
@@ -4342,6 +4528,13 @@ if (projectSortSelect){
   });
 }
 
+const projectSearchInput = $('projectSearchInput');
+if (projectSearchInput){
+  projectSearchInput.addEventListener('input', ()=>{
+    setProjectSearchTerm(projectSearchInput.value);
+  });
+}
+
 const lineSortSelect = $('lineSortSelect');
 if (lineSortSelect){
   lineSortSelect.addEventListener('change', ()=>{
@@ -4380,6 +4573,10 @@ if (projectListEl){
     }
     if (target.dataset.projectGenerateOffer){
       requestGenerateProjectOffer(target.dataset.projectGenerateOffer, target);
+      return;
+    }
+    if (target.dataset.projectCopy){
+      openProjectModal({ mode: 'copy', copySourceProjectId: target.dataset.projectCopy });
       return;
     }
     if (target.dataset.projectSetMargin){
@@ -4466,7 +4663,7 @@ document.addEventListener('click', evt=>{
         lastEmailPayload.totals.tapOffBoxTotal = sumSeparateTapOffBoxTotal(lastEmailPayload.bom);
         lastEmailPayload.totals.tapOffOfferTotal = calculateTapOffOfferTotal({
           bom: lastEmailPayload.bom,
-          tapOffMarginRate: lastEmailPayload.totals.tapOffMarginRate ?? lastEmailPayload.inputs?.tapOffMarginRate ?? lastEmailPayload.totals.marginRate
+          tapOffMarginRate: lastEmailPayload.totals.tapOffMarginRate ?? lastEmailPayload.inputs?.tapOffMarginRate ?? DEFAULT_MARGIN_RATE
         });
       }
     }
@@ -4713,7 +4910,7 @@ const H = {
   et2:   ['element_type_2','Element type 2','element type 2','H']
 };
 
-const DEFAULT_HOURLY_RATE = 657.8;
+const DEFAULT_HOURLY_RATE = 700;
 const DEFAULT_ENGINEERING_HOURLY_RATE = 929.9;
 const ENGINEERING_HOURS_PER_METER = 0.30;
 const ENGINEERING_HOURS_PER_TEN_ANGLES = 0.30;
@@ -5859,7 +6056,7 @@ if (pf.n1){
     if (isSeparateTapOffBoxBomLine(entry) || isSeparateSpecialElementBomLine(entry)) return sum;
     return sum + resolveBomLineSum(entry);
   }, 0));
-  const marginRate = normalizeMarginRate(input.marginRate, DEFAULT_MARGIN_RATE);
+  const marginRate = normalizeMarginRate(input.marginRate, DEFAULT_MATERIAL_MARGIN_RATE);
   const rate     = Number(input.freightRate ?? 0.10);
   const montasje = calculateMontasje({
     meter: input.meter,
@@ -6434,7 +6631,7 @@ window.addEventListener('DOMContentLoaded', async ()=>{
     refreshUIBySeries();
     updateTapOffConfigVisibility();
     updateSpecialElementConfigVisibility();
-    setCurrentMarginRate(DEFAULT_MARGIN_RATE);
+    setCurrentMarginRate(DEFAULT_MATERIAL_MARGIN_RATE);
     setCurrentMontasjeMarginRate(DEFAULT_MARGIN_RATE);
     setCurrentEngineeringMarginRate(DEFAULT_MARGIN_RATE);
     setCurrentOpphengMarginRate(DEFAULT_MARGIN_RATE);

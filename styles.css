@@ -132,6 +132,14 @@ main.app-views{
   min-width:180px;
 }
 
+.dashboard-search-controls{
+  min-width:240px;
+}
+
+.dashboard-search-controls input{
+  min-width:240px;
+}
+
 .project-list{
   margin-top:16px;
   display:flex;
