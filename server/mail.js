@@ -2428,14 +2428,14 @@ function removeUnusedOfferPlaceholderContainers(xml, placeholders) {
     { container: 'p', keys: ['vvk'] },
     { container: 'p', keys: ['hvk'] },
     { container: 'p', keys: ['avb'] },
-    { container: 'tbl', keys: ['avb_tekst', 'avtappingsbokser_tekst', 'AVTAPPINGSBOKSER_TEKST', 'avb_pris', 'avb_pris_nok', 'avb_sum', 'avb_sum_nok', 'avtappingsbokser_pris', 'avtappingsbokser_pris_nok', 'AVTAPPINGSBOKSER_PRIS'] },
+    { container: 'tr', keys: ['avb_tekst', 'avtappingsbokser_tekst', 'AVTAPPINGSBOKSER_TEKST', 'avb_pris', 'avb_pris_nok', 'avb_sum', 'avb_sum_nok', 'avtappingsbokser_pris', 'avtappingsbokser_pris_nok', 'AVTAPPINGSBOKSER_PRIS'] },
     { container: 'p', keys: ['spe'] },
-    { container: 'tbl', keys: ['spe_tekst', 'spesialelement_tekst', 'spesialelementer_tekst', 'SPESIALELEMENT_TEKST', 'SPESIALELEMENTER_TEKST', 'spe_pris', 'spe_pris_nok', 'spe_sum', 'spe_sum_nok', 'spesialelement_pris', 'spesialelement_pris_nok', 'spesialelementer_pris', 'spesialelementer_pris_nok', 'SPESIALELEMENT_PRIS', 'SPESIALELEMENTER_PRIS'] },
-    { container: 'tbl', keys: ['mtl', 'mtp'] },
+    { container: 'tr', keys: ['spe_tekst', 'spesialelement_tekst', 'spesialelementer_tekst', 'SPESIALELEMENT_TEKST', 'SPESIALELEMENTER_TEKST', 'spe_pris', 'spe_pris_nok', 'spe_sum', 'spe_sum_nok', 'spesialelement_pris', 'spesialelement_pris_nok', 'spesialelementer_pris', 'spesialelementer_pris_nok', 'SPESIALELEMENT_PRIS', 'SPESIALELEMENTER_PRIS'] },
+    { container: 'tr', keys: ['mtl', 'mtp'] },
     { container: 'p', keys: ['ttm', 'timer_totalt_montasje'] },
-    { container: 'tbl', keys: ['itl', 'itp'] },
+    { container: 'tr', keys: ['itl', 'itp'] },
     { container: 'p', keys: ['tti', 'timer_totalt_ingenior'] },
-    { container: 'tbl', keys: ['tol', 'top'] },
+    { container: 'tr', keys: ['tol', 'top'] },
     { container: 'p', keys: ['tod'] }
   ];
   return removeXmlContainersForEmptyPlaceholders(xml, placeholders, specs);
