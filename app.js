@@ -40,6 +40,7 @@ const LEGACY_PROJECTS_STORAGE_KEY = 'busbar.projects.v1';
 const PROJECTS_STORAGE_KEY_PREFIX = 'busbar.projects.user.v2';
 const PROJECT_SYNC_DEBOUNCE_MS = 800;
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const MICROSOFT_AUTH_DEFAULT_SCOPES = Object.freeze(['openid', 'profile', 'email']);
 const PROJECT_SORT_STORAGE_KEY = 'busbar.project.sort.v1';
 const LINE_SORT_STORAGE_KEY = 'busbar.line.sort.v1';
 const PROJECT_SORT_OPTIONS = Object.freeze(['date_newest', 'date_oldest', 'alpha_asc', 'alpha_desc']);
@@ -83,6 +84,8 @@ let pendingBoxItems = [];
 let pendingSpecialElementItems = [];
 let tapOffItemCounter = 0;
 let specialElementItemCounter = 0;
+let microsoftAuthConfigPromise = null;
+let microsoftMsalClient = null;
 
 // --- CSV ---
 function parseCSVAuto(text){
@@ -1274,6 +1277,127 @@ function authHeaders(){
   return { Authorization: `Bearer ${authState.token}` };
 }
 
+function defaultMicrosoftRedirectUri(){
+  const origin = window.location.origin;
+  const path = window.location.pathname || '/';
+  const repoBase = '/busbar-webapp-embedded-v2/';
+  if (path.startsWith(repoBase)){
+    return `${origin}${repoBase}auth/callback`;
+  }
+  return `${origin}/auth/callback`;
+}
+
+async function loadMicrosoftAuthConfig(){
+  if (!microsoftAuthConfigPromise){
+    microsoftAuthConfigPromise = fetch(buildApiUrl('/api/auth/microsoft/config'), {
+      cache: 'no-store'
+    })
+      .then(async res => {
+        let payload = null;
+        try{
+          payload = await res.json();
+        }catch(_err){}
+        if (!res.ok){
+          throw new Error(payload?.error || appendApiBaseHint('Kunne ikke hente Microsoft-konfigurasjon.', res.status));
+        }
+        if (!payload?.enabled || !payload?.clientId || !payload?.tenantId){
+          throw new Error('Microsoft-innlogging er ikke konfigurert på serveren.');
+        }
+        return {
+          clientId: String(payload.clientId),
+          tenantId: String(payload.tenantId),
+          authority: String(payload.authority || `https://login.microsoftonline.com/${payload.tenantId}`),
+          redirectUri: String(payload.redirectUri || defaultMicrosoftRedirectUri()),
+          scopes: Array.isArray(payload.scopes) && payload.scopes.length
+            ? payload.scopes.map(scope=>String(scope)).filter(Boolean)
+            : [...MICROSOFT_AUTH_DEFAULT_SCOPES]
+        };
+      })
+      .catch(err => {
+        microsoftAuthConfigPromise = null;
+        throw err;
+      });
+  }
+  return microsoftAuthConfigPromise;
+}
+
+async function getMicrosoftMsalClient(){
+  if (!window.msal?.PublicClientApplication){
+    throw new Error('Microsoft innloggingsbibliotek ble ikke lastet.');
+  }
+  const config = await loadMicrosoftAuthConfig();
+  if (!microsoftMsalClient){
+    microsoftMsalClient = new window.msal.PublicClientApplication({
+      auth: {
+        clientId: config.clientId,
+        authority: config.authority,
+        redirectUri: config.redirectUri,
+        navigateToLoginRequestUrl: false
+      },
+      cache: {
+        cacheLocation: 'sessionStorage',
+        storeAuthStateInCookie: false
+      }
+    });
+    if (typeof microsoftMsalClient.initialize === 'function'){
+      await microsoftMsalClient.initialize();
+    }
+  }
+  return { client: microsoftMsalClient, config };
+}
+
+async function exchangeMicrosoftToken(idToken){
+  const res = await fetch(buildApiUrl('/api/auth/microsoft/session'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ idToken })
+  });
+  let payload = null;
+  try{
+    payload = await res.json();
+  }catch(_err){}
+  if (!res.ok){
+    throw new Error(payload?.error || appendApiBaseHint('Microsoft-innlogging ble avvist av serveren.', res.status));
+  }
+  const username = normalizeUserEmail(payload?.email);
+  const token = typeof payload?.token === 'string' ? payload.token : '';
+  if (!hasValidUserEmail(username) || !token){
+    throw new Error('Serveren returnerte ugyldig Microsoft-innlogging.');
+  }
+  return { username, token, profile: normalizeProfilePayload(payload?.profile) };
+}
+
+async function handleMicrosoftLogin(){
+  const errorEl = $('loginError');
+  const microsoftBtn = $('microsoftLoginBtn');
+  const loginSubmit = $('loginSubmit');
+  const registerSubmit = $('registerSubmit');
+  if (errorEl) errorEl.textContent = 'Åpner Microsoft-innlogging...';
+  if (microsoftBtn) microsoftBtn.disabled = true;
+  if (loginSubmit) loginSubmit.disabled = true;
+  if (registerSubmit) registerSubmit.disabled = true;
+  try{
+    const { client, config } = await getMicrosoftMsalClient();
+    const result = await client.loginPopup({
+      scopes: config.scopes,
+      prompt: 'select_account'
+    });
+    if (!result?.idToken){
+      throw new Error('Microsoft returnerte ikke ID-token.');
+    }
+    if (errorEl) errorEl.textContent = 'Validerer Microsoft-innlogging...';
+    const auth = await exchangeMicrosoftToken(result.idToken);
+    await completeAuth(auth, 'Microsoft-innlogging fullført. Henter prosjekter fra server...');
+  }catch(err){
+    console.warn('Microsoft-innlogging feilet', err);
+    if (errorEl) errorEl.textContent = err?.message || 'Microsoft-innlogging feilet.';
+  }finally{
+    if (microsoftBtn) microsoftBtn.disabled = false;
+    if (loginSubmit) loginSubmit.disabled = false;
+    if (registerSubmit) registerSubmit.disabled = false;
+  }
+}
+
 function clearAuthSession(){
   authState = { loggedIn: false, username: '', token: '', profile: null };
   persistAuthToSession();
@@ -1527,6 +1651,10 @@ if (loginCancel){
 const loginSubmit = $('loginSubmit');
 if (loginSubmit){
   loginSubmit.addEventListener('click', handleLoginSubmit);
+}
+const microsoftLoginBtn = $('microsoftLoginBtn');
+if (microsoftLoginBtn){
+  microsoftLoginBtn.addEventListener('click', handleMicrosoftLogin);
 }
 const registerSubmit = $('registerSubmit');
 if (registerSubmit){

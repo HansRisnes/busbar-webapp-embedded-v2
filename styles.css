@@ -757,6 +757,25 @@ button:disabled:hover{filter:none}
   background:var(--input);
   border-color:var(--input-border);
 }
+.microsoft-login-btn{
+  width:100%;
+  margin-bottom:10px;
+}
+.login-divider{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  margin:6px 0 12px;
+  color:var(--muted);
+  font-size:13px;
+}
+.login-divider::before,
+.login-divider::after{
+  content:"";
+  height:1px;
+  flex:1;
+  background:var(--card-border);
+}
 
 input[type="checkbox"]{
   width:auto;

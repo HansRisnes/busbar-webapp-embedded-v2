@@ -6,6 +6,7 @@
       "projects": [
         {
           "id": "58506e74-1735-4e5f-ab89-e13dce6a2096",
+          "projectNumber": "2026-1054",
           "name": "Test",
           "customer": "Test",
           "contactPerson": "Test",
@@ -26,6 +27,7 @@
         },
         {
           "id": "02ad2c26-a878-48bc-a2a7-fc5c61b03b77",
+          "projectNumber": "2026-1053",
           "name": "Dronningensgate 13",
           "customer": "Storm Elektro AS",
           "contactPerson": "Nino Dogani",
@@ -882,6 +884,7 @@
         },
         {
           "id": "f5df1fdd-1bc2-4a40-884a-10ff2b1f816d",
+          "projectNumber": "2026-1038",
           "name": "Bilia Follo",
           "customer": "Caverion Norge AS",
           "contactPerson": "Truls Martin Johansen",
@@ -1100,6 +1103,7 @@
         },
         {
           "id": "9b80d126-addd-4099-b80d-0eb2bcee57b2",
+          "projectNumber": "2026-1037",
           "name": "Hotel",
           "customer": "Eltel AS",
           "contactPerson": "Even Kongsvik Lien",
@@ -1634,6 +1638,7 @@
         },
         {
           "id": "b1066d79-cf0a-49bd-91e9-a91c969f5706",
+          "projectNumber": "2026-1036",
           "name": "Utsikten Kongsberg",
           "customer": "Power Tech AS",
           "contactPerson": "Aleksander Hempel Hansen",

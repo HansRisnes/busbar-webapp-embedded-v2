@@ -188,6 +188,27 @@ const AUTH_TOKEN_TTL_SECONDS = (() => {
   if (!Number.isFinite(parsed) || parsed < 300) return 60 * 60 * 24 * 30;
   return Math.round(parsed);
 })();
+const MICROSOFT_AUTH_TENANT_ID = safeString(
+  process.env.MICROSOFT_AUTH_TENANT_ID ||
+  process.env.MS_AUTH_TENANT_ID ||
+  'e1b96c2a-c273-40b9-bb46-a2a7b570e133'
+);
+const MICROSOFT_AUTH_CLIENT_ID = safeString(
+  process.env.MICROSOFT_AUTH_CLIENT_ID ||
+  process.env.MS_AUTH_CLIENT_ID ||
+  '48570b46-4211-46ac-b43e-6eb1451ad1a5'
+);
+const MICROSOFT_AUTH_REDIRECT_URI = safeString(
+  process.env.MICROSOFT_AUTH_REDIRECT_URI ||
+  'https://hansrisnes.github.io/busbar-webapp-embedded-v2/auth/callback'
+);
+const MICROSOFT_AUTH_SCOPES = parseCsvEnv(
+  process.env.MICROSOFT_AUTH_SCOPES ||
+  'openid,profile,email'
+);
+const MICROSOFT_AUTH_ISSUER = `https://login.microsoftonline.com/${MICROSOFT_AUTH_TENANT_ID}/v2.0`;
+const MICROSOFT_AUTH_JWKS_URL = `https://login.microsoftonline.com/${MICROSOFT_AUTH_TENANT_ID}/discovery/v2.0/keys`;
+let microsoftJwksCache = { fetchedAt: 0, keys: [] };
 
 if (!process.env.ADMIN_USERNAME || !process.env.ADMIN_PASSWORD) {
   console.warn(
@@ -495,6 +516,83 @@ function verifyAuthToken(token) {
   } catch (_err) {
     return null;
   }
+}
+
+function decodeBase64UrlJson(value) {
+  try {
+    return JSON.parse(Buffer.from(safeString(value), 'base64url').toString('utf8'));
+  } catch (_err) {
+    return null;
+  }
+}
+
+async function fetchMicrosoftJwks() {
+  const now = Date.now();
+  if (Array.isArray(microsoftJwksCache.keys) && microsoftJwksCache.keys.length && now - microsoftJwksCache.fetchedAt < 60 * 60 * 1000) {
+    return microsoftJwksCache.keys;
+  }
+  const res = await fetch(MICROSOFT_AUTH_JWKS_URL);
+  if (!res.ok) {
+    throw new Error(`Kunne ikke hente Microsoft-nøkler (${res.status})`);
+  }
+  const payload = await res.json();
+  const keys = Array.isArray(payload?.keys) ? payload.keys : [];
+  microsoftJwksCache = { fetchedAt: now, keys };
+  return keys;
+}
+
+async function verifyMicrosoftIdToken(idToken) {
+  const raw = safeString(idToken);
+  const parts = raw.split('.');
+  if (parts.length !== 3 || !parts[0] || !parts[1] || !parts[2]) {
+    return null;
+  }
+  const header = decodeBase64UrlJson(parts[0]);
+  const payload = decodeBase64UrlJson(parts[1]);
+  if (!header || !payload || header.alg !== 'RS256' || !header.kid) {
+    return null;
+  }
+  const keys = await fetchMicrosoftJwks();
+  const jwk = keys.find(key => key?.kid === header.kid);
+  if (!jwk) {
+    microsoftJwksCache = { fetchedAt: 0, keys: [] };
+    const refreshed = await fetchMicrosoftJwks();
+    const refreshedJwk = refreshed.find(key => key?.kid === header.kid);
+    if (!refreshedJwk) return null;
+    return verifyMicrosoftIdTokenWithJwk(raw, parts, payload, refreshedJwk);
+  }
+  return verifyMicrosoftIdTokenWithJwk(raw, parts, payload, jwk);
+}
+
+function verifyMicrosoftIdTokenWithJwk(rawToken, parts, payload, jwk) {
+  const verifier = crypto.createVerify('RSA-SHA256');
+  verifier.update(`${parts[0]}.${parts[1]}`);
+  verifier.end();
+  const publicKey = crypto.createPublicKey({ key: jwk, format: 'jwk' });
+  const signatureValid = verifier.verify(publicKey, Buffer.from(parts[2], 'base64url'));
+  if (!signatureValid) return null;
+
+  const now = Math.floor(Date.now() / 1000);
+  const exp = Number(payload.exp);
+  const nbf = Number(payload.nbf || 0);
+  const aud = safeString(payload.aud);
+  const iss = safeString(payload.iss);
+  const tid = safeString(payload.tid);
+  if (aud !== MICROSOFT_AUTH_CLIENT_ID) return null;
+  if (iss !== MICROSOFT_AUTH_ISSUER) return null;
+  if (tid !== MICROSOFT_AUTH_TENANT_ID) return null;
+  if (!Number.isFinite(exp) || exp < now) return null;
+  if (Number.isFinite(nbf) && nbf > now + 300) return null;
+
+  const email = normalizeEmail(payload.preferred_username || payload.email || payload.upn);
+  if (!isValidEmail(email)) return null;
+  return {
+    email,
+    oid: safeString(payload.oid),
+    name: safeString(payload.name),
+    tenantId: tid,
+    rawToken
+  };
 }
 
 function getBearerToken(req) {
@@ -3140,6 +3238,68 @@ app.get('/api/market-data', async (req, res) => {
   } catch (err) {
     console.error('Markedsdata feilet', err);
     res.status(502).json({ error: 'Kunne ikke hente markedsdata' });
+  }
+});
+
+app.get('/api/auth/microsoft/config', (_req, res) => {
+  if (!MICROSOFT_AUTH_TENANT_ID || !MICROSOFT_AUTH_CLIENT_ID) {
+    return res.status(503).json({ enabled: false, error: 'Microsoft-innlogging er ikke konfigurert' });
+  }
+  return res.json({
+    enabled: true,
+    tenantId: MICROSOFT_AUTH_TENANT_ID,
+    clientId: MICROSOFT_AUTH_CLIENT_ID,
+    authority: `https://login.microsoftonline.com/${MICROSOFT_AUTH_TENANT_ID}`,
+    redirectUri: MICROSOFT_AUTH_REDIRECT_URI,
+    scopes: MICROSOFT_AUTH_SCOPES
+  });
+});
+
+app.post('/api/auth/microsoft/session', async (req, res) => {
+  try {
+    const microsoftUser = await verifyMicrosoftIdToken(req.body?.idToken);
+    if (!microsoftUser) {
+      return res.status(401).json({ error: 'Microsoft-innlogging kunne ikke valideres' });
+    }
+
+    const userRecord = await withUserAuthLock(async () => {
+      const store = await readUserAuthStore();
+      const existing = store.users[microsoftUser.email] || {};
+      const now = new Date().toISOString();
+      const existingProfile = normalizeUserProfile(existing.profile || {});
+      const profile = {
+        ...existingProfile,
+        name: existingProfile.name || microsoftUser.name || microsoftUser.email,
+        phone: existingProfile.phone || '',
+        company: existingProfile.company || '',
+        position: existingProfile.position || ''
+      };
+      store.users[microsoftUser.email] = {
+        ...existing,
+        email: microsoftUser.email,
+        profile,
+        passwordHash: safeString(existing.passwordHash),
+        microsoft: {
+          oid: microsoftUser.oid,
+          tenantId: microsoftUser.tenantId,
+          linkedAt: existing?.microsoft?.linkedAt || now,
+          lastLoginAt: now
+        },
+        createdAt: toIsoTimestamp(existing.createdAt, now),
+        updatedAt: now
+      };
+      await writeUserAuthStore(store);
+      return store.users[microsoftUser.email];
+    });
+
+    return res.json({
+      email: userRecord.email,
+      profile: userRecord.profile,
+      token: createAuthToken(userRecord.email)
+    });
+  } catch (err) {
+    console.error('Microsoft-innlogging feilet', err);
+    return res.status(500).json({ error: 'Kunne ikke fullføre Microsoft-innlogging' });
   }
 });
 
