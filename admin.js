@@ -640,6 +640,7 @@ function renderUsersTable(rowsInput){
       <td>${escapeHtml(row.loginStatus)}</td>
       <td class="admin-row-actions">
         <button type="button" class="btn alt btn-small" data-user-edit="true" data-email="${escapeHtml(row.email)}">Endre</button>
+        <button type="button" class="btn danger btn-small" data-user-delete="true" data-email="${escapeHtml(row.email)}">Slett</button>
       </td>
     `;
     tbody.appendChild(tr);
@@ -1029,6 +1030,28 @@ async function postAdminUserProfile(authHeader, body){
   return res.json();
 }
 
+async function postAdminUserDelete(authHeader, email){
+  const res = await fetch(buildApiUrl('/api/admin/users/delete'), {
+    method: 'POST',
+    headers: {
+      Authorization: authHeader,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ email })
+  });
+  if (!res.ok){
+    let message = `Brukersletting feilet (${res.status})`;
+    try{
+      const data = await res.json();
+      if (data && typeof data.error === 'string' && data.error.trim()){
+        message += `: ${data.error.trim()}`;
+      }
+    }catch(_err){}
+    throw new Error(appendApiBaseHint(message, res.status));
+  }
+  return res.json();
+}
+
 async function postAdminCustomerMutation(path, authHeader, body){
   const res = await fetch(buildApiUrl(path), {
     method: 'POST',
@@ -1129,6 +1152,31 @@ async function handleUserSave(){
     setUserStatus('Brukerinfo lagret.');
   }catch(err){
     setUserStatus(err?.message || 'Lagring av brukerinfo feilet.');
+  }
+}
+
+async function handleUserDelete(email){
+  const stored = getStoredAdminAuthOrUserWarn();
+  if (!stored) return;
+  const normalizedEmail = String(email || '').trim().toLowerCase();
+  if (!normalizedEmail){
+    setUserStatus('Velg en bruker først.');
+    return;
+  }
+  const row = findUserRow(normalizedEmail);
+  const projectCount = Number(row?.projectCount || 0);
+  const confirmText = `Slette brukeren "${normalizedEmail}"?\n\nDette sletter også ${projectCount} prosjekt(er) og tilhørende tilbudsdata som er registrert på brukeren.`;
+  if (!window.confirm(confirmText)) return;
+
+  try{
+    const result = await postAdminUserDelete(stored.authHeader, normalizedEmail);
+    await loadOverview(stored.authHeader);
+    clearUserForm();
+    const deletedProjects = Number(result?.deletedProjects || 0);
+    const removedRevisions = Number(result?.removedRevisions || 0);
+    setUserStatus(`Bruker slettet. Slettet ${deletedProjects} prosjekt(er) og ${removedRevisions} tilbudsrevisjon(er).`);
+  }catch(err){
+    setUserStatus(err?.message || 'Sletting av bruker feilet.');
   }
 }
 
@@ -1298,6 +1346,11 @@ function bindUi(){
     if (editUserButton){
       const row = findUserRow(editUserButton.dataset.email);
       if (row) fillUserForm(row);
+      return;
+    }
+    const deleteUserButton = evt.target?.closest?.('[data-user-delete]');
+    if (deleteUserButton){
+      void handleUserDelete(deleteUserButton.dataset.email);
       return;
     }
     const editButton = evt.target?.closest?.('[data-customer-edit], [data-customer-contact-edit]');

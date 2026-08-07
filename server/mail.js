@@ -892,6 +892,115 @@ function mergeCustomerIntoMap(map, customerInput) {
   map.set(key, existing);
 }
 
+function getProjectTimestampMs(project) {
+  const updated = Date.parse(safeString(project?.updatedAt));
+  if (!Number.isNaN(updated)) return updated;
+  const created = Date.parse(safeString(project?.createdAt));
+  return Number.isNaN(created) ? 0 : created;
+}
+
+function mergeProjectsByLatestForServer(leftProjects, rightProjects) {
+  const merged = new Map();
+  const add = project => {
+    const normalized = normalizeProjectRecord(project);
+    if (!normalized) return;
+    const key = safeString(normalized.id) || resolveProjectOfferKey(normalized);
+    const existing = merged.get(key);
+    if (!existing || getProjectTimestampMs(normalized) >= getProjectTimestampMs(existing)) {
+      merged.set(key, normalized);
+    }
+  };
+  (Array.isArray(leftProjects) ? leftProjects : []).forEach(add);
+  (Array.isArray(rightProjects) ? rightProjects : []).forEach(add);
+  return Array.from(merged.values());
+}
+
+async function removeOfferMetadataForProjects(projects) {
+  const keys = (Array.isArray(projects) ? projects : [])
+    .map(resolveProjectOfferKey)
+    .filter(Boolean);
+  if (!keys.length) return { removedProjectNumbers: 0, removedRevisions: 0 };
+  const keySet = new Set(keys);
+  const [projectNumbersRaw, revisionsRaw] = await Promise.all([
+    readJsonFile(OFFER_PROJECT_NUMBERS_FILE, {}),
+    readJsonFile(OFFER_REVISIONS_FILE, {})
+  ]);
+  const projectNumbers = isObject(projectNumbersRaw) ? projectNumbersRaw : {};
+  const revisions = isObject(revisionsRaw) ? revisionsRaw : {};
+  let removedProjectNumbers = 0;
+  let removedRevisions = 0;
+  keySet.forEach(key => {
+    if (Object.prototype.hasOwnProperty.call(projectNumbers, key)) {
+      delete projectNumbers[key];
+      removedProjectNumbers += 1;
+    }
+    if (Object.prototype.hasOwnProperty.call(revisions, key)) {
+      delete revisions[key];
+      removedRevisions += 1;
+    }
+  });
+  await Promise.all([
+    writeJsonFile(OFFER_PROJECT_NUMBERS_FILE, projectNumbers),
+    writeJsonFile(OFFER_REVISIONS_FILE, revisions)
+  ]);
+  return { removedProjectNumbers, removedRevisions };
+}
+
+const PROJECT_TRANSFER_SOURCE_EMAIL = 'hans.jakob.risnes@mcselektrotavler.no';
+const PROJECT_TRANSFER_TARGET_EMAIL = 'hans.jakob.risnes@busbar.no';
+
+async function migrateProjectsBetweenUsersOnStartup(
+  sourceEmail = PROJECT_TRANSFER_SOURCE_EMAIL,
+  targetEmail = PROJECT_TRANSFER_TARGET_EMAIL
+) {
+  const source = normalizeEmail(sourceEmail);
+  const target = normalizeEmail(targetEmail);
+  if (!isValidEmail(source) || !isValidEmail(target) || source === target) {
+    return { moved: 0, skipped: true };
+  }
+
+  return withProjectArchiveLock(async () => {
+    const archive = await readProjectArchive();
+    const sourceUser = archive.users[source];
+    const sourceProjects = Array.isArray(sourceUser?.projects) ? sourceUser.projects : [];
+    if (!sourceProjects.length) {
+      if (archive.users[source]) {
+        delete archive.users[source];
+        await writeProjectArchive(archive);
+      }
+      return { moved: 0, source, target, sourceRemoved: Boolean(sourceUser) };
+    }
+
+    const targetUser = archive.users[target] || { email: target, updatedAt: null, projects: [] };
+    const movedProjects = sourceProjects
+      .map(project => normalizeProjectRecord({
+        ...project,
+        projectOwnerEmail: target
+      }))
+      .filter(Boolean);
+    const mergedProjects = mergeProjectsByLatestForServer(targetUser.projects, movedProjects)
+      .map(project => ({
+        ...project,
+        projectOwnerEmail: target
+      }));
+
+    archive.users[target] = {
+      email: target,
+      updatedAt: new Date().toISOString(),
+      projects: mergedProjects
+    };
+    delete archive.users[source];
+    await writeProjectArchive(archive);
+
+    return {
+      moved: movedProjects.length,
+      source,
+      target,
+      totalTargetProjects: mergedProjects.length
+    };
+  });
+}
+
 async function buildMergedCustomerDatabase() {
   const [database, archive] = await Promise.all([
     readCustomerDatabase(),
@@ -4256,7 +4365,11 @@ app.post('/api/admin/users/delete', requireAdminAuth, async (req, res) => {
       return res.status(400).json({ error: 'Ugyldig e-post' });
     }
 
-    const deleted = await withUserAuthLock(async () => {
+    let deletedAuth = false;
+    let deletedProjects = 0;
+    let offerCleanup = { removedProjectNumbers: 0, removedRevisions: 0 };
+
+    deletedAuth = await withUserAuthLock(async () => {
       const store = await readUserAuthStore();
       if (!store.users[email]) return false;
       delete store.users[email];
@@ -4264,7 +4377,26 @@ app.post('/api/admin/users/delete', requireAdminAuth, async (req, res) => {
       return true;
     });
 
-    return res.json({ email, deleted });
+    const projectsToDelete = await withProjectArchiveLock(async () => {
+      const archive = await readProjectArchive();
+      const user = archive.users[email];
+      const projects = Array.isArray(user?.projects) ? user.projects : [];
+      if (archive.users[email]) {
+        delete archive.users[email];
+        await writeProjectArchive(archive);
+      }
+      return projects;
+    });
+    deletedProjects = projectsToDelete.length;
+    offerCleanup = await removeOfferMetadataForProjects(projectsToDelete);
+
+    return res.json({
+      email,
+      deleted: deletedAuth || deletedProjects > 0,
+      deletedAuth,
+      deletedProjects,
+      ...offerCleanup
+    });
   } catch (err) {
     console.error('Sletting av bruker feilet', err);
     return res.status(500).json({ error: 'Kunne ikke slette bruker' });
@@ -4452,6 +4584,17 @@ app.listen(port, host, () => {
     })
     .catch(err=>{
       console.error('[project-number-migration] Feilet', err);
+    });
+  migrateProjectsBetweenUsersOnStartup()
+    .then(result=>{
+      if (result?.moved) {
+        console.log(`[project-transfer] Flyttet ${result.moved} prosjekt(er) fra ${result.source} til ${result.target}`);
+      } else if (result?.sourceRemoved) {
+        console.log(`[project-transfer] Fjernet tom kildebruker ${result.source}`);
+      }
+    })
+    .catch(err=>{
+      console.error('[project-transfer] Feilet', err);
     });
   initializeMarketDataAutomation().catch(err=>{
     console.error('[market-data] Init feilet', err);
