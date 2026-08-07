@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="no">
 <head>
   <meta charset="utf-8" />
@@ -28,21 +28,30 @@
   </style>
 </head>
 <body>
+  <svg class="app-icon-sprite" aria-hidden="true" focusable="false">
+    <symbol id="icon-dashboard" viewBox="0 0 24 24"><path d="M4 13h6V4H4v9Zm10 7h6V4h-6v16ZM4 20h6v-5H4v5Z"/></symbol>
+    <symbol id="icon-projects" viewBox="0 0 24 24"><path d="M3 6.5A2.5 2.5 0 0 1 5.5 4H10l2 2h6.5A2.5 2.5 0 0 1 21 8.5v9A2.5 2.5 0 0 1 18.5 20h-13A2.5 2.5 0 0 1 3 17.5v-11Z"/></symbol>
+    <symbol id="icon-calculator" viewBox="0 0 24 24"><path d="M7 2h10a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2Zm1 4v4h8V6H8Zm0 7v2h2v-2H8Zm4 0v2h2v-2h-2Zm4 0v2h2v-2h-2Zm-8 4v2h2v-2H8Zm4 0v2h2v-2h-2Zm4 0v2h2v-2h-2Z"/></symbol>
+    <symbol id="icon-calendar" viewBox="0 0 24 24"><path d="M7 2h2v3h6V2h2v3h2a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2V2Zm12 8H5v9h14v-9Z"/></symbol>
+    <symbol id="icon-customers" viewBox="0 0 24 24"><path d="M8 12a4 4 0 1 1 0-8 4 4 0 0 1 0 8Zm8.5 1a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7ZM2 20a6 6 0 0 1 12 0H2Zm11.5 0a7.5 7.5 0 0 0-1.2-4.1A5 5 0 0 1 22 18.5V20h-8.5Z"/></symbol>
+    <symbol id="icon-offers" viewBox="0 0 24 24"><path d="M6 2h9l5 5v15H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2Zm8 1.5V8h4.5L14 3.5ZM8 12h8v2H8v-2Zm0 4h8v2H8v-2Z"/></symbol>
+    <symbol id="icon-email" viewBox="0 0 24 24"><path d="M4 5h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Zm8 7.2L4.7 7H4v.7l8 5.7 8-5.7V7h-.7L12 12.2Z"/></symbol>
+    <symbol id="icon-company-card" viewBox="0 0 24 24"><path d="M4 5h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Zm2 4v2h6V9H6Zm0 4v2h4v-2H6Zm9-3h3v2h-3v-2Zm-1 4h5v2h-5v-2Z"/></symbol>
+    <symbol id="icon-project-folders" viewBox="0 0 24 24"><path d="M3 6.5A2.5 2.5 0 0 1 5.5 4H10l2 2h6.5A2.5 2.5 0 0 1 21 8.5V10H3V6.5Zm0 5.5h18v5.5a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17.5V12Zm5 2v2h8v-2H8Z"/></symbol>
+    <symbol id="icon-supplier-folders" viewBox="0 0 24 24"><path d="M4 5h6l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Zm2 6v5h3v-5H6Zm5-2v7h3V9h-3Zm5 3v4h3v-4h-3Z"/></symbol>
+    <symbol id="icon-login" viewBox="0 0 24 24"><path d="M10 4h8a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-8v-2h8V6h-8V4Zm1.5 4.5L15 12l-3.5 3.5-1.4-1.4 1.1-1.1H3v-2h8.2l-1.1-1.1 1.4-1.4Z"/></symbol>
+    <symbol id="icon-logout" viewBox="0 0 24 24"><path d="M4 4h8v2H4v12h8v2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Zm10.5 4.5L18 12l-3.5 3.5-1.4-1.4 1.1-1.1H7v-2h7.2l-1.1-1.1 1.4-1.4ZM18 6h2v12h-2V6Z"/></symbol>
+    <symbol id="icon-admin" viewBox="0 0 24 24"><path d="M12 2 4 5.5v6.2c0 5 3.4 9.6 8 10.8 4.6-1.2 8-5.8 8-10.8V5.5L12 2Zm0 5a2.5 2.5 0 0 1 1.3 4.6L15 17H9l1.7-5.4A2.5 2.5 0 0 1 12 7Z"/></symbol>
+  </svg>
   <header>
     <div class="header-top">
       <h1>Busbar Priskalkulator</h1>
-      <div id="authControls" class="auth-controls">
-        <span id="authUser" class="auth-user muted-text" hidden></span>
-        <button id="loginBtn" class="btn">Logg på</button>
-        <button id="logoutBtn" class="btn alt" hidden>Logg av</button>
-        <a href="admin.html" id="adminPageBtn" class="btn alt nav-page-btn" hidden>Admin</a>
-      </div>
     </div>
     <div class="market-bar" id="marketTicker" aria-live="polite">
       <div class="market-item">
         <span class="market-label">LME aluminium</span>
         <span class="market-value" id="marketAlPrice">--</span>
-        <span class="market-note" id="marketAlMeta">USD/t · ALI=F</span>
+        <span class="market-note" id="marketAlMeta">USD/t Â· ALI=F</span>
       </div>
       <div class="market-item">
         <span class="market-label">USD / NOK</span>
@@ -60,62 +69,424 @@
         <span class="market-status" id="marketStatus">Henter...</span>
       </div>
     </div>
-    <p>Leser rå CSV fra <code>data/busbar-webapp-embedded-v2.csv</code>, <code>data/busbar-webapp-embedded-v2.1.csv</code> og <code>data/XAP_busbar_prisliste_ekstrakt_5W_clean.csv</code>.</p>
+    <p>Leser r&aring; CSV fra <code>data/busbar-webapp-embedded-v2.csv</code>, <code>data/busbar-webapp-embedded-v2.1.csv</code> og <code>data/XAP_busbar_prisliste_ekstrakt_5W_clean.csv</code>.</p>
   </header>
 
-  <main class="app-views">
-    <div class="view-toolbar">
-      <a class="btn alt nav-page-btn is-disabled" aria-disabled="true" tabindex="-1">Åpne prisverktøy</a>
+  <main class="app-shell" id="dashboardShell">
+    <aside class="dashboard-sidebar" aria-label="Hovedmeny">
+      <div class="sidebar-top-row">
+        <button type="button" class="sidebar-collapse-btn" id="dashboardSidebarToggle" aria-label="Minimer meny" aria-expanded="true">
+          <span class="sidebar-collapse-icon" aria-hidden="true"></span>
+        </button>
+        <div class="sidebar-brand">
+          <div class="logo-mask" role="img" aria-label="Logo"></div>
+        </div>
+      </div>
+      <nav class="sidebar-nav">
+        <div class="sidebar-nav-section">
+          <button type="button" class="sidebar-nav-item is-active" data-dashboard-nav="dashboard"><svg class="sidebar-nav-icon" aria-hidden="true"><use href="#icon-dashboard"></use></svg><span class="sidebar-nav-label">Dashbord</span></button>
+          <a class="sidebar-nav-item" href="calculator.html" data-dashboard-link="calculator"><svg class="sidebar-nav-icon" aria-hidden="true"><use href="#icon-calculator"></use></svg><span class="sidebar-nav-label">Prisverkt&oslash;y</span></a>
+          <button type="button" class="sidebar-nav-item" data-dashboard-nav="projects"><svg class="sidebar-nav-icon" aria-hidden="true"><use href="#icon-projects"></use></svg><span class="sidebar-nav-label">Prosjekter</span></button>
+          <button type="button" class="sidebar-nav-item" data-dashboard-nav="offers"><svg class="sidebar-nav-icon" aria-hidden="true"><use href="#icon-offers"></use></svg><span class="sidebar-nav-label">Tilbud</span></button>
+          <button type="button" class="sidebar-nav-item" data-dashboard-nav="email"><svg class="sidebar-nav-icon" aria-hidden="true"><use href="#icon-email"></use></svg><span class="sidebar-nav-label">E-post</span></button>
+          <button type="button" class="sidebar-nav-item" data-dashboard-nav="calendar"><svg class="sidebar-nav-icon" aria-hidden="true"><use href="#icon-calendar"></use></svg><span class="sidebar-nav-label">Kalender</span></button>
+          <button type="button" class="sidebar-nav-item" data-dashboard-nav="customers"><svg class="sidebar-nav-icon" aria-hidden="true"><use href="#icon-customers"></use></svg><span class="sidebar-nav-label">Kontaktpersoner</span></button>
+          <button type="button" class="sidebar-nav-item" data-dashboard-nav="company-card"><svg class="sidebar-nav-icon" aria-hidden="true"><use href="#icon-company-card"></use></svg><span class="sidebar-nav-label">Kundekort</span></button>
+          <div class="sidebar-separator" aria-hidden="true"></div>
+          <button type="button" class="sidebar-nav-item" data-dashboard-nav="project-folders"><svg class="sidebar-nav-icon" aria-hidden="true"><use href="#icon-project-folders"></use></svg><span class="sidebar-nav-label">Prosjektmapper</span></button>
+          <button type="button" class="sidebar-nav-item" data-dashboard-nav="supplier-folders"><svg class="sidebar-nav-icon" aria-hidden="true"><use href="#icon-supplier-folders"></use></svg><span class="sidebar-nav-label">Leverand&oslash;rmapper</span></button>
+        </div>
+        <div class="sidebar-nav-section is-bottom">
+          <div class="sidebar-separator" aria-hidden="true"></div>
+          <div id="authControls" class="sidebar-auth-block">
+            <span id="authUser" class="auth-user muted-text" hidden></span>
+            <div class="sidebar-auth-actions">
+              <button id="loginBtn" class="btn sidebar-auth-btn" title="Logg p&aring;"><svg class="sidebar-nav-icon" aria-hidden="true"><use href="#icon-login"></use></svg><span class="sidebar-auth-label">Logg p&aring;</span></button>
+              <button id="logoutBtn" class="btn alt sidebar-auth-btn" title="Logg av" hidden><svg class="sidebar-nav-icon" aria-hidden="true"><use href="#icon-logout"></use></svg><span class="sidebar-auth-label">Logg av</span></button>
+            </div>
+          </div>
+          <a class="sidebar-nav-item" href="admin.html" id="dashboardAdminNav" data-dashboard-admin hidden><svg class="sidebar-nav-icon" aria-hidden="true"><use href="#icon-admin"></use></svg><span class="sidebar-nav-label">Admin</span></a>
+        </div>
+      </nav>
+    </aside>
+
+    <section class="dashboard-main">
+    <div class="view-toolbar" hidden>
+      <a class="btn alt nav-page-btn is-disabled" aria-disabled="true" tabindex="-1">&Aring;pne prisverkt&oslash;y</a>
     </div>
 
-    <section id="dashboardView" class="card dashboard-card">
+      <section id="mainDashboardView" class="dashboard-page placeholder-page is-active" data-dashboard-page="dashboard">
+        <div class="placeholder-header">
+          <h2>Dashbord</h2>
+          <p class="muted-text">Dashbordinnhold kommer her.</p>
+        </div>
+      </section>
+
+    <section id="dashboardView" class="dashboard-page" data-dashboard-page="projects" hidden>
       <div class="dashboard-header">
         <div class="dashboard-intro">
-          <div class="logo-mask" role="img" aria-label="Logo"></div>
-          <h2>Prosjektoversikt</h2>
-          <p class="muted-text">Velg et prosjekt, eller opprett nytt prosjekt. Prisverktøy åpnes på egen side.</p>
+          <h2>Prosjekter</h2>
+          <p class="muted-text">Velg et prosjekt, eller opprett nytt prosjekt. Prisverkt&oslash;y &aring;pnes p&aring; egen side.</p>
         </div>
-        <div class="dashboard-actions">
-          <button id="newProjectBtn" type="button" class="btn">Opprett nytt prosjekt</button>
+        <div class="dashboard-actions section-toolbar">
+          <button id="newProjectBtn" type="button" class="btn alt">Nytt prosjekt</button>
           <div class="dashboard-sort-row">
             <div class="dashboard-sort-controls dashboard-search-controls">
-              <label for="projectSearchInput">Søk prosjekt</label>
+              <label for="projectSearchInput">S&oslash;k prosjekt</label>
               <input id="projectSearchInput" type="search" autocomplete="off" placeholder="Prosjekt, kunde eller kontakt">
             </div>
             <div class="dashboard-sort-controls">
               <label for="projectSortSelect">Sorter prosjekter</label>
               <select id="projectSortSelect">
-                <option value="date_newest">Nyest først</option>
-                <option value="date_oldest">Eldst først</option>
-                <option value="alpha_asc">Alfabetisk (A-Å)</option>
-                <option value="alpha_desc">Alfabetisk (Å-A)</option>
+                <option value="date_newest">Nyest f&oslash;rst</option>
+                <option value="date_oldest">Eldst f&oslash;rst</option>
+                <option value="alpha_asc">Alfabetisk (A-&Aring;)</option>
+                <option value="alpha_desc">Alfabetisk (&Aring;-A)</option>
               </select>
             </div>
             <div class="dashboard-sort-controls">
               <label for="lineSortSelect">Sorter linjer</label>
               <select id="lineSortSelect">
-                <option value="date_newest">Nyest først</option>
-                <option value="date_oldest">Eldst først</option>
-                <option value="alpha_asc">Alfabetisk (A-Å)</option>
-                <option value="alpha_desc">Alfabetisk (Å-A)</option>
+                <option value="date_newest">Nyest f&oslash;rst</option>
+                <option value="date_oldest">Eldst f&oslash;rst</option>
+                <option value="alpha_asc">Alfabetisk (A-&Aring;)</option>
+                <option value="alpha_desc">Alfabetisk (&Aring;-A)</option>
               </select>
             </div>
+          </div>
+          <div class="toolbar-right">
+            <span id="projectsStatus" class="graph-status muted-text"></span>
+            <button id="refreshProjectsBtn" type="button" class="btn alt">Oppdater</button>
           </div>
         </div>
       </div>
       <div id="projectList" class="project-list" aria-live="polite">
         <div class="empty-state">
-          <p>Ingen prosjekter er registrert ennå.</p>
-          <button id="newProjectEmptyBtn" type="button" class="btn" data-action="create-project">Opprett nytt prosjekt</button>
+          <p>Ingen prosjekter er registrert enn&aring;.</p>
+          <button id="newProjectEmptyBtn" type="button" class="btn alt" data-action="create-project">Nytt prosjekt</button>
         </div>
       </div>
+    </section>
+      <section id="calendarView" class="dashboard-page placeholder-page" data-dashboard-page="calendar" hidden>
+        <div class="placeholder-header">
+          <h2>Kalender</h2>
+          <p class="muted-text">Viser kommende kalenderhendelser fra Microsoft-kontoen din.</p>
+        </div>
+        <div class="graph-toolbar section-toolbar">
+          <div class="toolbar-left">
+            <button id="newCalendarEventBtn" type="button" class="btn alt">Ny avtale</button>
+            <div class="calendar-period-controls">
+              <button id="calendarTodayBtn" type="button" class="calendar-today-btn">I dag</button>
+              <button id="calendarPrevBtn" type="button" class="calendar-period-btn" aria-label="Forrige periode"><span class="calendar-period-icon">&lsaquo;</span></button>
+              <button id="calendarNextBtn" type="button" class="calendar-period-btn" aria-label="Neste periode"><span class="calendar-period-icon">&rsaquo;</span></button>
+              <span id="calendarPeriodLabel" class="calendar-period-label"></span>
+            </div>
+            <label class="calendar-mode-select-label" for="calendarModeSelect">
+              <select id="calendarModeSelect" class="calendar-mode-select">
+                <option value="month">M&aring;ned</option>
+                <option value="week">Uke</option>
+                <option value="list">Liste</option>
+              </select>
+            </label>
+          </div>
+          <div class="toolbar-right">
+            <span id="calendarStatus" class="graph-status muted-text"></span>
+            <button id="refreshCalendarBtn" type="button" class="btn alt">Oppdater</button>
+          </div>
+        </div>
+        <form id="calendarEventForm" class="graph-edit-form" hidden>
+          <input id="calendarEventId" type="hidden">
+          <div class="calendar-attendees-field">
+            <label for="calendarAttendeeInput">E-post</label>
+            <div class="calendar-attendee-input-row">
+              <input id="calendarAttendeeInput" type="text" inputmode="email" list="calendarAttendeeOptions" autocomplete="email" placeholder="Velg eller skriv e-post">
+              <button id="addCalendarAttendeeBtn" type="button" class="btn alt">Legg til</button>
+            </div>
+            <datalist id="calendarAttendeeOptions"></datalist>
+            <div id="calendarAttendeesList" class="calendar-attendees-list" aria-live="polite"></div>
+          </div>
+          <label for="calendarEventSubject">Emne
+            <input id="calendarEventSubject" type="text" required>
+          </label>
+          <label class="calendar-date-field" for="calendarEventStartDate">Startdato
+            <span class="calendar-date-input-row">
+              <input id="calendarEventStartDate" type="text" inputmode="numeric" autocomplete="off" placeholder="DD/MM/ÅÅÅÅ" required>
+              <button id="calendarEventDatePickerBtn" type="button" class="calendar-date-picker-btn" aria-label="Velg dato">
+                <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M7 2h2v3h6V2h2v3h2a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2V2Zm12 8H5v9h14v-9Z"/></svg>
+              </button>
+              <input id="calendarEventDatePicker" class="calendar-hidden-date-picker" type="date" tabindex="-1" aria-hidden="true">
+              <div id="calendarDatePickerPopover" class="calendar-date-picker-popover" hidden></div>
+            </span>
+          </label>
+          <label class="calendar-compact-field" for="calendarEventStartTime">Starttid
+            <select id="calendarEventStartTime" required></select>
+          </label>
+          <label class="calendar-compact-field" for="calendarEventDuration">Varighet
+            <select id="calendarEventDuration" required></select>
+          </label>
+          <label for="calendarEventLocation">Sted
+            <input id="calendarEventLocation" type="text">
+          </label>
+          <label class="graph-wide-field" for="calendarEventBody">Notat
+            <textarea id="calendarEventBody" rows="4"></textarea>
+          </label>
+          <div class="graph-edit-actions">
+            <button type="submit" class="btn">Lagre</button>
+            <button id="cancelCalendarEventBtn" type="button" class="btn alt">Avbryt</button>
+            <button id="deleteCalendarEventBtn" type="button" class="btn danger" hidden>Slett</button>
+          </div>
+        </form>
+        <div id="calendarEventsList" class="graph-list calendar-events-list" aria-live="polite"></div>
+        <div id="calendarGridView" class="calendar-grid-view" aria-live="polite" hidden></div>
+      </section>
+
+      <section id="offersView" class="dashboard-page placeholder-page" data-dashboard-page="offers" hidden>
+        <div class="placeholder-header">
+          <h2>Tilbud</h2>
+          <p class="muted-text">Siste registrerte tilbudsrevisjon per prosjekt.</p>
+        </div>
+        <div class="dashboard-sort-row offers-sort-row section-toolbar">
+          <div class="dashboard-sort-controls dashboard-search-controls">
+            <label for="offerSearchInput">S&oslash;k tilbud</label>
+            <input id="offerSearchInput" type="search" autocomplete="off" placeholder="Prosjekt, kunde eller tilbudsnummer">
+          </div>
+          <div class="dashboard-sort-controls">
+            <label for="offerSortSelect">Sorter tilbud</label>
+            <select id="offerSortSelect">
+              <option value="date_newest">Nyest f&oslash;rst</option>
+              <option value="date_oldest">Eldst f&oslash;rst</option>
+              <option value="alpha_asc">Alfabetisk (A-&Aring;)</option>
+              <option value="alpha_desc">Alfabetisk (&Aring;-A)</option>
+            </select>
+          </div>
+          <div class="toolbar-right">
+            <span id="offersStatus" class="graph-status muted-text"></span>
+            <button id="refreshOffersBtn" type="button" class="btn alt">Oppdater</button>
+          </div>
+        </div>
+        <div id="offersList" class="offers-list" aria-live="polite"></div>
+      </section>
+
+      <section id="emailView" class="dashboard-page placeholder-page" data-dashboard-page="email" hidden>
+        <div class="placeholder-header">
+          <h2>E-post</h2>
+          <p class="muted-text">Viser siste e-poster fra Microsoft-kontoen din.</p>
+        </div>
+        <div class="graph-toolbar section-toolbar">
+          <div class="toolbar-left">
+            <button id="composeEmailBtn" type="button" class="btn alt">Ny e-post</button>
+          </div>
+          <div class="toolbar-right">
+            <span id="emailStatus" class="graph-status muted-text"></span>
+            <button id="refreshEmailBtn" type="button" class="btn alt">Oppdater</button>
+          </div>
+        </div>
+        <form id="emailComposeForm" class="graph-edit-form" hidden>
+          <label for="emailToInput">Til
+            <input id="emailToInput" type="text" inputmode="email" placeholder="navn@firma.no" required>
+          </label>
+          <label for="emailCcInput">Kopi
+            <input id="emailCcInput" type="text" inputmode="email" placeholder="valgfritt">
+          </label>
+          <label for="emailSubjectInput">Emne
+            <input id="emailSubjectInput" type="text" required>
+          </label>
+          <label class="graph-wide-field" for="emailBodyInput">Melding
+            <textarea id="emailBodyInput" rows="7" required></textarea>
+          </label>
+          <div class="graph-edit-actions">
+            <button type="submit" class="btn">Send</button>
+            <button id="cancelEmailComposeBtn" type="button" class="btn alt">Avbryt</button>
+          </div>
+        </form>
+        <div id="emailMessageActions" class="graph-inline-actions" hidden>
+          <span id="selectedEmailLabel" class="muted-text"></span>
+          <button id="openSelectedEmailBtn" type="button" class="btn alt">Åpne</button>
+          <button id="markSelectedEmailReadBtn" type="button" class="btn alt">Marker lest</button>
+          <button id="deleteSelectedEmailBtn" type="button" class="btn danger">Slett</button>
+        </div>
+        <div id="emailMessagesList" class="graph-list email-messages-list" aria-live="polite"></div>
+      </section>
+
+      <section id="customersView" class="dashboard-page placeholder-page" data-dashboard-page="customers" hidden>
+        <div class="placeholder-header">
+          <h2>Kontaktpersoner</h2>
+          <p class="muted-text">Global liste med kontaktpersoner registrert p&aring; firma i prosjektene.</p>
+        </div>
+        <div class="global-data-toolbar section-toolbar">
+          <div class="toolbar-left">
+            <button id="addContactBtn" type="button" class="btn alt">Legg til kontakt</button>
+            <div class="dashboard-sort-controls dashboard-search-controls">
+              <label for="contactSearchInput">S&oslash;k kontaktpersoner</label>
+              <input id="contactSearchInput" type="search" autocomplete="off" placeholder="Kontaktperson, firma eller telefon">
+            </div>
+            <div class="dashboard-sort-controls">
+              <label for="contactSortSelect">Sorter kontaktpersoner</label>
+              <select id="contactSortSelect">
+                <option value="alpha_asc">Alfabetisk (A-&Aring;)</option>
+                <option value="alpha_desc">Alfabetisk (&Aring;-A)</option>
+                <option value="date_newest">Nyest f&oslash;rst</option>
+                <option value="date_oldest">Eldst f&oslash;rst</option>
+              </select>
+            </div>
+          </div>
+          <div class="toolbar-right">
+            <span id="contactsStatus" class="graph-status muted-text"></span>
+            <button id="refreshContactsBtn" type="button" class="btn alt">Oppdater</button>
+          </div>
+          <span id="contactsOwnerHint" class="global-owner-hint muted-text">Kun Entra Owners kan redigere.</span>
+        </div>
+        <form id="contactEditForm" class="global-edit-form" data-editing="0" hidden>
+          <input id="contactOriginalCustomer" type="hidden">
+          <input id="contactOriginalName" type="hidden">
+          <div class="global-edit-actions">
+            <button type="submit" class="btn">Lagre</button>
+            <button id="cancelContactEditBtn" type="button" class="btn alt">Avbryt</button>
+          </div>
+          <label for="contactCompanyInput">Firmanavn
+            <input id="contactCompanyInput" type="text" list="globalCompanyOptions" required>
+          </label>
+          <label for="contactNameInput">Kontaktperson
+            <input id="contactNameInput" type="text" required>
+          </label>
+          <label for="contactPhoneInput">Telefon
+            <input id="contactPhoneInput" type="text" inputmode="tel">
+          </label>
+          <label for="contactEmailInput">E-post
+            <input id="contactEmailInput" type="email" autocomplete="email">
+          </label>
+        </form>
+        <div id="contactsList" class="global-data-list" aria-live="polite"></div>
+      </section>
+
+      <section id="companyCardView" class="dashboard-page placeholder-page" data-dashboard-page="company-card" hidden>
+        <div class="placeholder-header">
+          <h2>Kundekort</h2>
+          <p class="muted-text">Global liste med firma som er registrert p&aring; prosjekter.</p>
+        </div>
+        <div class="global-data-toolbar section-toolbar">
+          <div class="toolbar-left">
+            <button id="addCompanyBtn" type="button" class="btn alt">Legg til kunde</button>
+            <div class="dashboard-sort-controls dashboard-search-controls">
+              <label for="companySearchInput">S&oslash;k kunde</label>
+              <input id="companySearchInput" type="search" autocomplete="off" placeholder="Kunde, adresse eller segment">
+            </div>
+            <div class="dashboard-sort-controls">
+              <label for="companySortSelect">Sorter kunde</label>
+              <select id="companySortSelect">
+                <option value="alpha_asc">Alfabetisk (A-&Aring;)</option>
+                <option value="alpha_desc">Alfabetisk (&Aring;-A)</option>
+                <option value="date_newest">Nyest f&oslash;rst</option>
+                <option value="date_oldest">Eldst f&oslash;rst</option>
+              </select>
+            </div>
+          </div>
+          <div class="toolbar-right">
+            <span id="companiesStatus" class="graph-status muted-text"></span>
+            <button id="refreshCompaniesBtn" type="button" class="btn alt">Oppdater</button>
+          </div>
+          <span id="companiesOwnerHint" class="global-owner-hint muted-text">Kun Entra Owners kan redigere.</span>
+        </div>
+        <form id="companyEditForm" class="global-edit-form" data-editing="0" hidden>
+          <input id="companyOriginalName" type="hidden">
+          <div class="global-edit-actions">
+            <button type="submit" class="btn">Lagre</button>
+            <button id="cancelCompanyEditBtn" type="button" class="btn alt">Avbryt</button>
+          </div>
+          <label for="companyNameInput">Firmanavn
+            <input id="companyNameInput" type="text" required>
+          </label>
+          <label for="companyAddressInput">Adresse
+            <input id="companyAddressInput" type="text">
+          </label>
+          <label for="companyPostalPlaceInput">Postnummer og sted
+            <input id="companyPostalPlaceInput" type="text">
+          </label>
+          <label for="companySegmentInput">Kundesegment
+            <input id="companySegmentInput" type="text">
+          </label>
+        </form>
+        <datalist id="globalCompanyOptions"></datalist>
+        <div id="companiesList" class="global-data-list" aria-live="polite"></div>
+      </section>
+
+      <section id="projectFoldersView" class="dashboard-page placeholder-page" data-dashboard-page="project-folders" hidden>
+        <div class="placeholder-header">
+          <h2>Prosjektmapper</h2>
+          <p class="muted-text">Viser innhold fra SharePoint-mappen Drift/BUSBAR/Prosjekter/2026.</p>
+        </div>
+        <div class="graph-toolbar section-toolbar">
+          <div class="toolbar-left">
+            <button id="newProjectFolderBtn" type="button" class="btn alt">Ny mappe</button>
+            <label class="btn alt graph-file-upload-label" for="uploadProjectFolderFile">Legg til fil</label>
+            <input id="uploadProjectFolderFile" type="file" hidden>
+            <div class="dashboard-sort-controls dashboard-search-controls">
+              <label for="projectFolderSearchInput">S&oslash;k mappe</label>
+              <input id="projectFolderSearchInput" type="search" autocomplete="off" placeholder="Mappe eller filnavn">
+            </div>
+            <div class="dashboard-sort-controls">
+              <label for="projectFolderSortSelect">Sorter mapper</label>
+              <select id="projectFolderSortSelect">
+                <option value="alpha_asc">Alfabetisk (A-&Aring;)</option>
+                <option value="alpha_desc">Alfabetisk (&Aring;-A)</option>
+                <option value="date_newest">Nyest f&oslash;rst</option>
+                <option value="date_oldest">Eldst f&oslash;rst</option>
+              </select>
+            </div>
+          </div>
+          <div class="toolbar-right">
+            <span id="projectFoldersStatus" class="graph-status muted-text"></span>
+            <button id="refreshProjectFoldersBtn" type="button" class="btn alt">Oppdater</button>
+          </div>
+        </div>
+        <div id="projectFoldersList" class="sharepoint-list" aria-live="polite"></div>
+      </section>
+
+      <section id="supplierFoldersView" class="dashboard-page placeholder-page" data-dashboard-page="supplier-folders" hidden>
+        <div class="placeholder-header">
+          <h2>Leverand&oslash;rmapper</h2>
+          <p class="muted-text">Viser innhold fra SharePoint-mappen Drift/BUSBAR/Str&oslash;mskinner.</p>
+        </div>
+        <div class="graph-toolbar section-toolbar">
+          <div class="toolbar-left">
+            <button id="newSupplierFolderBtn" type="button" class="btn alt">Ny mappe</button>
+            <label class="btn alt graph-file-upload-label" for="uploadSupplierFolderFile">Legg til fil</label>
+            <input id="uploadSupplierFolderFile" type="file" hidden>
+            <div class="dashboard-sort-controls dashboard-search-controls">
+              <label for="supplierFolderSearchInput">S&oslash;k mappe</label>
+              <input id="supplierFolderSearchInput" type="search" autocomplete="off" placeholder="Mappe eller filnavn">
+            </div>
+            <div class="dashboard-sort-controls">
+              <label for="supplierFolderSortSelect">Sorter mapper</label>
+              <select id="supplierFolderSortSelect">
+                <option value="alpha_asc">Alfabetisk (A-&Aring;)</option>
+                <option value="alpha_desc">Alfabetisk (&Aring;-A)</option>
+                <option value="date_newest">Nyest f&oslash;rst</option>
+                <option value="date_oldest">Eldst f&oslash;rst</option>
+              </select>
+            </div>
+          </div>
+          <div class="toolbar-right">
+            <span id="supplierFoldersStatus" class="graph-status muted-text"></span>
+            <button id="refreshSupplierFoldersBtn" type="button" class="btn alt">Oppdater</button>
+          </div>
+        </div>
+        <div id="supplierFoldersList" class="sharepoint-list" aria-live="polite"></div>
+      </section>
+
+      <section id="adminView" class="dashboard-page placeholder-page" data-dashboard-page="admin" hidden>
+        <div class="placeholder-header">
+          <h2>Admin</h2>
+          <p class="muted-text">Adminfunksjoner &aring;pnes fra menyen n&aring;r brukeren har tilgang.</p>
+        </div>
+      </section>
     </section>
   </main>
 
   <div id="expModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="expTitle">
     <div class="modal">
       <h3 id="expTitle">Er det sammenhengende 30 meter rett skinne?</h3>
-      <p>Velg Ja for å legge til ekspansjonsledd.</p>
+      <p>Velg Ja for &aring; legge til ekspansjonsledd.</p>
       <div class="actions">
         <button id="expNo" class="btn alt">Nei</button>
         <button id="expYes" class="btn">Ja</button>
@@ -125,7 +496,7 @@
 
   <div id="loginModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="loginTitle">
     <div class="modal">
-      <h3 id="loginTitle">Logg på</h3>
+      <h3 id="loginTitle">Logg p&aring;</h3>
       <form class="login-form" onsubmit="return false;" autocomplete="off">
         <button id="microsoftLoginBtn" type="button" class="btn microsoft-login-btn">Logg p&aring; med Microsoft</button>
         <div class="login-divider" aria-hidden="true"><span>eller</span></div>
@@ -136,13 +507,13 @@
           <input id="loginPassword" type="password" autocomplete="current-password" required>
         </label>
         <div class="register-inline">
-          <span>Ved første innlogging opprett ny bruker</span>
+          <span>Ved f&oslash;rste innlogging opprett ny bruker</span>
           <button id="registerSubmit" type="button" class="btn alt btn-small">Opprett bruker</button>
         </div>
         <p id="loginError" class="login-error" role="alert"></p>
         <div class="actions">
           <button id="loginCancel" type="button" class="btn alt">Avbryt</button>
-          <button id="loginSubmit" type="button" class="btn">Logg på</button>
+          <button id="loginSubmit" type="button" class="btn">Logg p&aring;</button>
         </div>
       </form>
     </div>
@@ -244,9 +615,9 @@
   <div id="offerDetailsWarningModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="offerDetailsWarningTitle">
     <div class="modal">
       <h3 id="offerDetailsWarningTitle">Mangler detaljer</h3>
-      <p class="muted-text">Prosjektet mangler følgende felt:</p>
+      <p class="muted-text">Prosjektet mangler f&oslash;lgende felt:</p>
       <ul id="offerDetailsMissingList" class="missing-details-list"></ul>
-      <p>Kontakt administrator for å legge til detaljer</p>
+      <p>Kontakt administrator for &aring; legge til detaljer</p>
       <div class="actions">
         <button id="offerDetailsCancel" type="button" class="btn alt">Avbryt</button>
         <button id="offerDetailsContinue" type="button" class="btn">Generer likevel</button>
@@ -258,7 +629,7 @@
     <div class="modal">
       <h3 id="projectMarginTitle">Sett prosjekt-DG</h3>
       <form class="project-form" onsubmit="return false;" autocomplete="off">
-        <p id="projectMarginCurrent" class="muted-text">Nåværende DG vises her.</p>
+        <p id="projectMarginCurrent" class="muted-text">N&aring;v&aelig;rende DG vises her.</p>
         <label for="projectMarginPercentInput">DG (%)
           <input id="projectMarginPercentInput" type="text" inputmode="decimal" placeholder="Eks. 20" required>
         </label>

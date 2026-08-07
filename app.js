@@ -34,21 +34,52 @@ const MAX_AUTO_MONTERING_MARGIN_RATE = 0.99;
 let lastCalc = null; // delsummer for live frakt-oppdatering
 let lastCalcInput = null;
 const AUTH_SESSION_KEY = 'busbar.auth.session.v1';
-let authState = { loggedIn: false, username: '', token: '', profile: null };
+let authState = { loggedIn: false, username: '', token: '', profile: null, isAdmin: false };
 const ADMIN_NAV_ALLOWED_EMAILS = Object.freeze(['hans.jakob.risnes@busbar.no']);
 const LEGACY_PROJECTS_STORAGE_KEY = 'busbar.projects.v1';
 const PROJECTS_STORAGE_KEY_PREFIX = 'busbar.projects.user.v2';
 const PROJECT_SYNC_DEBOUNCE_MS = 800;
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MICROSOFT_AUTH_DEFAULT_SCOPES = Object.freeze(['openid', 'profile', 'email']);
+const MICROSOFT_GRAPH_CALENDAR_SCOPES = Object.freeze(['Calendars.ReadWrite']);
+const MICROSOFT_GRAPH_MAIL_SCOPES = Object.freeze(['Mail.ReadWrite', 'Mail.Send']);
+const MICROSOFT_GRAPH_SHAREPOINT_SCOPES = Object.freeze(['Files.ReadWrite.All', 'Sites.Read.All']);
+const MICROSOFT_GRAPH_BASE_URL = 'https://graph.microsoft.com/v1.0';
+const SHAREPOINT_FOLDER_CONFIG = Object.freeze({
+  'project-folders': {
+    title: 'Prosjektmapper',
+    statusId: 'projectFoldersStatus',
+    listId: 'projectFoldersList',
+    refreshBtnId: 'refreshProjectFoldersBtn',
+    siteHost: 'mcselektrotavler.sharepoint.com',
+    sitePath: '/sites/BCDokumentarkiv',
+    folderPath: 'Drift/BUSBAR/Prosjekter/2026'
+  },
+  'supplier-folders': {
+    title: 'Leverandørmapper',
+    statusId: 'supplierFoldersStatus',
+    listId: 'supplierFoldersList',
+    refreshBtnId: 'refreshSupplierFoldersBtn',
+    siteHost: 'mcselektrotavler.sharepoint.com',
+    sitePath: '/sites/BCDokumentarkiv',
+    folderPath: 'Drift/BUSBAR/Strømskinner'
+  }
+});
+const PROJECT_FOLDER_TEMPLATE_NAME = '0-MAL';
+const DASHBOARD_SIDEBAR_COLLAPSED_KEY = 'busbar.dashboard.sidebar.collapsed.v1';
 const PROJECT_SORT_STORAGE_KEY = 'busbar.project.sort.v1';
 const LINE_SORT_STORAGE_KEY = 'busbar.line.sort.v1';
+const OFFER_SORT_STORAGE_KEY = 'busbar.offer.sort.v1';
 const PROJECT_SORT_OPTIONS = Object.freeze(['date_newest', 'date_oldest', 'alpha_asc', 'alpha_desc']);
 const LINE_SORT_OPTIONS = Object.freeze(['date_newest', 'date_oldest', 'alpha_asc', 'alpha_desc']);
 const projectSyncState = {
   timerId: null,
   inFlight: false,
   pending: false
+};
+const dashboardState = {
+  activePage: 'dashboard',
+  sidebarCollapsed: false
 };
 const projectState = {
   currentProjectId: null,
@@ -60,6 +91,7 @@ const projectState = {
   customerHistory: [],
   contactHistory: [],
   customerDatabase: [],
+  globalCustomerDatabaseLoaded: false,
   projects: [],
   expandedProjectId: null,
   projectSearchTerm: '',
@@ -79,6 +111,18 @@ const projectMarginModalState = {
 const offerDetailsWarningState = {
   resolver: null
 };
+const offerListState = {
+  searchTerm: '',
+  sort: 'date_newest',
+  statusByProjectId: {},
+  loaded: false
+};
+const globalListState = {
+  companySearchTerm: '',
+  companySort: 'alpha_asc',
+  contactSearchTerm: '',
+  contactSort: 'alpha_asc'
+};
 let lastEmailPayload = null;
 let pendingBoxItems = [];
 let pendingSpecialElementItems = [];
@@ -86,6 +130,21 @@ let tapOffItemCounter = 0;
 let specialElementItemCounter = 0;
 let microsoftAuthConfigPromise = null;
 let microsoftMsalClient = null;
+let microsoftLastAccount = null;
+const calendarViewState = {
+  mode: 'month',
+  cursor: new Date(),
+  events: [],
+  loadedStart: null,
+  loadedEnd: null,
+  formAttendees: [],
+  datePickerCursor: new Date()
+};
+const emailViewState = {
+  messages: [],
+  selectedMessageId: ''
+};
+const sharePointFolderState = {};
 
 // --- CSV ---
 function parseCSVAuto(text){
@@ -136,6 +195,115 @@ function goToDashboard(params = {}){
 function goToCalculator(params = {}){
   window.location.href = buildAppUrl('calculator.html', params).toString();
 }
+
+function setDashboardPage(page){
+  const nextPage = String(page || 'projects');
+  const pages = Array.from(document.querySelectorAll('[data-dashboard-page]'));
+  if (pages.length){
+    const target = pages.find(el=>el.dataset.dashboardPage === nextPage) || pages[0];
+    dashboardState.activePage = target.dataset.dashboardPage || 'projects';
+    pages.forEach(el=>{
+      const active = el === target;
+      el.hidden = !active;
+      el.classList.toggle('is-active', active);
+    });
+  } else {
+    dashboardState.activePage = nextPage;
+  }
+  const navItems = Array.from(document.querySelectorAll('[data-dashboard-nav], [data-dashboard-link]'));
+  navItems.forEach(item=>{
+    const itemPage = item.dataset.dashboardNav || item.dataset.dashboardLink || '';
+    const active = itemPage === dashboardState.activePage;
+    item.classList.toggle('is-active', active);
+    item.setAttribute('aria-current', active ? 'page' : 'false');
+  });
+  handleDashboardPageActivated(dashboardState.activePage);
+}
+
+function handleDashboardPageActivated(page){
+  if (page === 'calendar'){
+    loadCalendarEvents({ silent: true });
+  } else if (page === 'email'){
+    loadEmailMessages({ silent: true });
+  } else if (page === 'offers'){
+    loadOfferStatus({ silent: true });
+  } else if (page === 'customers' || page === 'company-card'){
+    loadGlobalCustomerDatabase({ silent: true });
+  } else if (page === 'project-folders' || page === 'supplier-folders'){
+    loadSharePointFolder(page, { silent: true });
+  }
+}
+
+function resolveInitialDashboardPage(){
+  const shell = $('dashboardShell');
+  const configured = String(shell?.dataset?.dashboardActivePage || '').trim();
+  if (configured) return configured;
+  const params = new URLSearchParams(window.location.search);
+  const view = String(params.get('view') || '').trim();
+  if (view) return view;
+  return hasCalculatorUI() ? 'calculator' : 'dashboard';
+}
+
+function readDashboardSidebarCollapsed(){
+  if (typeof localStorage === 'undefined') return false;
+  try{
+    return localStorage.getItem(DASHBOARD_SIDEBAR_COLLAPSED_KEY) === '1';
+  }catch(_err){
+    return false;
+  }
+}
+
+function persistDashboardSidebarCollapsed(collapsed){
+  if (typeof localStorage === 'undefined') return;
+  try{
+    localStorage.setItem(DASHBOARD_SIDEBAR_COLLAPSED_KEY, collapsed ? '1' : '0');
+  }catch(_err){}
+}
+
+function setDashboardSidebarCollapsed(collapsed, options = {}){
+  const shell = $('dashboardShell');
+  const toggle = $('dashboardSidebarToggle');
+  const next = Boolean(collapsed);
+  dashboardState.sidebarCollapsed = next;
+  if (shell) shell.classList.toggle('is-sidebar-collapsed', next);
+  if (toggle){
+    toggle.setAttribute('aria-expanded', next ? 'false' : 'true');
+    toggle.setAttribute('aria-label', next ? 'Utvid meny' : 'Minimer meny');
+    toggle.title = next ? 'Utvid meny' : 'Minimer meny';
+  }
+  if (!options.skipPersist){
+    persistDashboardSidebarCollapsed(next);
+  }
+}
+
+function initDashboardShell(){
+  const shell = $('dashboardShell');
+  if (!shell) return;
+  if (shell.dataset.dashboardShellBound === '1'){
+    setDashboardPage(dashboardState.activePage);
+    setDashboardSidebarCollapsed(dashboardState.sidebarCollapsed, { skipPersist: true });
+    return;
+  }
+  shell.dataset.dashboardShellBound = '1';
+  dashboardState.activePage = resolveInitialDashboardPage();
+  dashboardState.sidebarCollapsed = readDashboardSidebarCollapsed();
+  shell.addEventListener('click', evt=>{
+    const toggleBtn = evt.target?.closest?.('#dashboardSidebarToggle');
+    if (toggleBtn){
+      evt.preventDefault();
+      setDashboardSidebarCollapsed(!dashboardState.sidebarCollapsed);
+      return;
+    }
+    const navBtn = evt.target?.closest?.('[data-dashboard-nav]');
+    if (!navBtn) return;
+    evt.preventDefault();
+    setDashboardPage(navBtn.dataset.dashboardNav);
+  });
+  setDashboardSidebarCollapsed(dashboardState.sidebarCollapsed, { skipPersist: true });
+  setDashboardPage(dashboardState.activePage);
+}
+
+initDashboardShell();
 
 function normalizeApiBaseUrl(value){
   const raw = String(value || '').trim();
@@ -1197,9 +1365,10 @@ function loadAuthFromSession(){
     const username = normalizeUserEmail(parsed.username);
     const token = typeof parsed.token === 'string' ? parsed.token : '';
     const profile = parsed.profile && typeof parsed.profile === 'object' ? parsed.profile : null;
+    const isAdmin = parsed.isAdmin === true || ADMIN_NAV_ALLOWED_EMAILS.includes(username);
     if (!hasValidUserEmail(username)) return;
     if (!token) return;
-    authState = { loggedIn: true, username, token, profile };
+    authState = { loggedIn: true, username, token, profile, isAdmin };
   }catch(err){
     console.warn('Kunne ikke lese innloggingsstatus', err);
   }
@@ -1213,7 +1382,8 @@ function persistAuthToSession(){
         loggedIn: true,
         username: authState.username || '',
         token: authState.token || '',
-        profile: authState.profile || null
+        profile: authState.profile || null,
+        isAdmin: authState.isAdmin === true
       }));
       return;
     }
@@ -1221,6 +1391,11 @@ function persistAuthToSession(){
   }catch(err){
     console.warn('Kunne ikke lagre innloggingsstatus', err);
   }
+}
+
+function canEditGlobalCustomerData(){
+  if (!authState.loggedIn) return false;
+  return authState.isAdmin === true || ADMIN_NAV_ALLOWED_EMAILS.includes(normalizeUserEmail(authState.username));
 }
 
 function updateAuthUI(){
@@ -1231,14 +1406,22 @@ function updateAuthUI(){
   const logoutBtn = $('logoutBtn');
   const userLabel = $('authUser');
   const adminBtn = $('adminPageBtn');
-  const canOpenAdmin = authState.loggedIn && ADMIN_NAV_ALLOWED_EMAILS.includes(normalizeUserEmail(authState.username));
+  const dashboardAdminNav = $('dashboardAdminNav');
+  const dashboardShell = $('dashboardShell');
+  const canOpenAdmin = canEditGlobalCustomerData();
 
   if (loginBtn) loginBtn.hidden = authState.loggedIn;
   if (logoutBtn) logoutBtn.hidden = !authState.loggedIn;
+  if (dashboardShell) dashboardShell.classList.toggle('is-authenticated', authState.loggedIn);
   if (adminBtn) {
     adminBtn.hidden = !canOpenAdmin;
     adminBtn.setAttribute('aria-disabled', canOpenAdmin ? 'false' : 'true');
     adminBtn.tabIndex = canOpenAdmin ? 0 : -1;
+  }
+  if (dashboardAdminNav) {
+    dashboardAdminNav.hidden = !canOpenAdmin;
+    dashboardAdminNav.setAttribute('aria-disabled', canOpenAdmin ? 'false' : 'true');
+    dashboardAdminNav.tabIndex = canOpenAdmin ? 0 : -1;
   }
   if (userLabel){
     if (authState.loggedIn){
@@ -1266,10 +1449,15 @@ function updateAuthUI(){
   if (newProjectBtn){
     newProjectBtn.disabled = !authState.loggedIn;
   }
+  const refreshProjectsBtn = $('refreshProjectsBtn');
+  if (refreshProjectsBtn){
+    refreshProjectsBtn.disabled = !authState.loggedIn;
+  }
   const createProjectButtons = Array.from(document.querySelectorAll('button[data-action="create-project"]'));
   createProjectButtons.forEach(btn=>{
     btn.disabled = !authState.loggedIn;
   });
+  renderGlobalCustomerViews();
 }
 
 function authHeaders(){
@@ -1289,7 +1477,11 @@ function defaultMicrosoftRedirectUri(){
 
 async function loadMicrosoftAuthConfig(){
   if (!microsoftAuthConfigPromise){
-    microsoftAuthConfigPromise = fetch(buildApiUrl('/api/auth/microsoft/config'), {
+    const configUrl = buildApiUrl('/api/auth/microsoft/config');
+    const url = new URL(configUrl, window.location.href);
+    url.searchParams.set('origin', window.location.origin);
+    url.searchParams.set('path', window.location.pathname || '/');
+    microsoftAuthConfigPromise = fetch(url.toString(), {
       cache: 'no-store'
     })
       .then(async res => {
@@ -1315,7 +1507,7 @@ async function loadMicrosoftAuthConfig(){
       })
       .catch(err => {
         microsoftAuthConfigPromise = null;
-        throw err;
+        throw new Error(err?.message || `Kunne ikke hente Microsoft-konfigurasjon fra ${configUrl}.`);
       });
   }
   return microsoftAuthConfigPromise;
@@ -1364,7 +1556,1450 @@ async function exchangeMicrosoftToken(idToken){
   if (!hasValidUserEmail(username) || !token){
     throw new Error('Serveren returnerte ugyldig Microsoft-innlogging.');
   }
-  return { username, token, profile: normalizeProfilePayload(payload?.profile) };
+  return { username, token, profile: normalizeProfilePayload(payload?.profile), isAdmin: payload?.isAdmin === true };
+}
+
+async function getMicrosoftAccountForGraph(){
+  const { client } = await getMicrosoftMsalClient();
+  const accounts = typeof client.getAllAccounts === 'function' ? client.getAllAccounts() : [];
+  const currentEmail = normalizeUserEmail(authState.username);
+  const matching = accounts.find(account=>normalizeUserEmail(account.username) === currentEmail)
+    || accounts.find(account=>normalizeUserEmail(account.idTokenClaims?.preferred_username) === currentEmail)
+    || microsoftLastAccount
+    || accounts[0]
+    || null;
+  if (matching && typeof client.setActiveAccount === 'function'){
+    client.setActiveAccount(matching);
+  }
+  return matching;
+}
+
+async function acquireMicrosoftGraphToken(scopes){
+  if (!authState.loggedIn){
+    throw new Error('Logg inn med Microsoft for å hente data.');
+  }
+  const { client } = await getMicrosoftMsalClient();
+  const account = await getMicrosoftAccountForGraph();
+  if (!account){
+    throw new Error('Fant ikke aktiv Microsoft-konto. Logg inn med Microsoft på nytt.');
+  }
+  const request = {
+    scopes: Array.isArray(scopes) ? scopes : [],
+    account
+  };
+  try{
+    const result = await client.acquireTokenSilent(request);
+    return result?.accessToken || '';
+  }catch(err){
+    const needsInteraction = window.msal?.InteractionRequiredAuthError
+      && err instanceof window.msal.InteractionRequiredAuthError;
+    if (!needsInteraction && !String(err?.errorCode || '').includes('interaction_required')){
+      throw err;
+    }
+    const result = await client.acquireTokenPopup(request);
+    return result?.accessToken || '';
+  }
+}
+
+async function microsoftGraphRequest(path, scopes, options = {}){
+  const accessToken = await acquireMicrosoftGraphToken(scopes);
+  if (!accessToken){
+    throw new Error('Microsoft returnerte ikke access token.');
+  }
+  const headers = {
+      Authorization: `Bearer ${accessToken}`,
+      Prefer: 'outlook.timezone="Europe/Oslo"'
+  };
+  const request = {
+    method: options.method || 'GET',
+    headers
+  };
+  if (options.body !== undefined){
+    if (options.rawBody){
+      request.body = options.body;
+      if (options.contentType) headers['Content-Type'] = options.contentType;
+    } else {
+      headers['Content-Type'] = 'application/json';
+      request.body = JSON.stringify(options.body);
+    }
+  }
+  const res = await fetch(`${MICROSOFT_GRAPH_BASE_URL}${path}`, request);
+  let payload = null;
+  try{
+    payload = await res.json();
+  }catch(_err){}
+  if (!res.ok){
+    throw new Error(payload?.error?.message || `Microsoft Graph svarte ${res.status}.`);
+  }
+  return payload;
+}
+
+function splitEmailAddresses(value){
+  return String(value || '')
+    .split(/[;,]/)
+    .map(item=>item.trim())
+    .filter(Boolean);
+}
+
+function graphEmailRecipients(value){
+  return splitEmailAddresses(value).map(address=>({
+    emailAddress: { address }
+  }));
+}
+
+function isLikelyEmailAddress(value){
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || '').trim());
+}
+
+function graphLocalDateTimeValue(value){
+  const raw = String(value || '').trim();
+  return raw ? raw.replace('T', 'T') : '';
+}
+
+function formatDateTimeLocalInput(date){
+  const value = date instanceof Date ? date : new Date(date);
+  if (Number.isNaN(value.getTime())) return '';
+  const pad = number=>String(number).padStart(2, '0');
+  return `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())}T${pad(value.getHours())}:${pad(value.getMinutes())}`;
+}
+
+function formatDateInputValue(date){
+  const value = date instanceof Date ? date : new Date(date);
+  if (Number.isNaN(value.getTime())) return '';
+  const pad = number=>String(number).padStart(2, '0');
+  return `${pad(value.getDate())}/${pad(value.getMonth() + 1)}/${value.getFullYear()}`;
+}
+
+function formatIsoDateInputValue(date){
+  const value = date instanceof Date ? date : new Date(date);
+  if (Number.isNaN(value.getTime())) return '';
+  const pad = number=>String(number).padStart(2, '0');
+  return `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())}`;
+}
+
+function formatTimeInputValue(date){
+  const value = date instanceof Date ? date : new Date(date);
+  if (Number.isNaN(value.getTime())) return '';
+  const pad = number=>String(number).padStart(2, '0');
+  return `${pad(value.getHours())}:${pad(value.getMinutes())}`;
+}
+
+function combineLocalDateAndTimeValue(dateValue, timeValue){
+  const parsedDate = parseCalendarDateInputValue(dateValue);
+  const time = String(timeValue || '').trim();
+  return parsedDate && time ? `${parsedDate}T${time}` : '';
+}
+
+function parseCalendarDateInputValue(value){
+  const raw = String(value || '').trim();
+  const match = raw.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (!match) return '';
+  const [, day, month, year] = match;
+  const date = new Date(Number(year), Number(month) - 1, Number(day));
+  if (
+    date.getFullYear() !== Number(year) ||
+    date.getMonth() !== Number(month) - 1 ||
+    date.getDate() !== Number(day)
+  ) return '';
+  return `${year}-${month}-${day}`;
+}
+
+function syncCalendarNativeDatePicker(){
+  const textInput = $('calendarEventStartDate');
+  const picker = $('calendarEventDatePicker');
+  if (!textInput || !picker) return;
+  const parsed = parseCalendarDateInputValue(textInput.value);
+  picker.value = parsed || '';
+}
+
+function dateFromCalendarInputValue(value){
+  const parsed = parseCalendarDateInputValue(value);
+  return parsed ? new Date(`${parsed}T00:00`) : null;
+}
+
+function closeCalendarDatePickerPopover(){
+  const popover = $('calendarDatePickerPopover');
+  if (popover) popover.hidden = true;
+}
+
+function renderCalendarDatePickerPopover(){
+  const popover = $('calendarDatePickerPopover');
+  if (!popover) return;
+  const selected = dateFromCalendarInputValue($('calendarEventStartDate')?.value);
+  const cursor = calendarViewState.datePickerCursor instanceof Date
+    ? calendarViewState.datePickerCursor
+    : selected || new Date();
+  const monthStart = startOfMonth(cursor);
+  const gridStart = startOfWeekMonday(monthStart);
+  const today = startOfDay(new Date());
+  popover.innerHTML = '';
+
+  const head = document.createElement('div');
+  head.className = 'calendar-date-picker-head';
+  const title = document.createElement('div');
+  title.className = 'calendar-date-picker-title';
+  title.textContent = new Intl.DateTimeFormat('no-NO', { month: 'long', year: 'numeric' }).format(cursor);
+  const nav = document.createElement('div');
+  nav.className = 'calendar-date-picker-nav';
+  const prev = document.createElement('button');
+  prev.type = 'button';
+  prev.setAttribute('aria-label', 'Forrige måned');
+  prev.textContent = '‹';
+  prev.addEventListener('click', ()=>{
+    calendarViewState.datePickerCursor = addMonths(cursor, -1);
+    renderCalendarDatePickerPopover();
+  });
+  const next = document.createElement('button');
+  next.type = 'button';
+  next.setAttribute('aria-label', 'Neste måned');
+  next.textContent = '›';
+  next.addEventListener('click', ()=>{
+    calendarViewState.datePickerCursor = addMonths(cursor, 1);
+    renderCalendarDatePickerPopover();
+  });
+  nav.append(prev, next);
+  head.append(title, nav);
+  popover.appendChild(head);
+
+  const grid = document.createElement('div');
+  grid.className = 'calendar-date-picker-grid';
+  ['Ma', 'Ti', 'On', 'To', 'Fr', 'Lø', 'Sø'].forEach(label=>{
+    const weekday = document.createElement('div');
+    weekday.className = 'calendar-date-picker-weekday';
+    weekday.textContent = label;
+    grid.appendChild(weekday);
+  });
+  for (let index = 0; index < 42; index += 1){
+    const day = addDays(gridStart, index);
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'calendar-date-picker-day';
+    btn.classList.toggle('is-outside', day.getMonth() !== cursor.getMonth());
+    btn.classList.toggle('is-today', sameCalendarDay(day, today));
+    btn.classList.toggle('is-selected', selected ? sameCalendarDay(day, selected) : false);
+    btn.textContent = String(day.getDate());
+    btn.addEventListener('click', ()=>{
+      const input = $('calendarEventStartDate');
+      if (input) input.value = formatDateInputValue(day);
+      syncCalendarNativeDatePicker();
+      closeCalendarDatePickerPopover();
+    });
+    grid.appendChild(btn);
+  }
+  popover.appendChild(grid);
+}
+
+function openCalendarDatePickerPopover(){
+  const popover = $('calendarDatePickerPopover');
+  if (!popover) return;
+  const selected = dateFromCalendarInputValue($('calendarEventStartDate')?.value);
+  calendarViewState.datePickerCursor = selected || new Date();
+  renderCalendarDatePickerPopover();
+  popover.hidden = false;
+}
+
+function formatCalendarDurationOption(hours){
+  const normalized = Number(hours);
+  if (!Number.isFinite(normalized)) return '';
+  return normalized % 1 === 0 ? `${normalized} timer` : `${String(normalized).replace('.', ',')} time`;
+}
+
+function populateCalendarDurationOptions(){
+  const select = $('calendarEventDuration');
+  if (!select || select.options.length) return;
+  for (let value = 0.5; value <= 24; value += 0.5){
+    const option = document.createElement('option');
+    option.value = String(value);
+    option.textContent = formatCalendarDurationOption(value);
+    if (value === 1) option.selected = true;
+    select.appendChild(option);
+  }
+}
+
+function populateCalendarTimeOptions(){
+  const select = $('calendarEventStartTime');
+  if (!select || select.options.length) return;
+  for (let hour = 0; hour < 24; hour += 1){
+    for (let minute = 0; minute < 60; minute += 15){
+      const value = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+      const option = document.createElement('option');
+      option.value = value;
+      option.textContent = value;
+      select.appendChild(option);
+    }
+  }
+}
+
+function calendarDurationFromDates(start, end){
+  const startDate = start instanceof Date ? start : new Date(start);
+  const endDate = end instanceof Date ? end : new Date(end);
+  if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) return '1';
+  const diffHours = (endDate.getTime() - startDate.getTime()) / 3600000;
+  const rounded = Math.min(24, Math.max(0.5, Math.round(diffHours * 2) / 2));
+  return String(rounded);
+}
+
+function formatGraphDateTime(raw){
+  const value = String(raw?.dateTime || raw || '').trim();
+  if (!value) return '';
+  const date = parseGraphDate(raw);
+  if (!date || Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat('no-NO', {
+    weekday: 'short',
+    day: '2-digit',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit'
+  }).format(date);
+}
+
+function parseGraphDateTimeValue(value, timeZone){
+  const rawValue = String(value || '').trim();
+  if (!rawValue) return null;
+  const normalized = rawValue.replace(/(\.\d{3})\d+/, '$1');
+  if (/[zZ]$|[+-]\d{2}:?\d{2}$/.test(normalized)){
+    const date = new Date(normalized);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+  const tz = String(timeZone || '').trim().toLowerCase();
+  if (tz === 'utc' || tz === 'etc/utc' || tz === 'gmt'){
+    const date = new Date(`${normalized}Z`);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+  const match = normalized.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?/);
+  if (match){
+    const [, year, month, day, hour, minute, second = '0', ms = '0'] = match;
+    return new Date(
+      Number(year),
+      Number(month) - 1,
+      Number(day),
+      Number(hour),
+      Number(minute),
+      Number(second),
+      Number(ms.padEnd(3, '0'))
+    );
+  }
+  const date = new Date(normalized);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function parseGraphDate(raw){
+  const value = String(raw?.dateTime || raw || '').trim();
+  if (!value) return null;
+  return parseGraphDateTimeValue(value, raw?.timeZone);
+}
+
+function startOfDay(date){
+  const copy = new Date(date);
+  copy.setHours(0, 0, 0, 0);
+  return copy;
+}
+
+function addDays(date, days){
+  const copy = new Date(date);
+  copy.setDate(copy.getDate() + days);
+  return copy;
+}
+
+function addMonths(date, months){
+  const copy = new Date(date);
+  copy.setMonth(copy.getMonth() + months);
+  return copy;
+}
+
+function startOfWeekMonday(date){
+  const copy = startOfDay(date);
+  const day = copy.getDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  copy.setDate(copy.getDate() + diff);
+  return copy;
+}
+
+function startOfMonth(date){
+  return new Date(date.getFullYear(), date.getMonth(), 1);
+}
+
+function endOfMonth(date){
+  return new Date(date.getFullYear(), date.getMonth() + 1, 0, 23, 59, 59, 999);
+}
+
+function getIsoWeekNumber(date){
+  const copy = startOfDay(date);
+  copy.setDate(copy.getDate() + 3 - ((copy.getDay() + 6) % 7));
+  const weekOne = new Date(copy.getFullYear(), 0, 4);
+  return 1 + Math.round(((copy - weekOne) / 86400000 - 3 + ((weekOne.getDay() + 6) % 7)) / 7);
+}
+
+function calendarRangeForState(){
+  if (calendarViewState.mode === 'month'){
+    const start = startOfWeekMonday(startOfMonth(calendarViewState.cursor));
+    const end = addDays(startOfWeekMonday(endOfMonth(calendarViewState.cursor)), 7);
+    return { start, end };
+  }
+  if (calendarViewState.mode === 'week'){
+    const start = startOfWeekMonday(calendarViewState.cursor);
+    return { start, end: addDays(start, 7) };
+  }
+  const start = startOfDay(new Date());
+  return { start, end: addDays(start, 14) };
+}
+
+function formatCalendarPeriodLabel(){
+  if (calendarViewState.mode === 'month'){
+    return new Intl.DateTimeFormat('no-NO', { month: 'long', year: 'numeric' }).format(calendarViewState.cursor);
+  }
+  if (calendarViewState.mode === 'week'){
+    const start = startOfWeekMonday(calendarViewState.cursor);
+    const end = addDays(start, 6);
+    return `${new Intl.DateTimeFormat('no-NO', { day: '2-digit', month: 'short' }).format(start)} - ${new Intl.DateTimeFormat('no-NO', { day: '2-digit', month: 'short', year: 'numeric' }).format(end)}`;
+  }
+  return 'Kommende 14 dager';
+}
+
+function setGraphStatus(id, message, state = ''){
+  const el = $(id);
+  if (!el) return;
+  el.textContent = message || '';
+  el.classList.toggle('error', state === 'error');
+  el.classList.toggle('ok', state === 'ok');
+}
+
+function renderCalendarEvents(events){
+  const list = $('calendarEventsList');
+  if (!list) return;
+  list.innerHTML = '';
+  if (!events.length){
+    const empty = document.createElement('div');
+    empty.className = 'graph-empty';
+    empty.textContent = 'Ingen kommende kalenderhendelser funnet.';
+    list.appendChild(empty);
+    return;
+  }
+  events.forEach(event=>{
+    const item = document.createElement('article');
+    item.className = 'graph-item calendar-event-item';
+
+    const time = document.createElement('div');
+    time.className = 'graph-item-time';
+    time.textContent = `${formatGraphDateTime(event.start)} - ${formatGraphDateTime(event.end)}`;
+
+    const body = document.createElement('div');
+    body.className = 'graph-item-body';
+    const title = document.createElement('h3');
+    title.textContent = event.subject || 'Uten tittel';
+    const meta = document.createElement('p');
+    meta.className = 'muted-text';
+    const organizer = event.organizer?.emailAddress?.name || event.organizer?.emailAddress?.address || '';
+    const location = event.location?.displayName || '';
+    meta.textContent = [organizer ? `Arrangør: ${organizer}` : '', location ? `Sted: ${location}` : ''].filter(Boolean).join(' | ');
+    body.appendChild(title);
+    body.appendChild(meta);
+    const actions = document.createElement('div');
+    actions.className = 'graph-card-actions';
+    const editBtn = document.createElement('button');
+    editBtn.type = 'button';
+    editBtn.className = 'btn alt btn-small';
+    editBtn.textContent = 'Rediger';
+    editBtn.dataset.editCalendarEvent = event.id || '';
+    actions.appendChild(editBtn);
+    body.appendChild(actions);
+
+    item.appendChild(time);
+    item.appendChild(body);
+    list.appendChild(item);
+  });
+}
+
+function sameCalendarDay(left, right){
+  return left.getFullYear() === right.getFullYear()
+    && left.getMonth() === right.getMonth()
+    && left.getDate() === right.getDate();
+}
+
+function renderCalendarGrid(events){
+  const grid = $('calendarGridView');
+  if (!grid) return;
+  grid.innerHTML = '';
+  const mode = calendarViewState.mode;
+  const range = calendarRangeForState();
+  const days = [];
+  const dayCount = mode === 'month' ? 42 : 7;
+  for (let index = 0; index < dayCount; index += 1){
+    days.push(addDays(range.start, index));
+  }
+
+  const weekdays = ['Mandag', 'Tirsdag', 'Onsdag', 'Torsdag', 'Fredag', 'Lørdag', 'Søndag'];
+  const header = document.createElement('div');
+  header.className = 'calendar-grid-header';
+  if (mode === 'month' || mode === 'week'){
+    const weekHeader = document.createElement('div');
+    weekHeader.className = 'calendar-week-header-spacer';
+    weekHeader.textContent = '';
+    header.appendChild(weekHeader);
+  }
+  weekdays.forEach(day=>{
+    const cell = document.createElement('div');
+    cell.textContent = day;
+    header.appendChild(cell);
+  });
+  grid.appendChild(header);
+
+  const body = document.createElement('div');
+  body.className = `calendar-grid calendar-grid-${mode}`;
+  const today = startOfDay(new Date());
+  days.forEach((day, index)=>{
+    if ((mode === 'month' || mode === 'week') && index % 7 === 0){
+      const week = document.createElement('div');
+      week.className = 'calendar-week-number';
+      week.textContent = `UKE ${getIsoWeekNumber(day)}`;
+      body.appendChild(week);
+    }
+    const cell = document.createElement('section');
+    cell.className = 'calendar-day-cell';
+    cell.classList.toggle('is-outside-month', mode === 'month' && day.getMonth() !== calendarViewState.cursor.getMonth());
+    cell.classList.toggle('is-today', sameCalendarDay(day, today));
+    cell.classList.toggle('is-past-day', day < today);
+
+    const heading = document.createElement('div');
+    heading.className = 'calendar-day-heading';
+    heading.textContent = new Intl.DateTimeFormat('no-NO', { day: '2-digit', month: mode === 'week' ? 'short' : undefined }).format(day);
+    cell.appendChild(heading);
+
+    const dayEvents = events
+      .filter(event=>{
+        const start = parseGraphDate(event.start);
+        return start && sameCalendarDay(start, day);
+      })
+      .sort((a, b)=>(parseGraphDate(a.start)?.getTime() || 0) - (parseGraphDate(b.start)?.getTime() || 0));
+
+    if (!dayEvents.length){
+      const empty = document.createElement('div');
+      empty.className = 'calendar-day-empty';
+      empty.textContent = '';
+      cell.appendChild(empty);
+    }
+
+    dayEvents.forEach(event=>{
+      const item = document.createElement('button');
+      item.className = 'calendar-grid-event';
+      item.type = 'button';
+      item.dataset.editCalendarEvent = event.id || '';
+      const time = parseGraphDate(event.start);
+      const timeLabel = time ? new Intl.DateTimeFormat('no-NO', { hour: '2-digit', minute: '2-digit' }).format(time) : '';
+      item.textContent = [timeLabel, event.subject || 'Uten tittel'].filter(Boolean).join(' ');
+      cell.appendChild(item);
+    });
+
+    body.appendChild(cell);
+  });
+  grid.appendChild(body);
+}
+
+function getCalendarContactEmailSuggestions(){
+  const suggestions = [];
+  const seen = new Set();
+  flattenGlobalContacts().forEach(contact=>{
+    const address = String(contact?.email || '').trim();
+    if (!address) return;
+    const key = address.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    suggestions.push({
+      address,
+      label: [contact.name, contact.customerName].filter(Boolean).join(' - ')
+    });
+  });
+  return suggestions;
+}
+
+function renderCalendarAttendeeOptions(){
+  const list = $('calendarAttendeeOptions');
+  if (!list) return;
+  list.innerHTML = '';
+  getCalendarContactEmailSuggestions().forEach(item=>{
+    const option = document.createElement('option');
+    option.value = item.address;
+    option.label = item.label || item.address;
+    list.appendChild(option);
+  });
+}
+
+async function ensureCalendarAttendeeSuggestions(){
+  if (!authState.loggedIn || projectState.globalCustomerDatabaseLoaded){
+    renderCalendarAttendeeOptions();
+    return;
+  }
+  try{
+    await loadGlobalCustomerDatabase({ silent: true });
+  }catch(_err){
+    renderCalendarAttendeeOptions();
+  }
+}
+
+function setCalendarFormAttendees(attendees){
+  const seen = new Set();
+  calendarViewState.formAttendees = (Array.isArray(attendees) ? attendees : [])
+    .map(value=>String(value || '').trim())
+    .filter(Boolean)
+    .filter(address=>{
+      const key = address.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  renderCalendarAttendeesList();
+}
+
+function addCalendarFormAttendees(value){
+  const next = [
+    ...calendarViewState.formAttendees,
+    ...splitEmailAddresses(value)
+  ];
+  setCalendarFormAttendees(next);
+  const input = $('calendarAttendeeInput');
+  if (input) input.value = '';
+}
+
+function renderCalendarAttendeesList(){
+  const list = $('calendarAttendeesList');
+  if (!list) return;
+  list.innerHTML = '';
+  if (!calendarViewState.formAttendees.length){
+    const empty = document.createElement('span');
+    empty.className = 'calendar-attendee-empty';
+    empty.textContent = 'Ingen mottakere lagt til';
+    list.appendChild(empty);
+    return;
+  }
+  calendarViewState.formAttendees.forEach(address=>{
+    const item = document.createElement('span');
+    item.className = 'calendar-attendee-chip';
+    const text = document.createElement('span');
+    text.textContent = address;
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.setAttribute('aria-label', `Fjern ${address}`);
+    remove.textContent = '×';
+    remove.addEventListener('click', ()=>{
+      setCalendarFormAttendees(calendarViewState.formAttendees.filter(itemAddress=>itemAddress !== address));
+    });
+    item.append(text, remove);
+    list.appendChild(item);
+  });
+}
+
+function resetCalendarEventForm(){
+  const form = $('calendarEventForm');
+  if (!form) return;
+  form.reset();
+  const idEl = $('calendarEventId');
+  if (idEl) idEl.value = '';
+  const deleteBtn = $('deleteCalendarEventBtn');
+  if (deleteBtn) deleteBtn.hidden = true;
+  const start = new Date();
+  start.setMinutes(0, 0, 0);
+  start.setHours(start.getHours() + 1);
+  const end = new Date(start);
+  end.setHours(end.getHours() + 1);
+  const startDateEl = $('calendarEventStartDate');
+  const startTimeEl = $('calendarEventStartTime');
+  const durationEl = $('calendarEventDuration');
+  if (startDateEl) startDateEl.value = formatDateInputValue(start);
+  if (startTimeEl) startTimeEl.value = formatTimeInputValue(start);
+  if (durationEl) durationEl.value = calendarDurationFromDates(start, end);
+  const nativeDatePicker = $('calendarEventDatePicker');
+  if (nativeDatePicker) nativeDatePicker.value = formatIsoDateInputValue(start);
+  setCalendarFormAttendees([]);
+}
+
+function openCalendarEventForm(event = null){
+  const form = $('calendarEventForm');
+  if (!form) return;
+  resetCalendarEventForm();
+  const id = String(event?.id || '').trim();
+  const idEl = $('calendarEventId');
+  if (idEl) idEl.value = id;
+  const subjectEl = $('calendarEventSubject');
+  const locationEl = $('calendarEventLocation');
+  const startDateEl = $('calendarEventStartDate');
+  const startTimeEl = $('calendarEventStartTime');
+  const durationEl = $('calendarEventDuration');
+  const bodyEl = $('calendarEventBody');
+  if (subjectEl) subjectEl.value = event?.subject || '';
+  if (locationEl) locationEl.value = event?.location?.displayName || '';
+  const start = event?.start ? parseGraphDate(event.start) : null;
+  const end = event?.end ? parseGraphDate(event.end) : null;
+  if (startDateEl && start) startDateEl.value = formatDateInputValue(start);
+  if (startTimeEl && start) startTimeEl.value = formatTimeInputValue(start);
+  if (durationEl && start && end) durationEl.value = calendarDurationFromDates(start, end);
+  const nativeDatePicker = $('calendarEventDatePicker');
+  if (nativeDatePicker && start) nativeDatePicker.value = formatIsoDateInputValue(start);
+  setCalendarFormAttendees((Array.isArray(event?.attendees) ? event.attendees : [])
+    .map(attendee=>attendee?.emailAddress?.address)
+    .filter(Boolean));
+  if (bodyEl) bodyEl.value = event?.bodyPreview || '';
+  const deleteBtn = $('deleteCalendarEventBtn');
+  if (deleteBtn) deleteBtn.hidden = !id;
+  form.hidden = false;
+  void ensureCalendarAttendeeSuggestions();
+  if (subjectEl) subjectEl.focus();
+}
+
+function closeCalendarEventForm(){
+  const form = $('calendarEventForm');
+  if (form) form.hidden = true;
+}
+
+function getCalendarEventPayloadFromForm(){
+  const subject = String($('calendarEventSubject')?.value || '').trim();
+  const location = String($('calendarEventLocation')?.value || '').trim();
+  const start = graphLocalDateTimeValue(combineLocalDateAndTimeValue($('calendarEventStartDate')?.value, $('calendarEventStartTime')?.value));
+  const durationHours = Number($('calendarEventDuration')?.value || 0);
+  const body = String($('calendarEventBody')?.value || '').trim();
+  const attendeeInput = $('calendarAttendeeInput');
+  const attendees = [
+    ...calendarViewState.formAttendees,
+    ...splitEmailAddresses(attendeeInput?.value)
+  ].filter((address, index, array)=>array.findIndex(item=>item.toLowerCase() === address.toLowerCase()) === index);
+  const invalidAttendee = attendees.find(address=>!isLikelyEmailAddress(address));
+  if (!parseCalendarDateInputValue($('calendarEventStartDate')?.value)) throw new Error('Dato må skrives som DD/MM/ÅÅÅÅ.');
+  if (!subject || !start || !durationHours) throw new Error('Fyll inn emne, startdato, starttid og varighet.');
+  if (invalidAttendee) throw new Error(`Ugyldig e-postadresse: ${invalidAttendee}`);
+  if (durationHours < 0.5 || durationHours > 24) throw new Error('Varighet må være mellom 0,5 og 24 timer.');
+  const startDate = new Date(start);
+  if (Number.isNaN(startDate.getTime())) throw new Error('Starttidspunktet er ugyldig.');
+  const endDate = new Date(startDate.getTime() + durationHours * 3600000);
+  const end = formatDateTimeLocalInput(endDate);
+  return {
+    subject,
+    start: { dateTime: start, timeZone: 'Europe/Oslo' },
+    end: { dateTime: end, timeZone: 'Europe/Oslo' },
+    location: { displayName: location },
+    body: { contentType: 'text', content: body },
+    attendees: attendees.map(address=>({
+      emailAddress: { address },
+      type: 'required'
+    }))
+  };
+}
+
+async function saveCalendarEventFromForm(){
+  const form = $('calendarEventForm');
+  if (!form) return;
+  const submitBtn = form.querySelector('button[type="submit"]');
+  const id = String($('calendarEventId')?.value || '').trim();
+  if (submitBtn) submitBtn.disabled = true;
+  setGraphStatus('calendarStatus', id ? 'Lagrer avtale...' : 'Oppretter avtale...');
+  try{
+    const body = getCalendarEventPayloadFromForm();
+    if (id){
+      await microsoftGraphRequest(`/me/events/${encodeURIComponent(id)}`, MICROSOFT_GRAPH_CALENDAR_SCOPES, {
+        method: 'PATCH',
+        body
+      });
+    } else {
+      await microsoftGraphRequest('/me/events', MICROSOFT_GRAPH_CALENDAR_SCOPES, {
+        method: 'POST',
+        body
+      });
+    }
+    closeCalendarEventForm();
+    calendarViewState.loadedStart = null;
+    calendarViewState.loadedEnd = null;
+    await loadCalendarEvents();
+  }catch(err){
+    console.warn('Kalenderlagring feilet', err);
+    setGraphStatus('calendarStatus', err?.message || 'Kunne ikke lagre avtalen.', 'error');
+  }finally{
+    if (submitBtn) submitBtn.disabled = false;
+  }
+}
+
+async function deleteCalendarEventFromForm(){
+  const id = String($('calendarEventId')?.value || '').trim();
+  if (!id) return;
+  if (!window.confirm('Slette denne kalenderhendelsen?')) return;
+  const btn = $('deleteCalendarEventBtn');
+  if (btn) btn.disabled = true;
+  setGraphStatus('calendarStatus', 'Sletter avtale...');
+  try{
+    await microsoftGraphRequest(`/me/events/${encodeURIComponent(id)}`, MICROSOFT_GRAPH_CALENDAR_SCOPES, {
+      method: 'DELETE'
+    });
+    closeCalendarEventForm();
+    calendarViewState.loadedStart = null;
+    calendarViewState.loadedEnd = null;
+    await loadCalendarEvents();
+  }catch(err){
+    console.warn('Kalendersletting feilet', err);
+    setGraphStatus('calendarStatus', err?.message || 'Kunne ikke slette avtalen.', 'error');
+  }finally{
+    if (btn) btn.disabled = false;
+  }
+}
+
+function updateCalendarViewControls(){
+  const label = $('calendarPeriodLabel');
+  if (label) label.textContent = formatCalendarPeriodLabel();
+  const select = $('calendarModeSelect');
+  if (select) select.value = calendarViewState.mode;
+}
+
+function renderCalendarView(){
+  const list = $('calendarEventsList');
+  const grid = $('calendarGridView');
+  const isList = calendarViewState.mode === 'list';
+  if (list) list.hidden = !isList;
+  if (grid) grid.hidden = isList;
+  updateCalendarViewControls();
+  if (isList){
+    renderCalendarEvents(calendarViewState.events);
+  } else {
+    renderCalendarGrid(calendarViewState.events);
+  }
+}
+
+function renderEmailMessages(messages){
+  const list = $('emailMessagesList');
+  if (!list) return;
+  list.innerHTML = '';
+  emailViewState.messages = Array.isArray(messages) ? messages : [];
+  if (emailViewState.selectedMessageId && !emailViewState.messages.some(message=>message.id === emailViewState.selectedMessageId)){
+    emailViewState.selectedMessageId = '';
+  }
+  updateEmailMessageActions();
+  if (!messages.length){
+    const empty = document.createElement('div');
+    empty.className = 'graph-empty';
+    empty.textContent = 'Ingen e-poster funnet.';
+    list.appendChild(empty);
+    return;
+  }
+  messages.forEach(message=>{
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = `graph-item email-message-item${message.isRead ? '' : ' is-unread'}${message.id === emailViewState.selectedMessageId ? ' is-selected' : ''}`;
+    item.dataset.emailMessageId = message.id || '';
+
+    const marker = document.createElement('div');
+    marker.className = 'email-read-marker';
+    marker.setAttribute('aria-hidden', 'true');
+
+    const body = document.createElement('div');
+    body.className = 'graph-item-body';
+    const title = document.createElement('h3');
+    title.textContent = message.subject || '(Uten emne)';
+    const meta = document.createElement('p');
+    meta.className = 'muted-text';
+    const from = message.from?.emailAddress?.name || message.from?.emailAddress?.address || 'Ukjent avsender';
+    meta.textContent = `${from} | ${formatGraphDateTime(message.receivedDateTime)}`;
+    const preview = document.createElement('p');
+    preview.className = 'email-preview';
+    preview.textContent = message.bodyPreview || '';
+    body.appendChild(title);
+    body.appendChild(meta);
+    body.appendChild(preview);
+
+    item.appendChild(marker);
+    item.appendChild(body);
+    list.appendChild(item);
+  });
+}
+
+function getSelectedEmailMessage(){
+  const id = String(emailViewState.selectedMessageId || '').trim();
+  if (!id) return null;
+  return emailViewState.messages.find(message=>message.id === id) || null;
+}
+
+function updateEmailMessageActions(){
+  const actions = $('emailMessageActions');
+  if (!actions) return;
+  const message = getSelectedEmailMessage();
+  actions.hidden = !message;
+  const label = $('selectedEmailLabel');
+  if (label){
+    label.textContent = message ? `Valgt: ${message.subject || '(Uten emne)'}` : '';
+  }
+}
+
+function selectEmailMessage(id){
+  emailViewState.selectedMessageId = String(id || '').trim();
+  renderEmailMessages(emailViewState.messages);
+}
+
+function openEmailComposeForm(){
+  const form = $('emailComposeForm');
+  if (!form) return;
+  form.reset();
+  form.hidden = false;
+  const input = $('emailToInput');
+  if (input) input.focus();
+}
+
+function closeEmailComposeForm(){
+  const form = $('emailComposeForm');
+  if (form) form.hidden = true;
+}
+
+function getEmailComposePayload(){
+  const toRecipients = graphEmailRecipients($('emailToInput')?.value);
+  const ccRecipients = graphEmailRecipients($('emailCcInput')?.value);
+  const subject = String($('emailSubjectInput')?.value || '').trim();
+  const content = String($('emailBodyInput')?.value || '').trim();
+  if (!toRecipients.length) throw new Error('Legg inn minst en mottaker.');
+  if (!subject) throw new Error('Legg inn emne.');
+  if (!content) throw new Error('Legg inn melding.');
+  return {
+    message: {
+      subject,
+      body: { contentType: 'Text', content },
+      toRecipients,
+      ccRecipients
+    },
+    saveToSentItems: true
+  };
+}
+
+async function sendEmailFromForm(){
+  const form = $('emailComposeForm');
+  if (!form) return;
+  const submitBtn = form.querySelector('button[type="submit"]');
+  if (submitBtn) submitBtn.disabled = true;
+  setGraphStatus('emailStatus', 'Sender e-post...');
+  try{
+    await microsoftGraphRequest('/me/sendMail', MICROSOFT_GRAPH_MAIL_SCOPES, {
+      method: 'POST',
+      body: getEmailComposePayload()
+    });
+    closeEmailComposeForm();
+    await loadEmailMessages();
+    setGraphStatus('emailStatus', 'E-post sendt.', 'ok');
+  }catch(err){
+    console.warn('Sending av e-post feilet', err);
+    setGraphStatus('emailStatus', err?.message || 'Kunne ikke sende e-post.', 'error');
+  }finally{
+    if (submitBtn) submitBtn.disabled = false;
+  }
+}
+
+async function markSelectedEmailRead(){
+  const message = getSelectedEmailMessage();
+  if (!message?.id) return;
+  setGraphStatus('emailStatus', 'Markerer e-post som lest...');
+  try{
+    await microsoftGraphRequest(`/me/messages/${encodeURIComponent(message.id)}`, MICROSOFT_GRAPH_MAIL_SCOPES, {
+      method: 'PATCH',
+      body: { isRead: true }
+    });
+    await loadEmailMessages();
+  }catch(err){
+    console.warn('Markering av e-post feilet', err);
+    setGraphStatus('emailStatus', err?.message || 'Kunne ikke markere e-post.', 'error');
+  }
+}
+
+async function deleteSelectedEmail(){
+  const message = getSelectedEmailMessage();
+  if (!message?.id) return;
+  if (!window.confirm('Slette valgt e-post?')) return;
+  setGraphStatus('emailStatus', 'Sletter e-post...');
+  try{
+    await microsoftGraphRequest(`/me/messages/${encodeURIComponent(message.id)}`, MICROSOFT_GRAPH_MAIL_SCOPES, {
+      method: 'DELETE'
+    });
+    emailViewState.selectedMessageId = '';
+    await loadEmailMessages();
+  }catch(err){
+    console.warn('Sletting av e-post feilet', err);
+    setGraphStatus('emailStatus', err?.message || 'Kunne ikke slette e-post.', 'error');
+  }
+}
+
+function formatSharePointFileSize(size){
+  const bytes = Number(size);
+  if (!Number.isFinite(bytes) || bytes <= 0) return '';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} kB`;
+  return `${(bytes / (1024 * 1024)).toLocaleString('no-NO', { maximumFractionDigits: 1 })} MB`;
+}
+
+function getSharePointListState(page){
+  if (!sharePointFolderState[page]) sharePointFolderState[page] = {};
+  return sharePointFolderState[page];
+}
+
+function normalizeListSearchText(value){
+  return String(value || '').trim().toLowerCase();
+}
+
+function getSharePointSortMode(page){
+  const state = getSharePointListState(page);
+  return PROJECT_SORT_OPTIONS.includes(state.sort) ? state.sort : 'alpha_asc';
+}
+
+function sharePointItemMatchesSearch(item, page){
+  const term = normalizeListSearchText(getSharePointListState(page).searchTerm);
+  if (!term) return true;
+  const haystack = [
+    item?.name,
+    item?.folder ? 'mappe' : 'fil'
+  ].map(value=>String(value || '').toLowerCase()).join(' ');
+  return haystack.includes(term);
+}
+
+function compareSharePointItems(a, b, page){
+  const folderCmp = Number(Boolean(b?.folder)) - Number(Boolean(a?.folder));
+  if (folderCmp) return folderCmp;
+  const mode = getSharePointSortMode(page);
+  if (mode === 'alpha_desc'){
+    return compareNoText(b?.name, a?.name);
+  }
+  if (mode === 'date_newest' || mode === 'date_oldest'){
+    const aTime = new Date(a?.lastModifiedDateTime || 0).getTime() || 0;
+    const bTime = new Date(b?.lastModifiedDateTime || 0).getTime() || 0;
+    return mode === 'date_oldest' ? aTime - bTime : bTime - aTime;
+  }
+  return compareNoText(a?.name, b?.name);
+}
+
+function renderSharePointFolderItems(config, items, page){
+  const list = $(config.listId);
+  if (!list) return;
+  list.innerHTML = '';
+  const sortedItems = [...items]
+    .filter(item=>sharePointItemMatchesSearch(item, page))
+    .sort((a, b)=>compareSharePointItems(a, b, page));
+  if (!sortedItems.length){
+    const empty = document.createElement('div');
+    empty.className = 'graph-empty';
+    empty.textContent = normalizeListSearchText(getSharePointListState(page).searchTerm)
+      ? 'Ingen filer eller mapper matcher søket.'
+      : 'Ingen filer eller mapper funnet.';
+    list.appendChild(empty);
+    return;
+  }
+  sortedItems.forEach(item=>{
+    const row = document.createElement('article');
+    row.className = `sharepoint-item${item.folder ? ' is-folder' : ' is-file'}`;
+
+    const link = document.createElement('a');
+    link.className = 'sharepoint-item-link';
+    link.href = item.webUrl || '#';
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+
+    const icon = document.createElement('span');
+    icon.className = 'sharepoint-item-icon';
+    icon.textContent = item.folder ? 'Mappe' : 'Fil';
+
+    const body = document.createElement('span');
+    body.className = 'sharepoint-item-body';
+    const name = document.createElement('strong');
+    name.textContent = item.name || 'Uten navn';
+    const meta = document.createElement('span');
+    meta.className = 'muted-text';
+    const modified = formatTimestampForSharePoint(item.lastModifiedDateTime);
+    const size = item.file ? formatSharePointFileSize(item.size) : '';
+    meta.textContent = [item.folder ? `${Number(item.folder.childCount || 0)} elementer` : size, modified ? `Endret ${modified}` : ''].filter(Boolean).join(' | ');
+    body.append(name, meta);
+
+    link.append(icon, body);
+    row.appendChild(link);
+
+    const actions = document.createElement('div');
+    actions.className = 'sharepoint-item-actions';
+    const deleteBtn = document.createElement('button');
+    deleteBtn.type = 'button';
+    deleteBtn.className = 'btn danger btn-small';
+    deleteBtn.textContent = 'Slett';
+    deleteBtn.dataset.deleteSharepointItem = item.id || '';
+    deleteBtn.dataset.sharepointPage = page || '';
+    deleteBtn.dataset.sharepointName = item.name || '';
+    actions.appendChild(deleteBtn);
+    row.appendChild(actions);
+
+    list.appendChild(row);
+  });
+}
+
+function formatTimestampForSharePoint(value){
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return '';
+  return new Intl.DateTimeFormat('no-NO', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  }).format(date);
+}
+
+async function resolveSharePointDrive(config){
+  const sitePath = String(config.sitePath || '').replace(/^\/+/, '');
+  const sitePayload = await microsoftGraphRequest(
+    `/sites/${encodeURIComponent(config.siteHost)}:/${sitePath}`,
+    MICROSOFT_GRAPH_SHAREPOINT_SCOPES
+  );
+  const siteId = String(sitePayload?.id || '').trim();
+  if (!siteId) throw new Error(`Fant ikke SharePoint-site for ${config.title}.`);
+
+  const drivesPayload = await microsoftGraphRequest(
+    `/sites/${encodeURIComponent(siteId)}/drives?$select=id,name,webUrl`,
+    MICROSOFT_GRAPH_SHAREPOINT_SCOPES
+  );
+  const drives = Array.isArray(drivesPayload?.value) ? drivesPayload.value : [];
+  const drive = drives.find(item=>{
+    const name = String(item?.name || '').trim().toLowerCase();
+    const webUrl = String(item?.webUrl || '').toLowerCase();
+    return ['delte dokumenter', 'shared documents', 'documents', 'dokumenter'].includes(name)
+      || webUrl.includes('/delte%20dokumenter')
+      || webUrl.includes('/shared%20documents');
+  })
+    || drives[0]
+    || null;
+  if (!drive?.id) throw new Error(`Fant ikke dokumentbibliotek for ${config.title}.`);
+  return drive;
+}
+
+async function loadSharePointFolder(page, options = {}){
+  const config = SHAREPOINT_FOLDER_CONFIG[page];
+  if (!config) return;
+  if (!authState.loggedIn){
+    setGraphStatus(config.statusId, 'Logg inn med Microsoft for å vise SharePoint-mappen.', 'error');
+    return;
+  }
+  const list = $(config.listId);
+  if (!list) return;
+  if (options.silent && list.dataset.loaded === '1') return;
+  const btn = $(config.refreshBtnId);
+  if (btn) btn.disabled = true;
+  setGraphStatus(config.statusId, 'Henter SharePoint-mappe...');
+  try{
+    const drive = await resolveSharePointDrive(config);
+    sharePointFolderState[page] = {
+      ...getSharePointListState(page),
+      driveId: drive.id,
+      folderPath: String(config.folderPath || '')
+    };
+    const folderPath = String(config.folderPath || '').split('/').map(encodeURIComponent).join('/');
+    const query = new URLSearchParams({
+      '$select': 'id,name,webUrl,folder,file,size,lastModifiedDateTime',
+      '$top': '200'
+    });
+    const payload = await microsoftGraphRequest(
+      `/drives/${encodeURIComponent(drive.id)}/root:/${folderPath}:/children?${query.toString()}`,
+      MICROSOFT_GRAPH_SHAREPOINT_SCOPES
+    );
+    const items = Array.isArray(payload?.value) ? payload.value : [];
+    getSharePointListState(page).items = items;
+    renderSharePointFolderItems(config, items, page);
+    list.dataset.loaded = '1';
+    setGraphStatus(config.statusId, `Oppdatert ${new Date().toLocaleTimeString('no-NO', { hour: '2-digit', minute: '2-digit' })}`, 'ok');
+  }catch(err){
+    console.warn('SharePoint-henting feilet', err);
+    setGraphStatus(config.statusId, err?.message || 'Kunne ikke hente SharePoint-mappen.', 'error');
+  }finally{
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function ensureSharePointFolderState(page){
+  const config = SHAREPOINT_FOLDER_CONFIG[page];
+  if (!config) throw new Error('Ukjent SharePoint-mappe.');
+  if (!sharePointFolderState[page]?.driveId){
+    const drive = await resolveSharePointDrive(config);
+    sharePointFolderState[page] = {
+      ...getSharePointListState(page),
+      driveId: drive.id,
+      folderPath: String(config.folderPath || '')
+    };
+  }
+  return sharePointFolderState[page];
+}
+
+async function createSharePointFolder(page){
+  const config = SHAREPOINT_FOLDER_CONFIG[page];
+  if (!config) return;
+  const name = window.prompt(`Navn på ny mappe i ${config.title}:`);
+  const folderName = String(name || '').trim();
+  if (!folderName) return;
+  setGraphStatus(config.statusId, 'Oppretter mappe...');
+  try{
+    const state = await ensureSharePointFolderState(page);
+    const folderPath = String(state.folderPath || '').split('/').map(encodeURIComponent).join('/');
+    await microsoftGraphRequest(
+      `/drives/${encodeURIComponent(state.driveId)}/root:/${folderPath}:/children`,
+      MICROSOFT_GRAPH_SHAREPOINT_SCOPES,
+      {
+        method: 'POST',
+        body: {
+          name: folderName,
+          folder: {},
+          '@microsoft.graph.conflictBehavior': 'rename'
+        }
+      }
+    );
+    await loadSharePointFolder(page);
+  }catch(err){
+    console.warn('Oppretting av SharePoint-mappe feilet', err);
+    setGraphStatus(config.statusId, err?.message || 'Kunne ikke opprette mappe.', 'error');
+  }
+}
+
+function sanitizeSharePointFolderName(value, fallback = 'Prosjekt'){
+  const raw = String(value || '').trim() || fallback;
+  return raw
+    .replace(/[~"#%&*:<>?/\\{|}\u0000-\u001F]/g, '-')
+    .replace(/\s+/g, ' ')
+    .replace(/[. ]+$/g, '')
+    .trim()
+    || fallback;
+}
+
+function formatProjectFolderName(project){
+  const number = String(project?.projectNumber || '').trim();
+  const name = String(project?.name || '').trim() || 'Uten navn';
+  return sanitizeSharePointFolderName([number, name].filter(Boolean).join(' - '));
+}
+
+async function getSharePointFolderChildren(driveId, itemId){
+  const query = new URLSearchParams({
+    '$select': 'id,name,folder,file,size,lastModifiedDateTime',
+    '$top': '200'
+  });
+  const payload = await microsoftGraphRequest(
+    `/drives/${encodeURIComponent(driveId)}/items/${encodeURIComponent(itemId)}/children?${query.toString()}`,
+    MICROSOFT_GRAPH_SHAREPOINT_SCOPES
+  );
+  return Array.isArray(payload?.value) ? payload.value : [];
+}
+
+async function createSharePointChildFolder(driveId, parentItemId, folderName, conflictBehavior = 'fail'){
+  return microsoftGraphRequest(
+    `/drives/${encodeURIComponent(driveId)}/items/${encodeURIComponent(parentItemId)}/children`,
+    MICROSOFT_GRAPH_SHAREPOINT_SCOPES,
+    {
+      method: 'POST',
+      body: {
+        name: folderName,
+        folder: {},
+        '@microsoft.graph.conflictBehavior': conflictBehavior
+      }
+    }
+  );
+}
+
+async function copySharePointFileToFolder(driveId, sourceItemId, targetFolderId, name){
+  await microsoftGraphRequest(
+    `/drives/${encodeURIComponent(driveId)}/items/${encodeURIComponent(sourceItemId)}/copy`,
+    MICROSOFT_GRAPH_SHAREPOINT_SCOPES,
+    {
+      method: 'POST',
+      body: {
+        parentReference: { driveId, id: targetFolderId },
+        name
+      }
+    }
+  );
+}
+
+async function cloneSharePointFolderContents(driveId, sourceFolderId, targetFolderId){
+  const children = await getSharePointFolderChildren(driveId, sourceFolderId);
+  for (const child of children){
+    const name = String(child?.name || '').trim();
+    if (!name || !child?.id) continue;
+    if (child.folder){
+      const createdFolder = await createSharePointChildFolder(driveId, targetFolderId, name, 'rename');
+      if (createdFolder?.id){
+        await cloneSharePointFolderContents(driveId, child.id, createdFolder.id);
+      }
+    } else if (child.file){
+      await copySharePointFileToFolder(driveId, child.id, targetFolderId, name);
+    }
+  }
+}
+
+async function getSharePointRootFolderItem(page){
+  const config = SHAREPOINT_FOLDER_CONFIG[page];
+  if (!config) throw new Error('Ukjent SharePoint-mappe.');
+  const state = await ensureSharePointFolderState(page);
+  const folderPath = String(state.folderPath || '').split('/').map(encodeURIComponent).join('/');
+  const root = await microsoftGraphRequest(
+    `/drives/${encodeURIComponent(state.driveId)}/root:/${folderPath}`,
+    MICROSOFT_GRAPH_SHAREPOINT_SCOPES
+  );
+  if (!root?.id) throw new Error(`Fant ikke rotmappen for ${config.title}.`);
+  return { ...state, rootItem: root };
+}
+
+async function createProjectFolderFromTemplate(projectId, triggerBtn){
+  const project = getProjectById(projectId);
+  if (!project) return;
+  if (!authState.loggedIn){
+    showLoginModal();
+    return;
+  }
+  const btn = triggerBtn && triggerBtn.tagName === 'BUTTON' ? triggerBtn : null;
+  const originalText = btn?.textContent || '';
+  if (btn){
+    btn.disabled = true;
+    btn.textContent = 'Oppretter...';
+  }
+  setGraphStatus('projectFoldersStatus', 'Oppretter prosjektmappe...');
+  try{
+    const state = await getSharePointRootFolderItem('project-folders');
+    const children = await getSharePointFolderChildren(state.driveId, state.rootItem.id);
+    const template = children.find(item=>
+      item?.folder && String(item.name || '').trim().toLowerCase() === PROJECT_FOLDER_TEMPLATE_NAME.toLowerCase()
+    );
+    if (!template?.id){
+      throw new Error(`Fant ikke malmappen ${PROJECT_FOLDER_TEMPLATE_NAME} under Prosjektmapper.`);
+    }
+    const folderName = formatProjectFolderName(project);
+    const projectFolder = await createSharePointChildFolder(state.driveId, state.rootItem.id, folderName, 'fail');
+    if (!projectFolder?.id) throw new Error('Prosjektmappen ble ikke opprettet.');
+    await cloneSharePointFolderContents(state.driveId, template.id, projectFolder.id);
+    await loadSharePointFolder('project-folders');
+    setGraphStatus('projectFoldersStatus', `Opprettet ${folderName}`, 'ok');
+    if (projectFolder.webUrl && window.confirm('Prosjektmappe opprettet. Åpne mappen i SharePoint?')){
+      window.open(projectFolder.webUrl, '_blank', 'noopener,noreferrer');
+    }
+  }catch(err){
+    console.warn('Oppretting av prosjektmappe feilet', err);
+    setGraphStatus('projectFoldersStatus', err?.message || 'Kunne ikke opprette prosjektmappe.', 'error');
+    window.alert(err?.message || 'Kunne ikke opprette prosjektmappe.');
+  }finally{
+    if (btn){
+      btn.disabled = false;
+      btn.textContent = originalText || 'Opprett prosjektmappe';
+    }
+  }
+}
+
+async function uploadSharePointFile(page, file){
+  const config = SHAREPOINT_FOLDER_CONFIG[page];
+  if (!config || !file) return;
+  if (file.size > 250 * 1024 * 1024){
+    setGraphStatus(config.statusId, 'Filen er for stor for enkel Graph-opplasting. Maks 250 MB.', 'error');
+    return;
+  }
+  setGraphStatus(config.statusId, `Laster opp ${file.name}...`);
+  try{
+    const state = await ensureSharePointFolderState(page);
+    const folderPath = String(state.folderPath || '').split('/').map(encodeURIComponent).join('/');
+    const fileName = encodeURIComponent(file.name);
+    await microsoftGraphRequest(
+      `/drives/${encodeURIComponent(state.driveId)}/root:/${folderPath}/${fileName}:/content`,
+      MICROSOFT_GRAPH_SHAREPOINT_SCOPES,
+      {
+        method: 'PUT',
+        body: file,
+        rawBody: true,
+        contentType: file.type || 'application/octet-stream'
+      }
+    );
+    await loadSharePointFolder(page);
+  }catch(err){
+    console.warn('SharePoint-opplasting feilet', err);
+    setGraphStatus(config.statusId, err?.message || 'Kunne ikke laste opp fil.', 'error');
+  }
+}
+
+async function deleteSharePointItem(page, itemId, name){
+  const config = SHAREPOINT_FOLDER_CONFIG[page];
+  if (!config || !itemId) return;
+  if (!window.confirm(`Slette ${name || 'valgt element'}?`)) return;
+  setGraphStatus(config.statusId, 'Sletter element...');
+  try{
+    const state = await ensureSharePointFolderState(page);
+    await microsoftGraphRequest(
+      `/drives/${encodeURIComponent(state.driveId)}/items/${encodeURIComponent(itemId)}`,
+      MICROSOFT_GRAPH_SHAREPOINT_SCOPES,
+      { method: 'DELETE' }
+    );
+    await loadSharePointFolder(page);
+  }catch(err){
+    console.warn('SharePoint-sletting feilet', err);
+    setGraphStatus(config.statusId, err?.message || 'Kunne ikke slette element.', 'error');
+  }
+}
+
+async function loadCalendarEvents(options = {}){
+  if (!authState.loggedIn){
+    setGraphStatus('calendarStatus', 'Logg inn med Microsoft for å vise kalender.', 'error');
+    return;
+  }
+  const list = $('calendarEventsList');
+  const grid = $('calendarGridView');
+  if (!list && !grid) return;
+  const range = calendarRangeForState();
+  if (
+    options.silent
+    && calendarViewState.loadedStart
+    && calendarViewState.loadedEnd
+    && calendarViewState.loadedStart <= range.start
+    && calendarViewState.loadedEnd >= range.end
+  ){
+    renderCalendarView();
+    return;
+  }
+  const btn = $('refreshCalendarBtn');
+  if (btn) btn.disabled = true;
+  setGraphStatus('calendarStatus', 'Henter kalender...');
+  try{
+    const query = new URLSearchParams({
+      startDateTime: range.start.toISOString(),
+      endDateTime: range.end.toISOString(),
+      '$top': '200',
+      '$orderby': 'start/dateTime',
+      '$select': 'id,subject,start,end,location,organizer,isAllDay,showAs,webLink,bodyPreview'
+    });
+    const payload = await microsoftGraphRequest(`/me/calendarView?${query.toString()}`, MICROSOFT_GRAPH_CALENDAR_SCOPES);
+    const events = Array.isArray(payload?.value) ? payload.value : [];
+    calendarViewState.events = events;
+    calendarViewState.loadedStart = range.start;
+    calendarViewState.loadedEnd = range.end;
+    renderCalendarView();
+    setGraphStatus('calendarStatus', `Oppdatert ${new Date().toLocaleTimeString('no-NO', { hour: '2-digit', minute: '2-digit' })}`, 'ok');
+  }catch(err){
+    console.warn('Kalenderhenting feilet', err);
+    setGraphStatus('calendarStatus', err?.message || 'Kunne ikke hente kalender.', 'error');
+  }finally{
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function loadEmailMessages(options = {}){
+  if (!authState.loggedIn){
+    setGraphStatus('emailStatus', 'Logg inn med Microsoft for å vise e-post.', 'error');
+    return;
+  }
+  const list = $('emailMessagesList');
+  if (!list) return;
+  if (options.silent && list.dataset.loaded === '1') return;
+  const btn = $('refreshEmailBtn');
+  if (btn) btn.disabled = true;
+  setGraphStatus('emailStatus', 'Henter e-post...');
+  try{
+    const query = new URLSearchParams({
+      '$top': '25',
+      '$orderby': 'receivedDateTime desc',
+      '$select': 'id,subject,from,receivedDateTime,bodyPreview,isRead,importance,webLink'
+    });
+    const payload = await microsoftGraphRequest(`/me/messages?${query.toString()}`, MICROSOFT_GRAPH_MAIL_SCOPES);
+    const messages = Array.isArray(payload?.value) ? payload.value : [];
+    renderEmailMessages(messages);
+    list.dataset.loaded = '1';
+    setGraphStatus('emailStatus', `Oppdatert ${new Date().toLocaleTimeString('no-NO', { hour: '2-digit', minute: '2-digit' })}`, 'ok');
+  }catch(err){
+    console.warn('E-posthenting feilet', err);
+    setGraphStatus('emailStatus', err?.message || 'Kunne ikke hente e-post.', 'error');
+  }finally{
+    if (btn) btn.disabled = false;
+  }
 }
 
 async function handleMicrosoftLogin(){
@@ -1385,6 +3020,10 @@ async function handleMicrosoftLogin(){
     if (!result?.idToken){
       throw new Error('Microsoft returnerte ikke ID-token.');
     }
+    microsoftLastAccount = result.account || null;
+    if (result.account && typeof client.setActiveAccount === 'function'){
+      client.setActiveAccount(result.account);
+    }
     if (errorEl) errorEl.textContent = 'Validerer Microsoft-innlogging...';
     const auth = await exchangeMicrosoftToken(result.idToken);
     await completeAuth(auth, 'Microsoft-innlogging fullført. Henter prosjekter fra server...');
@@ -1399,7 +3038,10 @@ async function handleMicrosoftLogin(){
 }
 
 function clearAuthSession(){
-  authState = { loggedIn: false, username: '', token: '', profile: null };
+  authState = { loggedIn: false, username: '', token: '', profile: null, isAdmin: false };
+  projectState.customerDatabase = [];
+  projectState.globalCustomerDatabaseLoaded = false;
+  renderGlobalCustomerViews();
   persistAuthToSession();
 }
 
@@ -1437,7 +3079,7 @@ async function submitAuthRequest(mode, email, password, options = {}){
   if (!hasValidUserEmail(username) || !token){
     throw new Error('Serveren returnerte ugyldig innloggingsdata.');
   }
-  return { username, token, profile: normalizeProfilePayload(payload?.profile) };
+  return { username, token, profile: normalizeProfilePayload(payload?.profile), isAdmin: payload?.isAdmin === true };
 }
 
 function showLoginModal(){
@@ -1496,7 +3138,14 @@ function hideRegisterModal(){
 }
 
 async function completeAuth(auth, statusMessage){
-  authState = { loggedIn: true, username: auth.username, token: auth.token, profile: auth.profile || null };
+  const username = normalizeUserEmail(auth.username);
+  authState = {
+    loggedIn: true,
+    username,
+    token: auth.token,
+    profile: auth.profile || null,
+    isAdmin: auth.isAdmin === true || ADMIN_NAV_ALLOWED_EMAILS.includes(username)
+  };
   persistAuthToSession();
   hideLoginModal();
   hideRegisterModal();
@@ -1655,6 +3304,317 @@ if (loginSubmit){
 const microsoftLoginBtn = $('microsoftLoginBtn');
 if (microsoftLoginBtn){
   microsoftLoginBtn.addEventListener('click', handleMicrosoftLogin);
+}
+const refreshCalendarBtn = $('refreshCalendarBtn');
+if (refreshCalendarBtn){
+  refreshCalendarBtn.addEventListener('click', ()=>loadCalendarEvents());
+}
+async function refreshProjectsFromToolbar(){
+  if (!authState.loggedIn){
+    setGraphStatus('projectsStatus', 'Logg inn for å oppdatere prosjekter.', 'error');
+    return;
+  }
+  const btn = $('refreshProjectsBtn');
+  if (btn) btn.disabled = true;
+  setGraphStatus('projectsStatus', 'Oppdaterer prosjekter...');
+  try{
+    await syncProjectsForCurrentUser();
+    setGraphStatus('projectsStatus', `Oppdatert ${new Date().toLocaleTimeString('no-NO', { hour: '2-digit', minute: '2-digit' })}`, 'ok');
+  }catch(err){
+    console.warn('Prosjektoppdatering feilet', err);
+    setGraphStatus('projectsStatus', err?.message || 'Kunne ikke oppdatere prosjekter.', 'error');
+  }finally{
+    if (btn) btn.disabled = false;
+  }
+}
+const refreshProjectsBtn = $('refreshProjectsBtn');
+if (refreshProjectsBtn){
+  refreshProjectsBtn.addEventListener('click', ()=>void refreshProjectsFromToolbar());
+}
+const newCalendarEventBtn = $('newCalendarEventBtn');
+if (newCalendarEventBtn){
+  newCalendarEventBtn.addEventListener('click', ()=>openCalendarEventForm());
+}
+populateCalendarDurationOptions();
+populateCalendarTimeOptions();
+const calendarEventForm = $('calendarEventForm');
+if (calendarEventForm){
+  calendarEventForm.addEventListener('submit', evt=>{
+    evt.preventDefault();
+    void saveCalendarEventFromForm();
+  });
+}
+const addCalendarAttendeeBtn = $('addCalendarAttendeeBtn');
+if (addCalendarAttendeeBtn){
+  addCalendarAttendeeBtn.addEventListener('click', ()=>{
+    addCalendarFormAttendees($('calendarAttendeeInput')?.value);
+  });
+}
+const calendarAttendeeInput = $('calendarAttendeeInput');
+if (calendarAttendeeInput){
+  calendarAttendeeInput.addEventListener('keydown', evt=>{
+    if (evt.key !== 'Enter') return;
+    evt.preventDefault();
+    addCalendarFormAttendees(calendarAttendeeInput.value);
+  });
+}
+const calendarEventStartDate = $('calendarEventStartDate');
+if (calendarEventStartDate){
+  calendarEventStartDate.addEventListener('input', syncCalendarNativeDatePicker);
+}
+const calendarEventDatePicker = $('calendarEventDatePicker');
+if (calendarEventDatePicker){
+  calendarEventDatePicker.addEventListener('change', ()=>{
+    const value = calendarEventDatePicker.value;
+    const textInput = $('calendarEventStartDate');
+    if (textInput && value) textInput.value = formatDateInputValue(new Date(`${value}T00:00`));
+  });
+}
+const calendarEventDatePickerBtn = $('calendarEventDatePickerBtn');
+if (calendarEventDatePickerBtn){
+  calendarEventDatePickerBtn.addEventListener('click', evt=>{
+    evt.stopPropagation();
+    syncCalendarNativeDatePicker();
+    const popover = $('calendarDatePickerPopover');
+    if (popover && !popover.hidden){
+      closeCalendarDatePickerPopover();
+    } else {
+      openCalendarDatePickerPopover();
+    }
+  });
+}
+const calendarDatePickerPopover = $('calendarDatePickerPopover');
+if (calendarDatePickerPopover){
+  calendarDatePickerPopover.addEventListener('click', evt=>evt.stopPropagation());
+}
+document.addEventListener('click', evt=>{
+  const target = evt.target instanceof Element ? evt.target : null;
+  if (target?.closest?.('.calendar-date-input-row')) return;
+  closeCalendarDatePickerPopover();
+});
+const cancelCalendarEventBtn = $('cancelCalendarEventBtn');
+if (cancelCalendarEventBtn){
+  cancelCalendarEventBtn.addEventListener('click', closeCalendarEventForm);
+}
+const deleteCalendarEventBtn = $('deleteCalendarEventBtn');
+if (deleteCalendarEventBtn){
+  deleteCalendarEventBtn.addEventListener('click', ()=>void deleteCalendarEventFromForm());
+}
+const calendarModeSelect = $('calendarModeSelect');
+if (calendarModeSelect){
+  calendarModeSelect.value = calendarViewState.mode;
+  calendarModeSelect.addEventListener('change', ()=>{
+    const mode = String(calendarModeSelect.value || 'month');
+    if (!['list', 'month', 'week'].includes(mode)) return;
+    calendarViewState.mode = mode;
+    if (mode === 'list') calendarViewState.cursor = new Date();
+    calendarViewState.loadedStart = null;
+    calendarViewState.loadedEnd = null;
+    void loadCalendarEvents();
+  });
+}
+const calendarPrevBtn = $('calendarPrevBtn');
+if (calendarPrevBtn){
+  calendarPrevBtn.addEventListener('click', ()=>{
+    if (calendarViewState.mode === 'month'){
+      calendarViewState.cursor = addMonths(calendarViewState.cursor, -1);
+    } else if (calendarViewState.mode === 'week'){
+      calendarViewState.cursor = addDays(calendarViewState.cursor, -7);
+    } else {
+      calendarViewState.cursor = addDays(calendarViewState.cursor, -14);
+    }
+    calendarViewState.loadedStart = null;
+    calendarViewState.loadedEnd = null;
+    void loadCalendarEvents();
+  });
+}
+const calendarTodayBtn = $('calendarTodayBtn');
+if (calendarTodayBtn){
+  calendarTodayBtn.addEventListener('click', ()=>{
+    calendarViewState.cursor = new Date();
+    calendarViewState.loadedStart = null;
+    calendarViewState.loadedEnd = null;
+    void loadCalendarEvents();
+  });
+}
+const calendarNextBtn = $('calendarNextBtn');
+if (calendarNextBtn){
+  calendarNextBtn.addEventListener('click', ()=>{
+    if (calendarViewState.mode === 'month'){
+      calendarViewState.cursor = addMonths(calendarViewState.cursor, 1);
+    } else if (calendarViewState.mode === 'week'){
+      calendarViewState.cursor = addDays(calendarViewState.cursor, 7);
+    } else {
+      calendarViewState.cursor = addDays(calendarViewState.cursor, 14);
+    }
+    calendarViewState.loadedStart = null;
+    calendarViewState.loadedEnd = null;
+    void loadCalendarEvents();
+  });
+}
+const refreshEmailBtn = $('refreshEmailBtn');
+if (refreshEmailBtn){
+  refreshEmailBtn.addEventListener('click', ()=>loadEmailMessages());
+}
+const refreshOffersBtn = $('refreshOffersBtn');
+if (refreshOffersBtn){
+  refreshOffersBtn.addEventListener('click', ()=>loadOfferStatus());
+}
+const offerSearchInput = $('offerSearchInput');
+if (offerSearchInput){
+  offerSearchInput.addEventListener('input', ()=>{
+    setOfferSearchTerm(offerSearchInput.value);
+  });
+}
+const offerSortSelect = $('offerSortSelect');
+if (offerSortSelect){
+  offerSortSelect.addEventListener('change', ()=>{
+    setOfferSortMode(offerSortSelect.value);
+  });
+}
+const composeEmailBtn = $('composeEmailBtn');
+if (composeEmailBtn){
+  composeEmailBtn.addEventListener('click', openEmailComposeForm);
+}
+const emailComposeForm = $('emailComposeForm');
+if (emailComposeForm){
+  emailComposeForm.addEventListener('submit', evt=>{
+    evt.preventDefault();
+    void sendEmailFromForm();
+  });
+}
+const cancelEmailComposeBtn = $('cancelEmailComposeBtn');
+if (cancelEmailComposeBtn){
+  cancelEmailComposeBtn.addEventListener('click', closeEmailComposeForm);
+}
+const openSelectedEmailBtn = $('openSelectedEmailBtn');
+if (openSelectedEmailBtn){
+  openSelectedEmailBtn.addEventListener('click', ()=>{
+    const message = getSelectedEmailMessage();
+    if (message?.webLink) window.open(message.webLink, '_blank', 'noopener,noreferrer');
+  });
+}
+const markSelectedEmailReadBtn = $('markSelectedEmailReadBtn');
+if (markSelectedEmailReadBtn){
+  markSelectedEmailReadBtn.addEventListener('click', ()=>void markSelectedEmailRead());
+}
+const deleteSelectedEmailBtn = $('deleteSelectedEmailBtn');
+if (deleteSelectedEmailBtn){
+  deleteSelectedEmailBtn.addEventListener('click', ()=>void deleteSelectedEmail());
+}
+const refreshProjectFoldersBtn = $('refreshProjectFoldersBtn');
+if (refreshProjectFoldersBtn){
+  refreshProjectFoldersBtn.addEventListener('click', ()=>loadSharePointFolder('project-folders'));
+}
+const projectFolderSearchInput = $('projectFolderSearchInput');
+if (projectFolderSearchInput){
+  projectFolderSearchInput.addEventListener('input', ()=>{
+    setSharePointSearchTerm('project-folders', projectFolderSearchInput.value);
+  });
+}
+const projectFolderSortSelect = $('projectFolderSortSelect');
+if (projectFolderSortSelect){
+  projectFolderSortSelect.addEventListener('change', ()=>{
+    setSharePointSortMode('project-folders', projectFolderSortSelect.value);
+  });
+}
+const newProjectFolderBtn = $('newProjectFolderBtn');
+if (newProjectFolderBtn){
+  newProjectFolderBtn.addEventListener('click', ()=>void createSharePointFolder('project-folders'));
+}
+const uploadProjectFolderFile = $('uploadProjectFolderFile');
+if (uploadProjectFolderFile){
+  uploadProjectFolderFile.addEventListener('change', evt=>{
+    const file = evt.target?.files?.[0] || null;
+    void uploadSharePointFile('project-folders', file).finally(()=>{
+      uploadProjectFolderFile.value = '';
+    });
+  });
+}
+const refreshSupplierFoldersBtn = $('refreshSupplierFoldersBtn');
+if (refreshSupplierFoldersBtn){
+  refreshSupplierFoldersBtn.addEventListener('click', ()=>loadSharePointFolder('supplier-folders'));
+}
+const supplierFolderSearchInput = $('supplierFolderSearchInput');
+if (supplierFolderSearchInput){
+  supplierFolderSearchInput.addEventListener('input', ()=>{
+    setSharePointSearchTerm('supplier-folders', supplierFolderSearchInput.value);
+  });
+}
+const supplierFolderSortSelect = $('supplierFolderSortSelect');
+if (supplierFolderSortSelect){
+  supplierFolderSortSelect.addEventListener('change', ()=>{
+    setSharePointSortMode('supplier-folders', supplierFolderSortSelect.value);
+  });
+}
+const newSupplierFolderBtn = $('newSupplierFolderBtn');
+if (newSupplierFolderBtn){
+  newSupplierFolderBtn.addEventListener('click', ()=>void createSharePointFolder('supplier-folders'));
+}
+const uploadSupplierFolderFile = $('uploadSupplierFolderFile');
+if (uploadSupplierFolderFile){
+  uploadSupplierFolderFile.addEventListener('change', evt=>{
+    const file = evt.target?.files?.[0] || null;
+    void uploadSharePointFile('supplier-folders', file).finally(()=>{
+      uploadSupplierFolderFile.value = '';
+    });
+  });
+}
+const refreshCompaniesBtn = $('refreshCompaniesBtn');
+if (refreshCompaniesBtn){
+  refreshCompaniesBtn.addEventListener('click', ()=>loadGlobalCustomerDatabase());
+}
+const companySearchInput = $('companySearchInput');
+if (companySearchInput){
+  companySearchInput.addEventListener('input', ()=>{
+    setCompanySearchTerm(companySearchInput.value);
+  });
+}
+const companySortSelect = $('companySortSelect');
+if (companySortSelect){
+  companySortSelect.addEventListener('change', ()=>{
+    setCompanySortMode(companySortSelect.value);
+  });
+}
+const refreshContactsBtn = $('refreshContactsBtn');
+if (refreshContactsBtn){
+  refreshContactsBtn.addEventListener('click', ()=>loadGlobalCustomerDatabase());
+}
+const contactSearchInput = $('contactSearchInput');
+if (contactSearchInput){
+  contactSearchInput.addEventListener('input', ()=>{
+    setContactSearchTerm(contactSearchInput.value);
+  });
+}
+const contactSortSelect = $('contactSortSelect');
+if (contactSortSelect){
+  contactSortSelect.addEventListener('change', ()=>{
+    setContactSortMode(contactSortSelect.value);
+  });
+}
+const addCompanyBtn = $('addCompanyBtn');
+if (addCompanyBtn){
+  addCompanyBtn.addEventListener('click', ()=>openCompanyEditForm());
+}
+const companyEditForm = $('companyEditForm');
+if (companyEditForm){
+  companyEditForm.addEventListener('submit', handleCompanyFormSubmit);
+}
+const cancelCompanyEditBtn = $('cancelCompanyEditBtn');
+if (cancelCompanyEditBtn){
+  cancelCompanyEditBtn.addEventListener('click', closeCompanyEditForm);
+}
+const addContactBtn = $('addContactBtn');
+if (addContactBtn){
+  addContactBtn.addEventListener('click', ()=>openContactEditForm());
+}
+const contactEditForm = $('contactEditForm');
+if (contactEditForm){
+  contactEditForm.addEventListener('submit', handleContactFormSubmit);
+}
+const cancelContactEditBtn = $('cancelContactEditBtn');
+if (cancelContactEditBtn){
+  cancelContactEditBtn.addEventListener('click', closeContactEditForm);
 }
 const registerSubmit = $('registerSubmit');
 if (registerSubmit){
@@ -1950,6 +3910,413 @@ async function fetchCustomerDatabaseFromServer(){
   return Array.isArray(payload?.customers) ? payload.customers : [];
 }
 
+function setGlobalCustomerStatus(id, message, state = '') {
+  const el = $(id);
+  if (!el) return;
+  el.textContent = message || '';
+  el.classList.toggle('error', state === 'error');
+  el.classList.toggle('ok', state === 'ok');
+}
+
+function normalizeGlobalCustomerPayload(payload) {
+  return (Array.isArray(payload) ? payload : []).map(customer => ({
+    id: String(customer?.id || ''),
+    name: String(customer?.name || '').trim(),
+    address: String(customer?.address || '').trim(),
+    postalPlace: String(customer?.postalPlace || '').trim(),
+    segment: String(customer?.segment || '').trim(),
+    projectCount: Number.isFinite(Number(customer?.projectCount)) ? Number(customer.projectCount) : 0,
+    contacts: (Array.isArray(customer?.contacts) ? customer.contacts : []).map(contact => ({
+      id: String(contact?.id || ''),
+      name: String(contact?.name || '').trim(),
+      phone: String(contact?.phone || '').trim(),
+      email: String(contact?.email || '').trim()
+    })).filter(contact => contact.name || contact.phone || contact.email)
+  })).filter(customer => customer.name);
+}
+
+function flattenGlobalContacts() {
+  return normalizeGlobalCustomerPayload(projectState.customerDatabase).flatMap(customer => (
+    customer.contacts.map(contact => ({
+      ...contact,
+      customerName: customer.name,
+      customerAddress: customer.address,
+      customerPostalPlace: customer.postalPlace,
+      customerSegment: customer.segment
+    }))
+  )).sort((a, b) => (a.name || '').localeCompare(b.name || '', 'no', { sensitivity: 'base', numeric: true }));
+}
+
+function compareGlobalListItems(a, b, mode, nameAccessor){
+  if (mode === 'alpha_desc') return compareNoText(nameAccessor(b), nameAccessor(a));
+  if (mode === 'date_newest' || mode === 'date_oldest'){
+    const aTime = new Date(a?.updatedAt || a?.createdAt || 0).getTime() || 0;
+    const bTime = new Date(b?.updatedAt || b?.createdAt || 0).getTime() || 0;
+    return mode === 'date_oldest' ? aTime - bTime : bTime - aTime;
+  }
+  return compareNoText(nameAccessor(a), nameAccessor(b));
+}
+
+function companyMatchesSearch(customer){
+  const term = normalizeListSearchText(globalListState.companySearchTerm);
+  if (!term) return true;
+  const haystack = [
+    customer?.name,
+    customer?.address,
+    customer?.postalPlace,
+    customer?.segment,
+    ...(Array.isArray(customer?.contacts) ? customer.contacts.flatMap(contact=>[contact?.name, contact?.phone, contact?.email]) : [])
+  ].map(value=>String(value || '').toLowerCase()).join(' ');
+  return haystack.includes(term);
+}
+
+function contactMatchesSearch(contact){
+  const term = normalizeListSearchText(globalListState.contactSearchTerm);
+  if (!term) return true;
+  const haystack = [
+    contact?.name,
+    contact?.phone,
+    contact?.email,
+    contact?.customerName,
+    contact?.customerAddress,
+    contact?.customerPostalPlace,
+    contact?.customerSegment
+  ].map(value=>String(value || '').toLowerCase()).join(' ');
+  return haystack.includes(term);
+}
+
+function getGlobalCustomerByName(name) {
+  const key = normalizeLookupKey(name);
+  return normalizeGlobalCustomerPayload(projectState.customerDatabase).find(customer => normalizeLookupKey(customer.name) === key) || null;
+}
+
+async function loadGlobalCustomerDatabase(options = {}) {
+  if (!authState.loggedIn) {
+    setGlobalCustomerStatus('companiesStatus', 'Logg inn for å vise firma.', 'error');
+    setGlobalCustomerStatus('contactsStatus', 'Logg inn for å vise kontaktpersoner.', 'error');
+    return;
+  }
+  if (options.silent && projectState.globalCustomerDatabaseLoaded) {
+    renderGlobalCustomerViews();
+    return;
+  }
+  setGlobalCustomerStatus('companiesStatus', 'Henter firma...');
+  setGlobalCustomerStatus('contactsStatus', 'Henter kontaktpersoner...');
+  try {
+    projectState.customerDatabase = normalizeGlobalCustomerPayload(await fetchCustomerDatabaseFromServer());
+    projectState.globalCustomerDatabaseLoaded = true;
+    updateProjectHistories();
+    renderGlobalCustomerViews();
+    const stamp = new Date().toLocaleTimeString('no-NO', { hour: '2-digit', minute: '2-digit' });
+    setGlobalCustomerStatus('companiesStatus', `Oppdatert ${stamp}`, 'ok');
+    setGlobalCustomerStatus('contactsStatus', `Oppdatert ${stamp}`, 'ok');
+  } catch (err) {
+    console.warn('Kunne ikke hente global kundedatabase', err);
+    setGlobalCustomerStatus('companiesStatus', err?.message || 'Kunne ikke hente firma.', 'error');
+    setGlobalCustomerStatus('contactsStatus', err?.message || 'Kunne ikke hente kontaktpersoner.', 'error');
+  }
+}
+
+async function saveGlobalCustomerRecord(payload) {
+  const res = await fetch(buildApiUrl('/api/customer-database/upsert'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(payload || {})
+  });
+  const data = await res.json().catch(() => null);
+  if (!res.ok) {
+    throw new Error(data?.error || `Kunne ikke lagre (${res.status})`);
+  }
+  projectState.customerDatabase = normalizeGlobalCustomerPayload(data?.customers);
+  projectState.globalCustomerDatabaseLoaded = true;
+  updateProjectHistories();
+  renderGlobalCustomerViews();
+  return data;
+}
+
+async function deleteGlobalCustomerRecord(payload) {
+  const res = await fetch(buildApiUrl('/api/customer-database/delete'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(payload || {})
+  });
+  const data = await res.json().catch(() => null);
+  if (!res.ok) {
+    throw new Error(data?.error || `Kunne ikke slette (${res.status})`);
+  }
+  projectState.customerDatabase = normalizeGlobalCustomerPayload(data?.customers);
+  projectState.globalCustomerDatabaseLoaded = true;
+  updateProjectHistories();
+  renderGlobalCustomerViews();
+  return data;
+}
+
+function renderGlobalCustomerViews() {
+  renderCompanyCardsList();
+  renderContactPersonsList();
+}
+
+function appendGlobalDataDetails(parent, rows) {
+  const details = document.createElement('div');
+  details.className = 'global-data-details';
+  rows.forEach(([label, value]) => {
+    const row = document.createElement('p');
+    row.className = 'global-data-detail';
+    row.textContent = `${label}: ${String(value || '').trim() || '-'}`;
+    details.appendChild(row);
+  });
+  parent.appendChild(details);
+}
+
+function renderCompanyCardsList() {
+  const list = $('companiesList');
+  const companyOptions = $('globalCompanyOptions');
+  if (companyOptions) {
+    companyOptions.innerHTML = '';
+    normalizeGlobalCustomerPayload(projectState.customerDatabase).forEach(customer => {
+      const option = document.createElement('option');
+      option.value = customer.name;
+      companyOptions.appendChild(option);
+    });
+  }
+  if (!list) return;
+  const customers = normalizeGlobalCustomerPayload(projectState.customerDatabase)
+    .filter(companyMatchesSearch)
+    .sort((a, b)=>compareGlobalListItems(a, b, globalListState.companySort, item=>item?.name));
+  const canEdit = canEditGlobalCustomerData();
+  const form = $('companyEditForm');
+  if (form) form.hidden = !canEdit || form.dataset.editing !== '1';
+  const addBtn = $('addCompanyBtn');
+  if (addBtn) addBtn.hidden = !canEdit;
+  const ownerHint = $('companiesOwnerHint');
+  if (ownerHint) ownerHint.hidden = canEdit;
+  list.innerHTML = '';
+  if (!customers.length) {
+    const empty = document.createElement('div');
+    empty.className = 'global-data-empty';
+    empty.textContent = normalizeListSearchText(globalListState.companySearchTerm)
+      ? 'Ingen firma matcher søket.'
+      : 'Ingen firma funnet i prosjektarkivet.';
+    list.appendChild(empty);
+    return;
+  }
+  customers.forEach(customer => {
+    const item = document.createElement('article');
+    item.className = 'global-data-card';
+    const body = document.createElement('div');
+    body.className = 'global-data-card-body';
+    const title = document.createElement('h3');
+    title.textContent = customer.name;
+    const projectCount = Number.isFinite(Number(customer.projectCount)) ? Number(customer.projectCount) : 0;
+    body.appendChild(title);
+    appendGlobalDataDetails(body, [
+      ['Adresse', customer.address],
+      ['Postnummer og sted', customer.postalPlace],
+      ['Kundesegment', customer.segment],
+      ['Kontaktpersoner', customer.contacts.length],
+      ['Prosjekter totalt', projectCount]
+    ]);
+    item.appendChild(body);
+    if (canEdit) {
+      const actions = document.createElement('div');
+      actions.className = 'global-data-actions';
+      const edit = document.createElement('button');
+      edit.type = 'button';
+      edit.className = 'btn alt btn-small';
+      edit.textContent = 'Endre';
+      edit.addEventListener('click', () => openCompanyEditForm(customer));
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'btn danger btn-small';
+      remove.textContent = 'Slett';
+      remove.addEventListener('click', () => handleDeleteCompany(customer));
+      actions.append(edit, remove);
+      item.appendChild(actions);
+    }
+    list.appendChild(item);
+  });
+}
+
+function renderContactPersonsList() {
+  const list = $('contactsList');
+  if (!list) return;
+  const contacts = flattenGlobalContacts()
+    .filter(contactMatchesSearch)
+    .sort((a, b)=>compareGlobalListItems(a, b, globalListState.contactSort, item=>item?.name));
+  const canEdit = canEditGlobalCustomerData();
+  const form = $('contactEditForm');
+  if (form) form.hidden = !canEdit || form.dataset.editing !== '1';
+  const addBtn = $('addContactBtn');
+  if (addBtn) addBtn.hidden = !canEdit;
+  const ownerHint = $('contactsOwnerHint');
+  if (ownerHint) ownerHint.hidden = canEdit;
+  list.innerHTML = '';
+  if (!contacts.length) {
+    const empty = document.createElement('div');
+    empty.className = 'global-data-empty';
+    empty.textContent = normalizeListSearchText(globalListState.contactSearchTerm)
+      ? 'Ingen kontaktpersoner matcher søket.'
+      : 'Ingen kontaktpersoner funnet i prosjektarkivet.';
+    list.appendChild(empty);
+    return;
+  }
+  contacts.forEach(contact => {
+    const item = document.createElement('article');
+    item.className = 'global-data-card';
+    const body = document.createElement('div');
+    body.className = 'global-data-card-body';
+    const title = document.createElement('h3');
+    title.textContent = contact.name || 'Uten navn';
+    body.appendChild(title);
+    appendGlobalDataDetails(body, [
+      ['Firmanavn', contact.customerName],
+      ['Telefon', contact.phone],
+      ['E-post', contact.email]
+    ]);
+    item.appendChild(body);
+    if (canEdit) {
+      const actions = document.createElement('div');
+      actions.className = 'global-data-actions';
+      const edit = document.createElement('button');
+      edit.type = 'button';
+      edit.className = 'btn alt btn-small';
+      edit.textContent = 'Endre';
+      edit.addEventListener('click', () => openContactEditForm(contact));
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'btn danger btn-small';
+      remove.textContent = 'Slett';
+      remove.addEventListener('click', () => handleDeleteContact(contact));
+      actions.append(edit, remove);
+      item.appendChild(actions);
+    }
+    list.appendChild(item);
+  });
+}
+
+function openCompanyEditForm(customer = null) {
+  if (!canEditGlobalCustomerData()) return;
+  const form = $('companyEditForm');
+  if (!form) return;
+  form.dataset.editing = '1';
+  form.hidden = false;
+  $('companyOriginalName').value = customer?.name || '';
+  $('companyNameInput').value = customer?.name || '';
+  $('companyAddressInput').value = customer?.address || '';
+  $('companyPostalPlaceInput').value = customer?.postalPlace || '';
+  $('companySegmentInput').value = customer?.segment || '';
+  $('companyNameInput')?.focus();
+}
+
+function closeCompanyEditForm() {
+  const form = $('companyEditForm');
+  if (!form) return;
+  form.dataset.editing = '0';
+  form.hidden = true;
+  form.reset();
+}
+
+function openContactEditForm(contact = null) {
+  if (!canEditGlobalCustomerData()) return;
+  const form = $('contactEditForm');
+  if (!form) return;
+  form.dataset.editing = '1';
+  form.hidden = false;
+  $('contactOriginalCustomer').value = contact?.customerName || '';
+  $('contactOriginalName').value = contact?.name || '';
+  $('contactCompanyInput').value = contact?.customerName || '';
+  $('contactNameInput').value = contact?.name || '';
+  $('contactPhoneInput').value = contact?.phone || '';
+  $('contactEmailInput').value = contact?.email || '';
+  $('contactCompanyInput')?.focus();
+}
+
+function closeContactEditForm() {
+  const form = $('contactEditForm');
+  if (!form) return;
+  form.dataset.editing = '0';
+  form.hidden = true;
+  form.reset();
+}
+
+async function handleCompanyFormSubmit(evt) {
+  evt?.preventDefault?.();
+  const originalCustomer = String($('companyOriginalName')?.value || '').trim();
+  const customer = String($('companyNameInput')?.value || '').trim();
+  const address = String($('companyAddressInput')?.value || '').trim();
+  const postalPlace = String($('companyPostalPlaceInput')?.value || '').trim();
+  const segment = String($('companySegmentInput')?.value || '').trim();
+  if (!customer) {
+    setGlobalCustomerStatus('companiesStatus', 'Firmanavn mangler.', 'error');
+    return;
+  }
+  setGlobalCustomerStatus('companiesStatus', 'Lagrer...');
+  try {
+    await saveGlobalCustomerRecord({ originalCustomer, customer, address, postalPlace, segment });
+    closeCompanyEditForm();
+    setGlobalCustomerStatus('companiesStatus', 'Lagret', 'ok');
+  } catch (err) {
+    setGlobalCustomerStatus('companiesStatus', err?.message || 'Kunne ikke lagre firma.', 'error');
+  }
+}
+
+async function handleContactFormSubmit(evt) {
+  evt?.preventDefault?.();
+  const originalCustomer = String($('contactOriginalCustomer')?.value || '').trim();
+  const originalContactPerson = String($('contactOriginalName')?.value || '').trim();
+  const customer = String($('contactCompanyInput')?.value || '').trim();
+  const contactPerson = String($('contactNameInput')?.value || '').trim();
+  const phone = String($('contactPhoneInput')?.value || '').trim();
+  const email = String($('contactEmailInput')?.value || '').trim();
+  if (!customer || !contactPerson) {
+    setGlobalCustomerStatus('contactsStatus', 'Firma og kontaktperson mangler.', 'error');
+    return;
+  }
+  const existingCustomer = getGlobalCustomerByName(customer);
+  setGlobalCustomerStatus('contactsStatus', 'Lagrer...');
+  try {
+    await saveGlobalCustomerRecord({
+      originalCustomer: originalCustomer || customer,
+      originalContactPerson,
+      customer,
+      address: existingCustomer?.address || '',
+      postalPlace: existingCustomer?.postalPlace || '',
+      segment: existingCustomer?.segment || '',
+      contactPerson,
+      phone,
+      email
+    });
+    closeContactEditForm();
+    setGlobalCustomerStatus('contactsStatus', 'Lagret', 'ok');
+  } catch (err) {
+    setGlobalCustomerStatus('contactsStatus', err?.message || 'Kunne ikke lagre kontaktperson.', 'error');
+  }
+}
+
+async function handleDeleteCompany(customer) {
+  if (!customer?.name) return;
+  if (!window.confirm(`Slette firmaet "${customer.name}" globalt? Dette tømmer firmafeltene i prosjekter som bruker firmaet.`)) return;
+  setGlobalCustomerStatus('companiesStatus', 'Sletter...');
+  try {
+    await deleteGlobalCustomerRecord({ customer: customer.name });
+    setGlobalCustomerStatus('companiesStatus', 'Slettet', 'ok');
+  } catch (err) {
+    setGlobalCustomerStatus('companiesStatus', err?.message || 'Kunne ikke slette firma.', 'error');
+  }
+}
+
+async function handleDeleteContact(contact) {
+  if (!contact?.customerName || !contact?.name) return;
+  if (!window.confirm(`Slette kontaktpersonen "${contact.name}" fra ${contact.customerName}?`)) return;
+  setGlobalCustomerStatus('contactsStatus', 'Sletter...');
+  try {
+    await deleteGlobalCustomerRecord({ customer: contact.customerName, contactPerson: contact.name });
+    setGlobalCustomerStatus('contactsStatus', 'Slettet', 'ok');
+  } catch (err) {
+    setGlobalCustomerStatus('contactsStatus', err?.message || 'Kunne ikke slette kontaktperson.', 'error');
+  }
+}
+
 async function flushProjectSync(){
   if (!canUseProjectSyncApi()) return;
   const email = getCurrentUserEmail();
@@ -2027,8 +4394,10 @@ async function syncProjectsForCurrentUser(){
       renderProjectDashboard();
       updateProjectMetaDisplay();
     }
-    projectState.customerDatabase = await fetchCustomerDatabaseFromServer();
+    projectState.customerDatabase = normalizeGlobalCustomerPayload(await fetchCustomerDatabaseFromServer());
+    projectState.globalCustomerDatabaseLoaded = true;
     updateProjectHistories();
+    renderGlobalCustomerViews();
     cleanupMigratedProjectStorage(email);
   }catch(err){
     console.warn('Kunne ikke hente prosjekter fra server', err);
@@ -2182,7 +4551,13 @@ function applyDashboardSortModesFromStorage(){
     LINE_SORT_OPTIONS,
     'date_newest'
   );
+  offerListState.sort = loadSortMode(
+    OFFER_SORT_STORAGE_KEY,
+    PROJECT_SORT_OPTIONS,
+    'date_newest'
+  );
   updateSortControlValues();
+  updateOfferControlValues();
 }
 
 function setProjectSortMode(mode, options = {}){
@@ -2262,8 +4637,9 @@ function getCustomerRecord(customerName){
       const contactName = String(contact?.name || '').trim();
       if (!contactName) return;
       const contactKey = normalizeLookupKey(contactName);
-      const existing = record.contacts.get(contactKey) || { name: contactName, phone: '' };
+      const existing = record.contacts.get(contactKey) || { name: contactName, phone: '', email: '' };
       if (!existing.phone && contact.phone) existing.phone = contact.phone;
+      if (!existing.email && contact.email) existing.email = contact.email;
       record.contacts.set(contactKey, existing);
     });
   });
@@ -2275,7 +4651,7 @@ function getCustomerRecord(customerName){
     const contactName = String(project.contactPerson || '').trim();
     if (contactName){
       const contactKey = normalizeLookupKey(contactName);
-      const existing = record.contacts.get(contactKey) || { name: contactName, phone: '' };
+      const existing = record.contacts.get(contactKey) || { name: contactName, phone: '', email: '' };
       if (!existing.phone && project.contactPhone) existing.phone = project.contactPhone;
       record.contacts.set(contactKey, existing);
     }
@@ -2295,7 +4671,8 @@ function getKnownProjectDetails(customerName, contactPerson){
   return {
     customerAddress: record?.address || '',
     customerPostalPlace: record?.postalPlace || '',
-    contactPhone: contact?.phone || ''
+    contactPhone: contact?.phone || '',
+    contactEmail: contact?.email || ''
   };
 }
 
@@ -3333,6 +5710,17 @@ function sanitizeDownloadFileName(value, fallback = 'tilbud'){
   return cleaned || fallback;
 }
 
+function downloadBlob(blob, fileName){
+  const blobUrl = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = blobUrl;
+  link.download = fileName || 'nedlasting';
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(()=>URL.revokeObjectURL(blobUrl), 1000);
+}
+
 function getFilenameFromContentDisposition(headerValue){
   const source = String(headerValue || '');
   if (!source) return '';
@@ -3392,6 +5780,278 @@ async function generateProjectOffer(project){
     offerNumber,
     revision
   };
+}
+
+async function generateLatestProjectOffer(project){
+  const res = await fetch(buildApiUrl('/api/generate-offer-latest'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ project })
+  });
+  if (res.status === 401 || res.status === 403){
+    clearAuthSession();
+    updateAuthUI();
+  }
+  if (!res.ok){
+    let errorText = `Kunne ikke åpne tilbud (${res.status})`;
+    try{
+      const data = await res.json();
+      if (data && typeof data.error === 'string' && data.error.trim()){
+        errorText += `: ${data.error.trim()}`;
+      }
+    }catch(_jsonErr){}
+    const err = new Error(appendApiBaseHint(errorText, res.status));
+    err.status = res.status;
+    throw err;
+  }
+  const blob = await res.blob();
+  const headerName = String(res.headers.get('X-Offer-Filename') || '').trim()
+    || getFilenameFromContentDisposition(res.headers.get('Content-Disposition'));
+  const offerNumber = String(res.headers.get('X-Offer-Number') || '').trim();
+  const revision = String(res.headers.get('X-Offer-Revision') || '').trim();
+  const projectName = sanitizeDownloadFileName(project?.name || 'prosjekt');
+  const fallbackName = `Tilbud-${projectName}${offerNumber ? `-${offerNumber}` : ''}${revision ? `-rev${revision}` : ''}.docx`;
+  return {
+    blob,
+    fileName: headerName || fallbackName,
+    offerNumber,
+    revision
+  };
+}
+
+function normalizeOfferSearchText(value){
+  return String(value || '').trim().toLowerCase();
+}
+
+function getOfferStatusForProject(project){
+  const id = String(project?.id || '').trim();
+  return id ? offerListState.statusByProjectId[id] || null : null;
+}
+
+function buildOfferRows(){
+  return projectState.projects.map(project=>({
+    project,
+    status: getOfferStatusForProject(project)
+  }));
+}
+
+function offerRowMatchesSearch(row){
+  const term = normalizeOfferSearchText(offerListState.searchTerm);
+  if (!term) return true;
+  const status = row.status || {};
+  const project = row.project || {};
+  const haystack = [
+    project.name,
+    project.customer,
+    project.contactPerson,
+    project.projectNumber,
+    status.offerNumber,
+    status.revision !== null && status.revision !== undefined ? `rev${status.revision}` : ''
+  ].map(value=>String(value || '').toLowerCase()).join(' ');
+  return haystack.includes(term);
+}
+
+function compareOfferRows(a, b){
+  if (offerListState.sort === 'alpha_asc'){
+    return compareNoText(a?.project?.name, b?.project?.name);
+  }
+  if (offerListState.sort === 'alpha_desc'){
+    return compareNoText(b?.project?.name, a?.project?.name);
+  }
+  const aTime = getSortableCreatedTimestamp(a?.project);
+  const bTime = getSortableCreatedTimestamp(b?.project);
+  if (offerListState.sort === 'date_oldest') return aTime - bTime;
+  return bTime - aTime;
+}
+
+function renderOffersList(){
+  const list = $('offersList');
+  if (!list) return;
+  list.innerHTML = '';
+  const rows = buildOfferRows()
+    .filter(offerRowMatchesSearch)
+    .sort(compareOfferRows);
+  if (!rows.length){
+    const empty = document.createElement('div');
+    empty.className = 'empty-state';
+    empty.innerHTML = '<p>Ingen tilbud matcher søket.</p>';
+    list.appendChild(empty);
+    return;
+  }
+  rows.forEach(row=>{
+    const project = row.project;
+    const status = row.status || {};
+    const item = document.createElement('article');
+    item.className = `offer-row${status.hasOffer ? '' : ' is-missing-offer'}`;
+
+    const body = document.createElement('div');
+    body.className = 'offer-row-body';
+    const title = document.createElement('h3');
+    title.textContent = project.projectNumber
+      ? `${project.projectNumber} - ${project.name || 'Uten navn'}`
+      : project.name || 'Uten navn';
+    const meta = document.createElement('p');
+    meta.className = 'muted-text';
+    meta.textContent = [
+      project.customer ? `Kunde: ${project.customer}` : 'Kunde: -',
+      status.hasOffer ? `Tilbud: ${status.offerNumber} rev${status.revision}` : 'Ingen genererte tilbud',
+      `Oppdatert: ${formatProjectTimestamp(project.updatedAt || project.createdAt)}`
+    ].join(' | ');
+    body.append(title, meta);
+
+    const actions = document.createElement('div');
+    actions.className = 'offer-row-actions';
+    const openWordBtn = document.createElement('button');
+    openWordBtn.type = 'button';
+    openWordBtn.className = 'btn';
+    openWordBtn.dataset.openOfferWord = project.id;
+    openWordBtn.textContent = 'Åpne Word';
+    openWordBtn.disabled = !status.hasOffer;
+    const pdfBtn = document.createElement('button');
+    pdfBtn.type = 'button';
+    pdfBtn.className = 'btn alt';
+    pdfBtn.textContent = 'PDF';
+    pdfBtn.disabled = true;
+    pdfBtn.title = 'PDF er ikke tilgjengelig før serveren får dokumentkonvertering.';
+    actions.append(openWordBtn, pdfBtn);
+
+    item.append(body, actions);
+    list.appendChild(item);
+  });
+}
+
+function updateOfferControlValues(){
+  const input = $('offerSearchInput');
+  if (input && input.value !== offerListState.searchTerm) input.value = offerListState.searchTerm;
+  const select = $('offerSortSelect');
+  if (select && PROJECT_SORT_OPTIONS.includes(offerListState.sort)) select.value = offerListState.sort;
+}
+
+function setOfferSearchTerm(value, options = {}){
+  offerListState.searchTerm = normalizeOfferSearchText(value);
+  updateOfferControlValues();
+  if (options.render !== false) renderOffersList();
+}
+
+function setOfferSortMode(mode, options = {}){
+  if (!PROJECT_SORT_OPTIONS.includes(mode)) return;
+  offerListState.sort = mode;
+  if (options.persist !== false) saveSortMode(OFFER_SORT_STORAGE_KEY, mode);
+  updateOfferControlValues();
+  if (options.render !== false) renderOffersList();
+}
+
+function setCompanySearchTerm(value){
+  globalListState.companySearchTerm = normalizeListSearchText(value);
+  renderCompanyCardsList();
+}
+
+function setCompanySortMode(mode){
+  if (!PROJECT_SORT_OPTIONS.includes(mode)) return;
+  globalListState.companySort = mode;
+  renderCompanyCardsList();
+}
+
+function setContactSearchTerm(value){
+  globalListState.contactSearchTerm = normalizeListSearchText(value);
+  renderContactPersonsList();
+}
+
+function setContactSortMode(mode){
+  if (!PROJECT_SORT_OPTIONS.includes(mode)) return;
+  globalListState.contactSort = mode;
+  renderContactPersonsList();
+}
+
+function setSharePointSearchTerm(page, value){
+  const config = SHAREPOINT_FOLDER_CONFIG[page];
+  if (!config) return;
+  const state = getSharePointListState(page);
+  state.searchTerm = normalizeListSearchText(value);
+  renderSharePointFolderItems(config, Array.isArray(state.items) ? state.items : [], page);
+}
+
+function setSharePointSortMode(page, mode){
+  const config = SHAREPOINT_FOLDER_CONFIG[page];
+  if (!config || !PROJECT_SORT_OPTIONS.includes(mode)) return;
+  const state = getSharePointListState(page);
+  state.sort = mode;
+  renderSharePointFolderItems(config, Array.isArray(state.items) ? state.items : [], page);
+}
+
+async function loadOfferStatus(options = {}){
+  const list = $('offersList');
+  if (!list) return;
+  if (!authState.loggedIn){
+    setGraphStatus('offersStatus', 'Logg inn for å vise tilbud.', 'error');
+    return;
+  }
+  if (options.silent && offerListState.loaded){
+    renderOffersList();
+    return;
+  }
+  const btn = $('refreshOffersBtn');
+  if (btn) btn.disabled = true;
+  setGraphStatus('offersStatus', 'Henter tilbud...');
+  try{
+    const res = await fetch(buildApiUrl('/api/offer-status'), {
+      headers: authHeaders()
+    });
+    if (res.status === 401 || res.status === 403){
+      clearAuthSession();
+      updateAuthUI();
+    }
+    if (!res.ok){
+      let message = `Kunne ikke hente tilbud (${res.status})`;
+      try{
+        const data = await res.json();
+        if (data?.error) message += `: ${data.error}`;
+      }catch(_err){}
+      throw new Error(appendApiBaseHint(message, res.status));
+    }
+    const payload = await res.json();
+    const next = {};
+    (Array.isArray(payload?.offers) ? payload.offers : []).forEach(item=>{
+      const projectId = String(item?.projectId || '').trim();
+      if (!projectId) return;
+      next[projectId] = {
+        offerNumber: String(item.offerNumber || '').trim(),
+        revision: item.revision === null || item.revision === undefined ? null : Number(item.revision),
+        hasOffer: item.hasOffer === true
+      };
+    });
+    offerListState.statusByProjectId = next;
+    offerListState.loaded = true;
+    renderOffersList();
+    setGraphStatus('offersStatus', `Oppdatert ${new Date().toLocaleTimeString('no-NO', { hour: '2-digit', minute: '2-digit' })}`, 'ok');
+  }catch(err){
+    console.warn('Tilbudshenting feilet', err);
+    setGraphStatus('offersStatus', err?.message || 'Kunne ikke hente tilbud.', 'error');
+  }finally{
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function openLatestOfferForProject(projectId, triggerBtn){
+  const project = getProjectById(projectId);
+  if (!project) return;
+  const btn = triggerBtn && triggerBtn.tagName === 'BUTTON' ? triggerBtn : null;
+  const originalText = btn?.textContent || '';
+  if (btn){
+    btn.disabled = true;
+    btn.textContent = 'Åpner...';
+  }
+  try{
+    const generated = await generateLatestProjectOffer(project);
+    downloadBlob(generated.blob, generated.fileName);
+  }catch(err){
+    window.alert(String(err?.message || err));
+  }finally{
+    if (btn){
+      btn.disabled = false;
+      btn.textContent = originalText || 'Åpne Word';
+    }
+  }
 }
 
 function getMissingOfferDetails(project){
@@ -3456,16 +6116,11 @@ async function requestGenerateProjectOffer(projectId, triggerBtn){
     if (generated.offerNumber){
       project.projectNumber = generated.offerNumber;
       saveProjectsToStorage();
+      offerListState.loaded = false;
       renderProjectDashboard();
+      void loadOfferStatus({ silent: true });
     }
-    const blobUrl = URL.createObjectURL(generated.blob);
-    const link = document.createElement('a');
-    link.href = blobUrl;
-    link.download = generated.fileName;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    setTimeout(()=>URL.revokeObjectURL(blobUrl), 1000);
+    downloadBlob(generated.blob, generated.fileName);
 
     if (buttonEl){
       buttonEl.textContent = generated.offerNumber ? `Generert ${generated.offerNumber}` : 'Generert';
@@ -3497,14 +6152,15 @@ function renderProjectDashboard(){
     text.textContent = 'Ingen prosjekter er registrert ennå.';
     const btn = document.createElement('button');
     btn.type = 'button';
-    btn.className = 'btn';
+    btn.className = 'btn alt';
     btn.dataset.action = 'create-project';
-    btn.textContent = 'Opprett nytt prosjekt';
+    btn.textContent = 'Nytt prosjekt';
     btn.disabled = !authState.loggedIn;
     empty.appendChild(text);
     empty.appendChild(btn);
     listEl.appendChild(empty);
     projectState.expandedProjectId = null;
+    renderOffersList();
     return;
   }
   const visibleProjects = projectState.projects.filter(project=>projectMatchesSearch(project));
@@ -3515,6 +6171,7 @@ function renderProjectDashboard(){
     text.textContent = 'Ingen prosjekter matcher søket.';
     empty.appendChild(text);
     listEl.appendChild(empty);
+    renderOffersList();
     return;
   }
   const frag = document.createDocumentFragment();
@@ -3617,6 +6274,12 @@ function renderProjectDashboard(){
     generateOfferBtn.textContent = 'Generer tilbud';
     generateOfferBtn.disabled = !projectLines.length;
 
+    const createFolderBtn = document.createElement('button');
+    createFolderBtn.type = 'button';
+    createFolderBtn.className = 'btn alt';
+    createFolderBtn.dataset.projectCreateFolder = project.id;
+    createFolderBtn.textContent = 'Opprett prosjektmappe';
+
     const copyBtn = document.createElement('button');
     copyBtn.type = 'button';
     copyBtn.className = 'btn alt';
@@ -3638,6 +6301,7 @@ function renderProjectDashboard(){
     actions.appendChild(detailBtn);
     actions.appendChild(newLineBtn);
     actions.appendChild(generateOfferBtn);
+    actions.appendChild(createFolderBtn);
     actions.appendChild(copyBtn);
     actions.appendChild(editBtn);
     actions.appendChild(deleteBtn);
@@ -3740,6 +6404,7 @@ function renderProjectDashboard(){
     frag.appendChild(row);
   });
   listEl.appendChild(frag);
+  renderOffersList();
 }
 
 async function initProjectDashboard(){
@@ -3765,6 +6430,7 @@ function applyDashboardQueryContext(){
   if (!projectId) return;
   const project = getProjectById(projectId);
   if (!project) return;
+  setDashboardPage('projects');
   const shouldFocusProject = params.get('focusProject') === '1';
   if (shouldFocusProject && projectState.projectSearchTerm && !projectMatchesSearch(project)){
     setProjectSearchTerm('', { render: false });
@@ -4218,8 +6884,11 @@ function showDashboardView(options = {}){
   if (options.clearSelection){
     projectState.expandedProjectId = null;
   }
+  if (options.forceDashboardPage || dashboardState.activePage === 'projects'){
+    setDashboardPage('projects');
+  }
   const dash = $('dashboardView');
-  if (dash) dash.hidden = false;
+  if (dash && dashboardState.activePage === 'projects') dash.hidden = false;
   renderProjectDashboard();
 }
 
@@ -4703,6 +7372,10 @@ if (projectListEl){
       requestGenerateProjectOffer(target.dataset.projectGenerateOffer, target);
       return;
     }
+    if (target.dataset.projectCreateFolder){
+      void createProjectFolderFromTemplate(target.dataset.projectCreateFolder, target);
+      return;
+    }
     if (target.dataset.projectCopy){
       openProjectModal({ mode: 'copy', copySourceProjectId: target.dataset.projectCopy });
       return;
@@ -4738,6 +7411,55 @@ if (projectListEl){
     }
   });
 }
+
+const calendarEventsListEl = $('calendarEventsList');
+if (calendarEventsListEl){
+  calendarEventsListEl.addEventListener('click', evt=>{
+    const target = evt.target instanceof Element ? evt.target.closest('[data-edit-calendar-event]') : null;
+    if (!target) return;
+    const id = String(target.getAttribute('data-edit-calendar-event') || '').trim();
+    const event = calendarViewState.events.find(item=>item.id === id);
+    if (event) openCalendarEventForm(event);
+  });
+}
+
+const calendarGridViewEl = $('calendarGridView');
+if (calendarGridViewEl){
+  calendarGridViewEl.addEventListener('click', evt=>{
+    const target = evt.target instanceof Element ? evt.target.closest('[data-edit-calendar-event]') : null;
+    if (!target) return;
+    const id = String(target.getAttribute('data-edit-calendar-event') || '').trim();
+    const event = calendarViewState.events.find(item=>item.id === id);
+    if (event) openCalendarEventForm(event);
+  });
+}
+
+const emailMessagesListEl = $('emailMessagesList');
+if (emailMessagesListEl){
+  emailMessagesListEl.addEventListener('click', evt=>{
+    const target = evt.target instanceof Element ? evt.target.closest('[data-email-message-id]') : null;
+    if (!target) return;
+    selectEmailMessage(target.getAttribute('data-email-message-id') || '');
+  });
+}
+
+const offersListEl = $('offersList');
+if (offersListEl){
+  offersListEl.addEventListener('click', evt=>{
+    const target = evt.target instanceof Element ? evt.target.closest('[data-open-offer-word]') : null;
+    if (!target) return;
+    void openLatestOfferForProject(target.getAttribute('data-open-offer-word') || '', target);
+  });
+}
+
+document.addEventListener('click', evt=>{
+  const target = evt.target instanceof Element ? evt.target.closest('[data-delete-sharepoint-item]') : null;
+  if (!target) return;
+  const page = target.getAttribute('data-sharepoint-page') || '';
+  const id = target.getAttribute('data-delete-sharepoint-item') || '';
+  const name = target.getAttribute('data-sharepoint-name') || '';
+  void deleteSharePointItem(page, id, name);
+});
 
 const saveLineBtn = $('saveLineBtn');
 if (saveLineBtn){
@@ -6481,6 +9203,7 @@ function updateSpecialElementConfigVisibility(){
 }
 
 window.addEventListener('DOMContentLoaded', async ()=>{
+  initDashboardShell();
   await initProjectDashboard();
   initMarketDataTicker();
   if (!hasCalculatorUI()){

@@ -202,13 +202,28 @@ const MICROSOFT_AUTH_REDIRECT_URI = safeString(
   process.env.MICROSOFT_AUTH_REDIRECT_URI ||
   'https://hansrisnes.github.io/busbar-webapp-embedded-v2/auth/callback'
 );
+const MICROSOFT_AUTH_ALLOWED_ORIGINS = new Set([
+  ...parseCsvEnv(process.env.MICROSOFT_AUTH_ALLOWED_ORIGINS),
+  'https://hansrisnes.github.io',
+  'http://localhost:5500',
+  'http://127.0.0.1:5500'
+]);
 const MICROSOFT_AUTH_SCOPES = parseCsvEnv(
   process.env.MICROSOFT_AUTH_SCOPES ||
-  'openid,profile,email'
+  'openid,profile,email,Calendars.Read,Mail.Read,Files.Read.All,Sites.Read.All'
 );
+const MICROSOFT_AUTH_CLIENT_SECRET = safeString(
+  process.env.MICROSOFT_AUTH_CLIENT_SECRET ||
+  process.env.MS_AUTH_CLIENT_SECRET
+);
+const MICROSOFT_GRAPH_SCOPE = 'https://graph.microsoft.com/.default';
 const MICROSOFT_AUTH_ISSUER = `https://login.microsoftonline.com/${MICROSOFT_AUTH_TENANT_ID}/v2.0`;
 const MICROSOFT_AUTH_JWKS_URL = `https://login.microsoftonline.com/${MICROSOFT_AUTH_TENANT_ID}/discovery/v2.0/keys`;
+const MICROSOFT_OWNER_CACHE_TTL_MS = 5 * 60 * 1000;
+const ADMIN_OWNER_EMAILS = new Set(['hans.jakob.risnes@busbar.no']);
 let microsoftJwksCache = { fetchedAt: 0, keys: [] };
+let microsoftOwnerCache = { fetchedAt: 0, ownerIds: new Set() };
+let microsoftOwnerSecretWarned = false;
 
 if (!process.env.ADMIN_USERNAME || !process.env.ADMIN_PASSWORD) {
   console.warn(
@@ -465,6 +480,11 @@ function normalizeUserProfile(raw) {
   };
 }
 
+function hasAnyUserProfileValue(profile) {
+  const normalized = normalizeUserProfile(profile);
+  return Boolean(normalized.name || normalized.phone || normalized.company || normalized.position);
+}
+
 function isCompleteUserProfile(profile) {
   return Boolean(
     safeString(profile?.name) &&
@@ -485,10 +505,23 @@ function signAuthPayload(encodedPayload) {
     .digest('base64url');
 }
 
-function createAuthToken(email) {
+function isFallbackAdminEmail(email) {
+  return ADMIN_OWNER_EMAILS.has(normalizeEmail(email));
+}
+
+function isStoredMicrosoftOwner(userRecord) {
+  return Boolean(userRecord?.microsoft?.isOwner);
+}
+
+function resolveUserIsAdmin(userRecord) {
+  return isFallbackAdminEmail(userRecord?.email) || isStoredMicrosoftOwner(userRecord);
+}
+
+function createAuthToken(email, options = {}) {
   const now = Math.floor(Date.now() / 1000);
   const payload = {
     email,
+    isAdmin: Boolean(options.isAdmin),
     iat: now,
     exp: now + AUTH_TOKEN_TTL_SECONDS
   };
@@ -512,9 +545,79 @@ function verifyAuthToken(token) {
     const exp = Number(payload?.exp);
     if (!isValidEmail(email) || !Number.isFinite(exp)) return null;
     if (exp < Math.floor(Date.now() / 1000)) return null;
-    return { email };
+    return { email, isAdmin: payload?.isAdmin === true };
   } catch (_err) {
     return null;
+  }
+}
+
+async function getMicrosoftGraphAppToken() {
+  if (!MICROSOFT_AUTH_CLIENT_SECRET) {
+    if (!microsoftOwnerSecretWarned) {
+      microsoftOwnerSecretWarned = true;
+      console.warn('[microsoft-auth] MICROSOFT_AUTH_CLIENT_SECRET mangler. Entra Owner-sjekk er deaktivert.');
+    }
+    return '';
+  }
+  const graphCredential = new ClientSecretCredential(
+    MICROSOFT_AUTH_TENANT_ID,
+    MICROSOFT_AUTH_CLIENT_ID,
+    MICROSOFT_AUTH_CLIENT_SECRET
+  );
+  const token = await graphCredential.getToken(MICROSOFT_GRAPH_SCOPE);
+  return token?.token || '';
+}
+
+async function fetchMicrosoftGraphJson(url) {
+  const accessToken = await getMicrosoftGraphAppToken();
+  if (!accessToken) return null;
+  const res = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      Accept: 'application/json'
+    }
+  });
+  if (!res.ok) {
+    throw new Error(`Microsoft Graph svarte ${res.status}`);
+  }
+  return res.json();
+}
+
+async function getMicrosoftAuthAppOwnerIds() {
+  const now = Date.now();
+  if (microsoftOwnerCache.fetchedAt && now - microsoftOwnerCache.fetchedAt < MICROSOFT_OWNER_CACHE_TTL_MS) {
+    return microsoftOwnerCache.ownerIds;
+  }
+  const filter = encodeURIComponent(`appId eq '${MICROSOFT_AUTH_CLIENT_ID}'`);
+  const appPayload = await fetchMicrosoftGraphJson(
+    `https://graph.microsoft.com/v1.0/applications?$filter=${filter}&$select=id,appId`
+  );
+  const appObjectId = Array.isArray(appPayload?.value) ? safeString(appPayload.value[0]?.id) : '';
+  const ownerIds = new Set();
+  if (appObjectId) {
+    let nextUrl = `https://graph.microsoft.com/v1.0/applications/${encodeURIComponent(appObjectId)}/owners?$select=id`;
+    while (nextUrl) {
+      const ownersPayload = await fetchMicrosoftGraphJson(nextUrl);
+      (Array.isArray(ownersPayload?.value) ? ownersPayload.value : []).forEach(owner => {
+        const ownerId = safeString(owner?.id);
+        if (ownerId) ownerIds.add(ownerId);
+      });
+      nextUrl = safeString(ownersPayload?.['@odata.nextLink']);
+    }
+  }
+  microsoftOwnerCache = { fetchedAt: now, ownerIds };
+  return ownerIds;
+}
+
+async function isMicrosoftAppOwner(objectId) {
+  const oid = safeString(objectId);
+  if (!oid) return false;
+  try {
+    const ownerIds = await getMicrosoftAuthAppOwnerIds();
+    return ownerIds.has(oid);
+  } catch (err) {
+    console.warn('[microsoft-auth] Kunne ikke sjekke Entra Owners', err?.message || err);
+    return false;
   }
 }
 
@@ -595,6 +698,30 @@ function verifyMicrosoftIdTokenWithJwk(rawToken, parts, payload, jwk) {
   };
 }
 
+function normalizeMicrosoftAuthOrigin(value) {
+  const raw = safeString(value);
+  if (!raw) return '';
+  try {
+    const parsed = new URL(raw);
+    if (!['http:', 'https:'].includes(parsed.protocol)) return '';
+    return parsed.origin;
+  } catch (_err) {
+    return '';
+  }
+}
+
+function resolveMicrosoftRedirectUri(req) {
+  const requestedOrigin = normalizeMicrosoftAuthOrigin(req.query?.origin || req.headers.origin);
+  const fallback = MICROSOFT_AUTH_REDIRECT_URI;
+  if (!requestedOrigin || !MICROSOFT_AUTH_ALLOWED_ORIGINS.has(requestedOrigin)) {
+    return fallback;
+  }
+  if (requestedOrigin === 'https://hansrisnes.github.io') {
+    return `${requestedOrigin}/busbar-webapp-embedded-v2/auth/callback`;
+  }
+  return `${requestedOrigin}/auth/callback`;
+}
+
 function getBearerToken(req) {
   const header = safeString(req.headers.authorization);
   if (!header.toLowerCase().startsWith('bearer ')) return '';
@@ -608,6 +735,13 @@ function requireUserAuth(req, res, next) {
   }
   req.userAuth = auth;
   return next();
+}
+
+function requireMicrosoftOwnerAuth(req, res, next) {
+  if (req.userAuth?.isAdmin === true) {
+    return next();
+  }
+  return res.status(403).json({ error: 'Kun Owners i Entra kan redigere globale firmadata' });
 }
 
 async function hashPassword(password) {
@@ -628,10 +762,20 @@ async function verifyPassword(password, storedHash) {
 
 function normalizeUserAuthRecord(email, raw) {
   const now = new Date().toISOString();
+  const microsoft = raw?.microsoft && typeof raw.microsoft === 'object'
+    ? {
+        oid: safeString(raw.microsoft.oid),
+        tenantId: safeString(raw.microsoft.tenantId),
+        isOwner: raw.microsoft.isOwner === true,
+        linkedAt: toIsoTimestamp(raw.microsoft.linkedAt, now),
+        lastLoginAt: toIsoTimestamp(raw.microsoft.lastLoginAt || raw.microsoft.linkedAt, now)
+      }
+    : null;
   return {
     email,
     profile: normalizeUserProfile(raw?.profile || raw),
     passwordHash: safeString(raw?.passwordHash),
+    ...(microsoft?.oid ? { microsoft } : {}),
     createdAt: toIsoTimestamp(raw?.createdAt, now),
     updatedAt: toIsoTimestamp(raw?.updatedAt || raw?.createdAt, now)
   };
@@ -647,7 +791,7 @@ async function readUserAuthStore() {
     const email = normalizeEmail(key || value?.email);
     if (!isValidEmail(email)) return;
     const user = normalizeUserAuthRecord(email, value);
-    if (!user.passwordHash) return;
+    if (!user.passwordHash && !user.microsoft?.oid && !hasAnyUserProfileValue(user.profile)) return;
     users[email] = user;
   });
   return { users };
@@ -663,11 +807,13 @@ async function writeUserAuthStore(state) {
 function normalizeCustomerContact(raw) {
   const name = safeString(raw?.name || raw?.contactPerson || raw?.contact);
   const phone = safeString(raw?.phone || raw?.contactPhone);
-  if (!name && !phone) return null;
+  const email = safeString(raw?.email || raw?.contactEmail);
+  if (!name && !phone && !email) return null;
   return {
     id: safeString(raw?.id) || generateRecordId('contact'),
     name,
-    phone
+    phone,
+    email
   };
 }
 
@@ -688,6 +834,8 @@ function normalizeCustomerRecord(raw) {
     name,
     address: safeString(raw?.address || raw?.customerAddress),
     postalPlace: safeString(raw?.postalPlace || raw?.customerPostalPlace),
+    segment: safeString(raw?.segment || raw?.customerSegment),
+    projectCount: Number.isFinite(Number(raw?.projectCount)) ? Number(raw.projectCount) : 0,
     contacts: Array.from(contactsByKey.values())
   };
 }
@@ -720,17 +868,21 @@ function mergeCustomerIntoMap(map, customerInput) {
     name: customer.name,
     address: '',
     postalPlace: '',
+    segment: '',
+    projectCount: 0,
     contacts: []
   };
   existing.name = existing.name || customer.name;
   if (!existing.address && customer.address) existing.address = customer.address;
   if (!existing.postalPlace && customer.postalPlace) existing.postalPlace = customer.postalPlace;
+  if (!existing.segment && customer.segment) existing.segment = customer.segment;
   const contactsByKey = new Map(existing.contacts.map(contact => [normalizeLookupKey(contact.name), contact]));
   customer.contacts.forEach(contact => {
     const contactKey = normalizeLookupKey(contact.name);
     if (!contactKey) return;
-    const existingContact = contactsByKey.get(contactKey) || { id: contact.id, name: contact.name, phone: '' };
+    const existingContact = contactsByKey.get(contactKey) || { id: contact.id, name: contact.name, phone: '', email: '' };
     if (!existingContact.phone && contact.phone) existingContact.phone = contact.phone;
+    if (!existingContact.email && contact.email) existingContact.email = contact.email;
     contactsByKey.set(contactKey, existingContact);
   });
   existing.contacts = Array.from(contactsByKey.values());
@@ -743,11 +895,19 @@ async function buildMergedCustomerDatabase() {
     readProjectArchive()
   ]);
   const byKey = new Map();
+  const projectKeysByCustomer = new Map();
   database.customers.forEach(customer => mergeCustomerIntoMap(byKey, customer));
   Object.values(archive.users || {}).forEach(user => {
     (Array.isArray(user.projects) ? user.projects : []).forEach(project => {
       const customerName = safeString(project.customer);
       if (!customerName) return;
+      const customerKey = normalizeLookupKey(customerName);
+      const projectKey = safeString(project.id || project.projectNumber || project.name || project.createdAt);
+      if (projectKey) {
+        const projectKeys = projectKeysByCustomer.get(customerKey) || new Set();
+        projectKeys.add(projectKey);
+        projectKeysByCustomer.set(customerKey, projectKeys);
+      }
       mergeCustomerIntoMap(byKey, {
         name: customerName,
         address: project.customerAddress,
@@ -758,7 +918,10 @@ async function buildMergedCustomerDatabase() {
       });
     });
   });
-  const customers = Array.from(byKey.values()).sort((a, b) => a.name.localeCompare(b.name, 'no', {
+  const customers = Array.from(byKey.values()).map(customer => ({
+    ...customer,
+    projectCount: projectKeysByCustomer.get(normalizeLookupKey(customer.name))?.size || 0
+  })).sort((a, b) => a.name.localeCompare(b.name, 'no', {
     sensitivity: 'base',
     numeric: true
   }));
@@ -1012,6 +1175,32 @@ async function allocateOfferIdentity(project, date = new Date()) {
     ]);
 
     return { offerNumber, revision };
+  });
+}
+
+async function getOfferStatusForProjects(projects) {
+  const [projectNumbersRaw, revisionsRaw] = await Promise.all([
+    readJsonFile(OFFER_PROJECT_NUMBERS_FILE, {}),
+    readJsonFile(OFFER_REVISIONS_FILE, {})
+  ]);
+  const projectNumbers = (projectNumbersRaw && typeof projectNumbersRaw === 'object')
+    ? projectNumbersRaw
+    : {};
+  const revisions = (revisionsRaw && typeof revisionsRaw === 'object')
+    ? revisionsRaw
+    : {};
+  return (Array.isArray(projects) ? projects : []).map(project=>{
+    const key = resolveProjectOfferKey(project);
+    const revisionValue = Number(revisions[key]);
+    const revision = Number.isInteger(revisionValue) && revisionValue >= 0 ? revisionValue : null;
+    const projectNumber = safeString(project?.projectNumber) || safeString(projectNumbers[key]);
+    return {
+      projectId: safeString(project?.id),
+      projectKey: key,
+      offerNumber: isValidOfferNumber(projectNumber) ? projectNumber : '',
+      revision,
+      hasOffer: revision !== null && isValidOfferNumber(projectNumber)
+    };
   });
 }
 
@@ -3241,16 +3430,17 @@ app.get('/api/market-data', async (req, res) => {
   }
 });
 
-app.get('/api/auth/microsoft/config', (_req, res) => {
+app.get('/api/auth/microsoft/config', (req, res) => {
   if (!MICROSOFT_AUTH_TENANT_ID || !MICROSOFT_AUTH_CLIENT_ID) {
     return res.status(503).json({ enabled: false, error: 'Microsoft-innlogging er ikke konfigurert' });
   }
+  const redirectUri = resolveMicrosoftRedirectUri(req);
   return res.json({
     enabled: true,
     tenantId: MICROSOFT_AUTH_TENANT_ID,
     clientId: MICROSOFT_AUTH_CLIENT_ID,
     authority: `https://login.microsoftonline.com/${MICROSOFT_AUTH_TENANT_ID}`,
-    redirectUri: MICROSOFT_AUTH_REDIRECT_URI,
+    redirectUri,
     scopes: MICROSOFT_AUTH_SCOPES
   });
 });
@@ -3261,6 +3451,7 @@ app.post('/api/auth/microsoft/session', async (req, res) => {
     if (!microsoftUser) {
       return res.status(401).json({ error: 'Microsoft-innlogging kunne ikke valideres' });
     }
+    const isOwner = await isMicrosoftAppOwner(microsoftUser.oid);
 
     const userRecord = await withUserAuthLock(async () => {
       const store = await readUserAuthStore();
@@ -3282,6 +3473,7 @@ app.post('/api/auth/microsoft/session', async (req, res) => {
         microsoft: {
           oid: microsoftUser.oid,
           tenantId: microsoftUser.tenantId,
+          isOwner,
           linkedAt: existing?.microsoft?.linkedAt || now,
           lastLoginAt: now
         },
@@ -3291,11 +3483,13 @@ app.post('/api/auth/microsoft/session', async (req, res) => {
       await writeUserAuthStore(store);
       return store.users[microsoftUser.email];
     });
+    const isAdmin = resolveUserIsAdmin(userRecord);
 
     return res.json({
       email: userRecord.email,
       profile: userRecord.profile,
-      token: createAuthToken(userRecord.email)
+      isAdmin,
+      token: createAuthToken(userRecord.email, { isAdmin })
     });
   } catch (err) {
     console.error('Microsoft-innlogging feilet', err);
@@ -3344,7 +3538,8 @@ app.post('/api/auth/register', async (req, res) => {
     return res.status(201).json({
       email: userRecord.email,
       profile: userRecord.profile,
-      token: createAuthToken(userRecord.email)
+      isAdmin: resolveUserIsAdmin(userRecord),
+      token: createAuthToken(userRecord.email, { isAdmin: resolveUserIsAdmin(userRecord) })
     });
   } catch (err) {
     if (err?.statusCode === 409) {
@@ -3369,10 +3564,12 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(401).json({ error: 'Feil e-post eller passord' });
     }
 
+    const isAdmin = resolveUserIsAdmin(userRecord);
     return res.json({
       email: userRecord.email,
       profile: userRecord.profile,
-      token: createAuthToken(userRecord.email)
+      isAdmin,
+      token: createAuthToken(userRecord.email, { isAdmin })
     });
   } catch (err) {
     console.error('Innlogging feilet', err);
@@ -3484,6 +3681,149 @@ app.post('/api/user-projects/sync', requireUserAuth, async (req, res) => {
   }
 });
 
+async function upsertGlobalCustomerRecord(body) {
+  const originalCustomer = safeString(body?.originalCustomer);
+  const originalContactPerson = safeString(body?.originalContactPerson);
+  const customerName = safeString(body?.customer);
+  const address = safeString(body?.address);
+  const postalPlace = safeString(body?.postalPlace);
+  const segment = safeString(body?.segment);
+  const contactPerson = safeString(body?.contactPerson);
+  const phone = safeString(body?.phone);
+  const email = safeString(body?.email);
+  const isContactUpdate = Boolean(originalContactPerson || contactPerson || phone || email);
+  if (!customerName) {
+    const err = new Error('Kunde mangler');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const result = await withCustomerDatabaseLock(async () => {
+    const database = await readCustomerDatabase();
+    const customers = database.customers;
+    const findCustomerIndex = name => customers.findIndex(customer => normalizeLookupKey(customer.name) === normalizeLookupKey(name));
+    let customerIndex = originalCustomer ? findCustomerIndex(originalCustomer) : -1;
+    if (customerIndex < 0) customerIndex = findCustomerIndex(customerName);
+    let customer = customerIndex >= 0 ? customers[customerIndex] : null;
+    if (!customer) {
+      customer = {
+        id: generateRecordId('customer'),
+        name: customerName,
+        address,
+        postalPlace,
+        segment,
+        contacts: []
+      };
+      customers.push(customer);
+    }
+    customer.name = customerName;
+    customer.address = address;
+    customer.postalPlace = postalPlace;
+    customer.segment = segment;
+    if (isContactUpdate) {
+      const findContactIndex = name => customer.contacts.findIndex(contact => normalizeLookupKey(contact.name) === normalizeLookupKey(name));
+      let contactIndex = originalContactPerson ? findContactIndex(originalContactPerson) : -1;
+      if (contactIndex < 0) contactIndex = findContactIndex(contactPerson);
+      let contact = contactIndex >= 0 ? customer.contacts[contactIndex] : null;
+      if (!contact) {
+        contact = { id: generateRecordId('contact'), name: contactPerson, phone, email };
+        customer.contacts.push(contact);
+      }
+      contact.name = contactPerson;
+      contact.phone = phone;
+      contact.email = email;
+    }
+    await writeCustomerDatabase({ customers });
+
+    let updatedProjects = 0;
+    const archive = await readProjectArchive();
+    Object.values(archive.users || {}).forEach(user => {
+      (Array.isArray(user.projects) ? user.projects : []).forEach(project => {
+        const customerMatches = originalCustomer
+          ? normalizeLookupKey(project.customer) === normalizeLookupKey(originalCustomer)
+          : false;
+        if (!customerMatches) return;
+        if (!isContactUpdate) {
+          project.customer = customerName;
+          project.customerAddress = address;
+          project.customerPostalPlace = postalPlace;
+        }
+        if (isContactUpdate && normalizeLookupKey(project.contactPerson) === normalizeLookupKey(originalContactPerson || contactPerson)) {
+          project.contactPerson = contactPerson;
+          project.contactPhone = phone;
+        }
+        project.updatedAt = new Date().toISOString();
+        updatedProjects += 1;
+      });
+    });
+    if (originalCustomer) {
+      await writeProjectArchive(archive);
+    }
+    return { updatedProjects };
+  });
+
+  const merged = await buildMergedCustomerDatabase();
+  return {
+    ...result,
+    customers: merged.customers
+  };
+}
+
+async function deleteGlobalCustomerRecord(body) {
+  const customerName = safeString(body?.customer);
+  const contactPerson = safeString(body?.contactPerson);
+  if (!customerName) {
+    const err = new Error('Kunde mangler');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const result = await withCustomerDatabaseLock(async () => {
+    const database = await readCustomerDatabase();
+    const customers = database.customers;
+    const customerIndex = customers.findIndex(customer => normalizeLookupKey(customer.name) === normalizeLookupKey(customerName));
+    if (customerIndex >= 0) {
+      if (contactPerson) {
+        customers[customerIndex].contacts = customers[customerIndex].contacts.filter(
+          contact => normalizeLookupKey(contact.name) !== normalizeLookupKey(contactPerson)
+        );
+      } else {
+        customers.splice(customerIndex, 1);
+      }
+      await writeCustomerDatabase({ customers });
+    }
+
+    let updatedProjects = 0;
+    const archive = await readProjectArchive();
+    Object.values(archive.users || {}).forEach(user => {
+      (Array.isArray(user.projects) ? user.projects : []).forEach(project => {
+        if (normalizeLookupKey(project.customer) !== normalizeLookupKey(customerName)) return;
+        if (contactPerson) {
+          if (normalizeLookupKey(project.contactPerson) !== normalizeLookupKey(contactPerson)) return;
+          project.contactPerson = '';
+          project.contactPhone = '';
+        } else {
+          project.customer = '';
+          project.customerAddress = '';
+          project.customerPostalPlace = '';
+          project.contactPerson = '';
+          project.contactPhone = '';
+        }
+        project.updatedAt = new Date().toISOString();
+        updatedProjects += 1;
+      });
+    });
+    await writeProjectArchive(archive);
+    return { updatedProjects };
+  });
+
+  const merged = await buildMergedCustomerDatabase();
+  return {
+    ...result,
+    customers: merged.customers
+  };
+}
+
 app.get('/api/customer-database', requireUserAuth, async (_req, res) => {
   try {
     const database = await buildMergedCustomerDatabase();
@@ -3491,6 +3831,32 @@ app.get('/api/customer-database', requireUserAuth, async (_req, res) => {
   } catch (err) {
     console.error('Henting av kundedatabase feilet', err);
     return res.status(500).json({ error: 'Kunne ikke hente kundedatabase' });
+  }
+});
+
+app.post('/api/customer-database/upsert', requireUserAuth, requireMicrosoftOwnerAuth, async (req, res) => {
+  try {
+    const result = await upsertGlobalCustomerRecord(req.body);
+    return res.json(result);
+  } catch (err) {
+    if (err?.statusCode === 400) {
+      return res.status(400).json({ error: err.message });
+    }
+    console.error('Oppdatering av global kundedatabase feilet', err);
+    return res.status(500).json({ error: 'Kunne ikke oppdatere kundedatabase' });
+  }
+});
+
+app.post('/api/customer-database/delete', requireUserAuth, requireMicrosoftOwnerAuth, async (req, res) => {
+  try {
+    const result = await deleteGlobalCustomerRecord(req.body);
+    return res.json(result);
+  } catch (err) {
+    if (err?.statusCode === 400) {
+      return res.status(400).json({ error: err.message });
+    }
+    console.error('Sletting i global kundedatabase feilet', err);
+    return res.status(500).json({ error: 'Kunne ikke slette fra kundedatabase' });
   }
 });
 
@@ -3511,12 +3877,14 @@ app.post('/api/admin/customer-database/upsert', requireAdminAuth, async (req, re
   try {
     const originalCustomer = safeString(req.body?.originalCustomer);
     const originalContactPerson = safeString(req.body?.originalContactPerson);
-    const customerName = safeString(req.body?.customer);
-    const address = safeString(req.body?.address);
-    const postalPlace = safeString(req.body?.postalPlace);
-    const contactPerson = safeString(req.body?.contactPerson);
-    const phone = safeString(req.body?.phone);
-    const isContactUpdate = Boolean(originalContactPerson || contactPerson || phone);
+  const customerName = safeString(req.body?.customer);
+  const address = safeString(req.body?.address);
+  const postalPlace = safeString(req.body?.postalPlace);
+  const segment = safeString(req.body?.segment);
+  const contactPerson = safeString(req.body?.contactPerson);
+  const phone = safeString(req.body?.phone);
+  const email = safeString(req.body?.email);
+  const isContactUpdate = Boolean(originalContactPerson || contactPerson || phone || email);
     if (!customerName) {
       return res.status(400).json({ error: 'Kunde mangler' });
     }
@@ -3534,6 +3902,7 @@ app.post('/api/admin/customer-database/upsert', requireAdminAuth, async (req, re
           name: customerName,
           address,
           postalPlace,
+          segment,
           contacts: []
         };
         customers.push(customer);
@@ -3541,17 +3910,19 @@ app.post('/api/admin/customer-database/upsert', requireAdminAuth, async (req, re
       customer.name = customerName;
       customer.address = address;
       customer.postalPlace = postalPlace;
+      customer.segment = segment;
       if (isContactUpdate) {
         const findContactIndex = name => customer.contacts.findIndex(contact => normalizeLookupKey(contact.name) === normalizeLookupKey(name));
         let contactIndex = originalContactPerson ? findContactIndex(originalContactPerson) : -1;
         if (contactIndex < 0) contactIndex = findContactIndex(contactPerson);
         let contact = contactIndex >= 0 ? customer.contacts[contactIndex] : null;
         if (!contact) {
-          contact = { id: generateRecordId('contact'), name: contactPerson, phone };
+          contact = { id: generateRecordId('contact'), name: contactPerson, phone, email };
           customer.contacts.push(contact);
         }
         contact.name = contactPerson;
         contact.phone = phone;
+        contact.email = email;
       }
       await writeCustomerDatabase({ customers });
 
@@ -3655,7 +4026,13 @@ app.get('/api/admin/project-overview', requireAdminAuth, async (req, res) => {
   try {
     const archive = await readProjectArchive();
     const authStore = await readUserAuthStore();
-    const users = Object.values(archive.users).map(user => {
+    const userEmails = new Set([
+      ...Object.keys(archive.users || {}),
+      ...Object.keys(authStore.users || {})
+    ]);
+    const users = Array.from(userEmails).map(email => {
+      const user = archive.users[email] || { email, updatedAt: null, projects: [] };
+      const authRecord = authStore.users[email] || null;
       const projects = Array.isArray(user.projects) ? user.projects : [];
       const projectsWithCounts = projects.map(project => ({
         ...project,
@@ -3666,8 +4043,12 @@ app.get('/api/admin/project-overview', requireAdminAuth, async (req, res) => {
       }, 0);
       return {
         email: user.email,
-        profile: authStore.users[user.email]?.profile || null,
-        registered: Boolean(authStore.users[user.email]),
+        profile: authRecord?.profile || null,
+        registered: Boolean(authRecord),
+        hasPassword: Boolean(authRecord?.passwordHash),
+        microsoftLinked: Boolean(authRecord?.microsoft?.oid),
+        isAdmin: resolveUserIsAdmin(authRecord || { email }),
+        authUpdatedAt: authRecord?.updatedAt || null,
         updatedAt: user.updatedAt,
         projectCount: projectsWithCounts.length,
         lineCount,
@@ -3696,6 +4077,42 @@ app.get('/api/admin/project-overview', requireAdminAuth, async (req, res) => {
   } catch (err) {
     console.error('Henting av admin-oversikt feilet', err);
     return res.status(500).json({ error: 'Kunne ikke hente admin-oversikt' });
+  }
+});
+
+app.post('/api/admin/users/profile', requireAdminAuth, async (req, res) => {
+  try {
+    const email = normalizeEmail(req.body?.email);
+    const profile = normalizeUserProfile(req.body?.profile || req.body);
+    if (!isValidEmail(email)) {
+      return res.status(400).json({ error: 'Ugyldig e-post' });
+    }
+
+    const userRecord = await withUserAuthLock(async () => {
+      const store = await readUserAuthStore();
+      const existing = store.users[email] || {};
+      const now = new Date().toISOString();
+      store.users[email] = {
+        ...existing,
+        email,
+        profile,
+        passwordHash: safeString(existing.passwordHash),
+        ...(existing.microsoft?.oid ? { microsoft: existing.microsoft } : {}),
+        createdAt: toIsoTimestamp(existing.createdAt, now),
+        updatedAt: now
+      };
+      await writeUserAuthStore(store);
+      return store.users[email];
+    });
+
+    return res.json({
+      email: userRecord.email,
+      profile: userRecord.profile,
+      updatedAt: userRecord.updatedAt
+    });
+  } catch (err) {
+    console.error('Oppdatering av brukerprofil feilet', err);
+    return res.status(500).json({ error: 'Kunne ikke oppdatere brukerprofil' });
   }
 });
 
@@ -3815,6 +4232,64 @@ app.post('/api/generate-offer', requireUserAuth, async (req, res) => {
       return res.status(500).json({ error: 'Fant ikke tilbudsmalen i server/templates/tilbud' });
     }
     res.status(500).json({ error: 'Kunne ikke generere tilbud' });
+  }
+});
+
+app.get('/api/offer-status', requireUserAuth, async (req, res) => {
+  try {
+    const archive = await readProjectArchive();
+    const user = archive.users[req.userAuth.email];
+    const projects = Array.isArray(user?.projects) ? user.projects : [];
+    const offers = await getOfferStatusForProjects(projects);
+    res.json({ offers });
+  } catch (err) {
+    console.error('Henting av tilbudsstatus feilet', err);
+    res.status(500).json({ error: 'Kunne ikke hente tilbudsstatus' });
+  }
+});
+
+app.post('/api/generate-offer-latest', requireUserAuth, async (req, res) => {
+  try {
+    const project = (req.body && typeof req.body === 'object') ? req.body.project : null;
+    if (!project || typeof project !== 'object') {
+      return res.status(400).json({ error: 'Mangler prosjektdata' });
+    }
+    const authStore = await readUserAuthStore();
+    const userRecord = authStore.users[req.userAuth.email];
+    if (!userRecord) {
+      return res.status(401).json({ error: 'Logg inn for å åpne tilbud' });
+    }
+
+    const status = (await getOfferStatusForProjects([project]))[0];
+    if (!status?.hasOffer) {
+      return res.status(404).json({ error: 'Prosjektet har ikke et generert tilbud ennå' });
+    }
+
+    const revision = Number(status.revision);
+    const offerNumber = status.offerNumber;
+    project.projectNumber = offerNumber;
+    const generated = await generateOfferDocx(project, offerNumber, new Date(), revision, {
+      email: userRecord.email,
+      ...userRecord.profile
+    });
+    const projectName = sanitizeFileName(project.name || 'prosjekt');
+    const fileName = `Tilbud-${projectName}-${offerNumber}-rev${revision}.docx`;
+    const encodedFileName = encodeURIComponent(fileName);
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"; filename*=UTF-8''${encodedFileName}`);
+    res.setHeader('X-Offer-Number', offerNumber);
+    res.setHeader('X-Offer-Revision', String(revision));
+    res.setHeader('X-Offer-Filename', fileName);
+    res.setHeader('X-Offer-Template', path.basename(generated.templateFile));
+    res.setHeader('X-Offer-Template-Path', generated.templateFile);
+    res.status(200).send(generated.buffer);
+  } catch (err) {
+    console.error('Åpning av siste tilbud feilet', err);
+    if (err && err.code === 'ENOENT') {
+      return res.status(500).json({ error: 'Fant ikke tilbudsmalen i server/templates/tilbud' });
+    }
+    res.status(500).json({ error: 'Kunne ikke åpne siste tilbud' });
   }
 });
 
