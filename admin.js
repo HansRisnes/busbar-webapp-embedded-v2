@@ -591,6 +591,7 @@ function buildCustomerRows(customers){
       address: customer?.address || '-',
       postalPlace: customer?.postalPlace || '-',
       segment: customer?.segment || '-',
+      customerResponsible: customer?.customerResponsible || '-',
       projectCount: Number.isFinite(Number(customer?.projectCount)) ? Number(customer.projectCount) : 0
     });
   });
@@ -873,7 +874,7 @@ function getUserFormPayload(){
 }
 
 function clearCustomerForm(){
-  ['adminCustomerOriginalCustomer','adminCustomerOriginalContact','adminCustomerName','adminCustomerAddress','adminCustomerPostalPlace','adminCustomerSegment','adminCustomerContact','adminCustomerPhone','adminCustomerEmail'].forEach(id=>{
+  ['adminCustomerOriginalCustomer','adminCustomerOriginalContact','adminCustomerName','adminCustomerAddress','adminCustomerPostalPlace','adminCustomerSegment','adminCustomerResponsible','adminCustomerContact','adminCustomerPhone','adminCustomerEmail'].forEach(id=>{
     const el = $(id);
     if (el) el.value = '';
   });
@@ -888,6 +889,7 @@ function setCustomerFormMode(mode){
   const addressInput = $('adminCustomerAddress');
   const postalInput = $('adminCustomerPostalPlace');
   const segmentInput = $('adminCustomerSegment');
+  const responsibleInput = $('adminCustomerResponsible');
   const contactInput = $('adminCustomerContact');
   const phoneInput = $('adminCustomerPhone');
   const emailInput = $('adminCustomerEmail');
@@ -895,6 +897,7 @@ function setCustomerFormMode(mode){
   if (addressInput) addressInput.disabled = isContactMode;
   if (postalInput) postalInput.disabled = isContactMode;
   if (segmentInput) segmentInput.disabled = isContactMode;
+  if (responsibleInput) responsibleInput.disabled = isContactMode;
   if (contactInput) contactInput.disabled = isCustomerMode;
   if (phoneInput) phoneInput.disabled = isCustomerMode;
   if (emailInput) emailInput.disabled = isCustomerMode;
@@ -911,6 +914,7 @@ function fillCustomerForm(row){
     adminCustomerAddress: row?.address === '-' ? '' : row?.address || customerRecord.address || '',
     adminCustomerPostalPlace: row?.postalPlace === '-' ? '' : row?.postalPlace || customerRecord.postalPlace || '',
     adminCustomerSegment: row?.segment === '-' ? '' : row?.segment || customerRecord.segment || '',
+    adminCustomerResponsible: row?.customerResponsible === '-' ? '' : row?.customerResponsible || customerRecord.customerResponsible || '',
     adminCustomerContact: contact === '-' ? '' : contact,
     adminCustomerPhone: row?.phone === '-' ? '' : row?.phone || '',
     adminCustomerEmail: row?.email === '-' ? '' : row?.email || ''
@@ -941,6 +945,7 @@ function getCustomerFormPayload(){
     address: String($('adminCustomerAddress')?.value || '').trim(),
     postalPlace: String($('adminCustomerPostalPlace')?.value || '').trim(),
     segment: String($('adminCustomerSegment')?.value || '').trim(),
+    customerResponsible: String($('adminCustomerResponsible')?.value || '').trim(),
     contactPerson: String($('adminCustomerContact')?.value || '').trim(),
     phone: String($('adminCustomerPhone')?.value || '').trim(),
     email: String($('adminCustomerEmail')?.value || '').trim()
@@ -1151,6 +1156,7 @@ async function handleCustomerSave(){
     payload.address = customerRecord?.address || '';
     payload.postalPlace = customerRecord?.postalPlace || '';
     payload.segment = customerRecord?.segment || '';
+    payload.customerResponsible = customerRecord?.customerResponsible || '';
   } else if (payload.originalCustomer){
     payload.contactPerson = '';
     payload.phone = '';

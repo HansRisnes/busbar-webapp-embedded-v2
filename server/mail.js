@@ -835,6 +835,7 @@ function normalizeCustomerRecord(raw) {
     address: safeString(raw?.address || raw?.customerAddress),
     postalPlace: safeString(raw?.postalPlace || raw?.customerPostalPlace),
     segment: safeString(raw?.segment || raw?.customerSegment),
+    customerResponsible: safeString(raw?.customerResponsible || raw?.responsible),
     projectCount: Number.isFinite(Number(raw?.projectCount)) ? Number(raw.projectCount) : 0,
     contacts: Array.from(contactsByKey.values())
   };
@@ -869,6 +870,7 @@ function mergeCustomerIntoMap(map, customerInput) {
     address: '',
     postalPlace: '',
     segment: '',
+    customerResponsible: '',
     projectCount: 0,
     contacts: []
   };
@@ -876,6 +878,7 @@ function mergeCustomerIntoMap(map, customerInput) {
   if (!existing.address && customer.address) existing.address = customer.address;
   if (!existing.postalPlace && customer.postalPlace) existing.postalPlace = customer.postalPlace;
   if (!existing.segment && customer.segment) existing.segment = customer.segment;
+  if (!existing.customerResponsible && customer.customerResponsible) existing.customerResponsible = customer.customerResponsible;
   const contactsByKey = new Map(existing.contacts.map(contact => [normalizeLookupKey(contact.name), contact]));
   customer.contacts.forEach(contact => {
     const contactKey = normalizeLookupKey(contact.name);
@@ -3688,6 +3691,7 @@ async function upsertGlobalCustomerRecord(body) {
   const address = safeString(body?.address);
   const postalPlace = safeString(body?.postalPlace);
   const segment = safeString(body?.segment);
+  const customerResponsible = safeString(body?.customerResponsible || body?.responsible);
   const contactPerson = safeString(body?.contactPerson);
   const phone = safeString(body?.phone);
   const email = safeString(body?.email);
@@ -3712,6 +3716,7 @@ async function upsertGlobalCustomerRecord(body) {
         address,
         postalPlace,
         segment,
+        customerResponsible,
         contacts: []
       };
       customers.push(customer);
@@ -3720,6 +3725,7 @@ async function upsertGlobalCustomerRecord(body) {
     customer.address = address;
     customer.postalPlace = postalPlace;
     customer.segment = segment;
+    customer.customerResponsible = customerResponsible;
     if (isContactUpdate) {
       const findContactIndex = name => customer.contacts.findIndex(contact => normalizeLookupKey(contact.name) === normalizeLookupKey(name));
       let contactIndex = originalContactPerson ? findContactIndex(originalContactPerson) : -1;
@@ -3878,10 +3884,11 @@ app.post('/api/admin/customer-database/upsert', requireAdminAuth, async (req, re
     const originalCustomer = safeString(req.body?.originalCustomer);
     const originalContactPerson = safeString(req.body?.originalContactPerson);
   const customerName = safeString(req.body?.customer);
-  const address = safeString(req.body?.address);
-  const postalPlace = safeString(req.body?.postalPlace);
-  const segment = safeString(req.body?.segment);
-  const contactPerson = safeString(req.body?.contactPerson);
+    const address = safeString(req.body?.address);
+    const postalPlace = safeString(req.body?.postalPlace);
+    const segment = safeString(req.body?.segment);
+    const customerResponsible = safeString(req.body?.customerResponsible || req.body?.responsible);
+    const contactPerson = safeString(req.body?.contactPerson);
   const phone = safeString(req.body?.phone);
   const email = safeString(req.body?.email);
   const isContactUpdate = Boolean(originalContactPerson || contactPerson || phone || email);
@@ -3903,6 +3910,7 @@ app.post('/api/admin/customer-database/upsert', requireAdminAuth, async (req, re
           address,
           postalPlace,
           segment,
+          customerResponsible,
           contacts: []
         };
         customers.push(customer);
@@ -3911,6 +3919,7 @@ app.post('/api/admin/customer-database/upsert', requireAdminAuth, async (req, re
       customer.address = address;
       customer.postalPlace = postalPlace;
       customer.segment = segment;
+      customer.customerResponsible = customerResponsible;
       if (isContactUpdate) {
         const findContactIndex = name => customer.contacts.findIndex(contact => normalizeLookupKey(contact.name) === normalizeLookupKey(name));
         let contactIndex = originalContactPerson ? findContactIndex(originalContactPerson) : -1;

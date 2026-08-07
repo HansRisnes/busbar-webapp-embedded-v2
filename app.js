@@ -3698,11 +3698,20 @@ function normalizeProject(raw){
     customerAddress: String(raw.customerAddress || raw.address || '').trim(),
     customerPostalPlace: String(raw.customerPostalPlace || raw.postalPlace || '').trim(),
     contactPhone: String(raw.contactPhone || raw.phone || '').trim(),
+    projectResponsible: String(raw.projectResponsible || raw.projectOwner || raw.ownerName || '').trim(),
     createdAt: raw.createdAt || fallback,
     updatedAt: raw.updatedAt || fallback,
     selectedAddonConfig,
     lines: Array.isArray(raw.lines) ? raw.lines : []
   };
+}
+
+function getCurrentProjectResponsibleName(){
+  return String(authState?.profile?.name || authState?.username || '').trim();
+}
+
+function getProjectResponsibleName(project){
+  return String(project?.projectResponsible || getCurrentProjectResponsibleName()).trim();
 }
 
 function normalizeUserEmail(value){
@@ -3925,6 +3934,7 @@ function normalizeGlobalCustomerPayload(payload) {
     address: String(customer?.address || '').trim(),
     postalPlace: String(customer?.postalPlace || '').trim(),
     segment: String(customer?.segment || '').trim(),
+    customerResponsible: String(customer?.customerResponsible || customer?.responsible || '').trim(),
     projectCount: Number.isFinite(Number(customer?.projectCount)) ? Number(customer.projectCount) : 0,
     contacts: (Array.isArray(customer?.contacts) ? customer.contacts : []).map(contact => ({
       id: String(contact?.id || ''),
@@ -3942,7 +3952,8 @@ function flattenGlobalContacts() {
       customerName: customer.name,
       customerAddress: customer.address,
       customerPostalPlace: customer.postalPlace,
-      customerSegment: customer.segment
+      customerSegment: customer.segment,
+      customerResponsible: customer.customerResponsible
     }))
   )).sort((a, b) => (a.name || '').localeCompare(b.name || '', 'no', { sensitivity: 'base', numeric: true }));
 }
@@ -3965,6 +3976,7 @@ function companyMatchesSearch(customer){
     customer?.address,
     customer?.postalPlace,
     customer?.segment,
+    customer?.customerResponsible,
     ...(Array.isArray(customer?.contacts) ? customer.contacts.flatMap(contact=>[contact?.name, contact?.phone, contact?.email]) : [])
   ].map(value=>String(value || '').toLowerCase()).join(' ');
   return haystack.includes(term);
@@ -3980,7 +3992,8 @@ function contactMatchesSearch(contact){
     contact?.customerName,
     contact?.customerAddress,
     contact?.customerPostalPlace,
-    contact?.customerSegment
+    contact?.customerSegment,
+    contact?.customerResponsible
   ].map(value=>String(value || '').toLowerCase()).join(' ');
   return haystack.includes(term);
 }
@@ -4113,6 +4126,7 @@ function renderCompanyCardsList() {
       ['Adresse', customer.address],
       ['Postnummer og sted', customer.postalPlace],
       ['Kundesegment', customer.segment],
+      ['Kundeansvarlig', customer.customerResponsible],
       ['Kontaktpersoner', customer.contacts.length],
       ['Prosjekter totalt', projectCount]
     ]);
@@ -4205,6 +4219,7 @@ function openCompanyEditForm(customer = null) {
   $('companyAddressInput').value = customer?.address || '';
   $('companyPostalPlaceInput').value = customer?.postalPlace || '';
   $('companySegmentInput').value = customer?.segment || '';
+  $('companyResponsibleInput').value = customer?.customerResponsible || '';
   $('companyNameInput')?.focus();
 }
 
@@ -4246,13 +4261,14 @@ async function handleCompanyFormSubmit(evt) {
   const address = String($('companyAddressInput')?.value || '').trim();
   const postalPlace = String($('companyPostalPlaceInput')?.value || '').trim();
   const segment = String($('companySegmentInput')?.value || '').trim();
+  const customerResponsible = String($('companyResponsibleInput')?.value || '').trim();
   if (!customer) {
     setGlobalCustomerStatus('companiesStatus', 'Firmanavn mangler.', 'error');
     return;
   }
   setGlobalCustomerStatus('companiesStatus', 'Lagrer...');
   try {
-    await saveGlobalCustomerRecord({ originalCustomer, customer, address, postalPlace, segment });
+    await saveGlobalCustomerRecord({ originalCustomer, customer, address, postalPlace, segment, customerResponsible });
     closeCompanyEditForm();
     setGlobalCustomerStatus('companiesStatus', 'Lagret', 'ok');
   } catch (err) {
@@ -4282,6 +4298,7 @@ async function handleContactFormSubmit(evt) {
       address: existingCustomer?.address || '',
       postalPlace: existingCustomer?.postalPlace || '',
       segment: existingCustomer?.segment || '',
+      customerResponsible: existingCustomer?.customerResponsible || '',
       contactPerson,
       phone,
       email
@@ -4713,6 +4730,7 @@ function createProject(projectName, customerName, contactPerson, details = {}){
     customerAddress: String(details.customerAddress || '').trim(),
     customerPostalPlace: String(details.customerPostalPlace || '').trim(),
     contactPhone: String(details.contactPhone || '').trim(),
+    projectResponsible: getCurrentProjectResponsibleName(),
     createdAt: now,
     updatedAt: now,
     selectedAddonConfig: normalizeSelectedAddonConfig(null, null),
@@ -4741,6 +4759,7 @@ function copyProject(sourceProjectId, customerName, contactPerson, details = {})
     customerAddress: String(details.customerAddress || '').trim(),
     customerPostalPlace: String(details.customerPostalPlace || '').trim(),
     contactPhone: String(details.contactPhone || '').trim(),
+    projectResponsible: getCurrentProjectResponsibleName(),
     createdAt: now,
     updatedAt: now,
     selectedAddonConfig: normalizeSelectedAddonConfig(source.selectedAddonConfig || null, null),
@@ -5890,14 +5909,14 @@ function renderOffersList(){
     title.textContent = project.projectNumber
       ? `${project.projectNumber} - ${project.name || 'Uten navn'}`
       : project.name || 'Uten navn';
-    const meta = document.createElement('p');
-    meta.className = 'muted-text';
-    meta.textContent = [
-      project.customer ? `Kunde: ${project.customer}` : 'Kunde: -',
-      status.hasOffer ? `Tilbud: ${status.offerNumber} rev${status.revision}` : 'Ingen genererte tilbud',
-      `Oppdatert: ${formatProjectTimestamp(project.updatedAt || project.createdAt)}`
-    ].join(' | ');
-    body.append(title, meta);
+    body.appendChild(title);
+    appendGlobalDataDetails(body, [
+      ['Prosjektansvarlig', getProjectResponsibleName(project)],
+      ['Kunde', project.customer],
+      ['Kontaktperson', project.contactPerson],
+      ['Tilbud', status.hasOffer ? `${status.offerNumber || '-'} rev${status.revision ?? '-'}` : 'Ingen genererte tilbud'],
+      ['Oppdatert', formatProjectTimestamp(project.updatedAt || project.createdAt)]
+    ]);
 
     const actions = document.createElement('div');
     actions.className = 'offer-row-actions';
@@ -6200,6 +6219,8 @@ function renderProjectDashboard(){
     title.textContent = project.projectNumber
       ? `${project.projectNumber} - ${projectTitle}`
       : projectTitle;
+    const responsible = document.createElement('p');
+    responsible.textContent = `Prosjektansvarlig: ${getProjectResponsibleName(project) || '-'}`;
     const customer = document.createElement('p');
     customer.textContent = project.customer ? `Kunde: ${project.customer}` : 'Kunde: -';
     const contact = document.createElement('p');
@@ -6235,6 +6256,7 @@ function renderProjectDashboard(){
     marginRow.appendChild(setMarginBtn);
 
     titleWrap.appendChild(title);
+    titleWrap.appendChild(responsible);
     titleWrap.appendChild(customer);
     titleWrap.appendChild(contact);
     titleWrap.appendChild(created);

@@ -195,20 +195,21 @@ main.app-views{
 }
 
 .project-row-title h3{
-  margin:0;
-  font-size:1.17em;
+  margin:0 0 6px;
+  font-size:1.5em;
+  line-height:1.2;
 }
 
-.project-row-title p{
+.project-row-title > p:not(.project-margin-badge){
   margin:0;
   color:var(--muted);
-  font-size:1.17em;
+  font-size:1rem;
 }
 
 .project-row-meta{
   margin:0;
   color:var(--muted);
-  font-size:1.17em;
+  font-size:1rem;
 }
 
 .project-margin-badge{
@@ -218,7 +219,7 @@ main.app-views{
   padding:4px 10px;
   background:var(--input);
   color:var(--text);
-  font-size:0.95rem;
+  font-size:1.17em;
   font-weight:600;
   min-height:34px;
   box-sizing:border-box;
@@ -233,7 +234,8 @@ main.app-views{
 }
 
 .project-margin-row{
-  margin-top:2px;
+  margin-top:14px;
+  margin-bottom:14px;
   display:flex;
   align-items:center;
   gap:8px;
@@ -384,7 +386,7 @@ main.app-views{
 }
 
 .project-inline-selectors{
-  margin-top:10px;
+  margin-top:0;
 }
 
 .line-addon-selectors{
@@ -1347,6 +1349,17 @@ button:disabled:hover{filter:none}
   padding:10px 0;
   border-bottom:1px solid var(--card-border);
 }
+.email-message-actions{
+  flex-direction:column;
+  align-items:flex-start;
+  justify-content:flex-start;
+}
+.email-message-action-buttons{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  flex-wrap:wrap;
+}
 .graph-card-actions{
   margin-top:8px;
 }
@@ -1695,7 +1708,7 @@ button.graph-item{
   display:grid;
   grid-template-columns:minmax(0, 1fr) auto;
   gap:14px;
-  align-items:center;
+  align-items:flex-start;
   padding:14px;
   border:1px solid rgba(67,90,127,0.7);
   border-radius:8px;
@@ -1708,9 +1721,10 @@ button.graph-item{
   min-width:0;
 }
 .offer-row-body h3{
-  margin:0 0 6px;
+  margin:0 0 10px;
   color:var(--text);
-  font-size:1rem;
+  font-size:1.5em;
+  line-height:1.2;
 }
 .offer-row-body p{
   margin:0;
@@ -1718,6 +1732,7 @@ button.graph-item{
 .offer-row-actions{
   display:flex;
   justify-content:flex-end;
+  align-items:flex-start;
   gap:8px;
   flex-wrap:wrap;
 }

@@ -299,11 +299,13 @@
             <button id="cancelEmailComposeBtn" type="button" class="btn alt">Avbryt</button>
           </div>
         </form>
-        <div id="emailMessageActions" class="graph-inline-actions" hidden>
+        <div id="emailMessageActions" class="graph-inline-actions email-message-actions" hidden>
           <span id="selectedEmailLabel" class="muted-text"></span>
-          <button id="openSelectedEmailBtn" type="button" class="btn alt">Åpne</button>
-          <button id="markSelectedEmailReadBtn" type="button" class="btn alt">Marker lest</button>
-          <button id="deleteSelectedEmailBtn" type="button" class="btn danger">Slett</button>
+          <div class="email-message-action-buttons">
+            <button id="openSelectedEmailBtn" type="button" class="btn alt">Åpne</button>
+            <button id="markSelectedEmailReadBtn" type="button" class="btn alt">Marker lest</button>
+            <button id="deleteSelectedEmailBtn" type="button" class="btn danger">Slett</button>
+          </div>
         </div>
         <div id="emailMessagesList" class="graph-list email-messages-list" aria-live="polite"></div>
       </section>
@@ -404,6 +406,9 @@
           </label>
           <label for="companySegmentInput">Kundesegment
             <input id="companySegmentInput" type="text">
+          </label>
+          <label for="companyResponsibleInput">Kundeansvarlig
+            <input id="companyResponsibleInput" type="text">
           </label>
         </form>
         <datalist id="globalCompanyOptions"></datalist>
