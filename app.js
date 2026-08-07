@@ -93,6 +93,7 @@ const projectState = {
   customerDatabase: [],
   globalCustomerDatabaseLoaded: false,
   projects: [],
+  projectOwnerEmails: [],
   expandedProjectId: null,
   projectSearchTerm: '',
   projectSort: 'date_newest',
@@ -1215,7 +1216,8 @@ function normalizeFxPoint(rawPoint, fallbackSource){
     return {
       rate: Number.isFinite(rate) ? rate : NaN,
       date: rawPoint.date || '',
-      source: rawPoint.source || fallbackSource || ''
+      source: rawPoint.source || fallbackSource || '',
+      changes: rawPoint.changes && typeof rawPoint.changes === 'object' ? rawPoint.changes : {}
     };
   }
   const numericRate = Number(rawPoint);
@@ -1240,6 +1242,26 @@ function buildFxMetaText(point){
   if (point?.source) pieces.push(point.source);
   if (point?.date) pieces.push(point.date);
   return pieces.join(' · ');
+}
+
+function formatMarketChangeValue(change){
+  const percent = Number(change?.percent);
+  if (!Number.isFinite(percent)) return '--';
+  const rate = Number(change?.rate);
+  const rateText = Number.isFinite(rate) ? fmtFxNO.format(rate) : '--';
+  const arrow = percent > 0 ? '↑' : percent < 0 ? '↓' : '→';
+  return `${rateText} ${arrow} ${fmtPercentNO.format(Math.abs(percent))} %`;
+}
+
+function setMarketChangeValue(elementId, change){
+  const el = $(elementId);
+  if (!el) return;
+  const percent = Number(change?.percent);
+  const direction = percent > 0 ? 'up' : percent < 0 ? 'down' : 'flat';
+  el.textContent = formatMarketChangeValue(change);
+  el.classList.toggle('is-up', Number.isFinite(percent) && direction === 'up');
+  el.classList.toggle('is-down', Number.isFinite(percent) && direction === 'down');
+  el.classList.toggle('is-flat', !Number.isFinite(percent) || direction === 'flat');
 }
 
 function applyMarketSnapshot(snapshot){
@@ -1281,6 +1303,8 @@ function applyMarketSnapshot(snapshot){
   if (usdMetaEl){
     usdMetaEl.textContent = buildFxMetaText(fx.usd) || 'Ingen data';
   }
+  setMarketChangeValue('marketUsdWeek', fx.usd.changes?.week);
+  setMarketChangeValue('marketUsdMonth', fx.usd.changes?.month);
 
   const eurRate = fx.eur.rate;
   const eurEl = $('marketEurNok');
@@ -1291,6 +1315,8 @@ function applyMarketSnapshot(snapshot){
   if (eurMetaEl){
     eurMetaEl.textContent = buildFxMetaText(fx.eur) || 'Ingen data';
   }
+  setMarketChangeValue('marketEurWeek', fx.eur.changes?.week);
+  setMarketChangeValue('marketEurMonth', fx.eur.changes?.month);
 
   const updatedEl = $('marketUpdated');
   if (updatedEl){
@@ -3699,6 +3725,7 @@ function normalizeProject(raw){
     customerPostalPlace: String(raw.customerPostalPlace || raw.postalPlace || '').trim(),
     contactPhone: String(raw.contactPhone || raw.phone || '').trim(),
     projectResponsible: String(raw.projectResponsible || raw.projectOwner || raw.ownerName || '').trim(),
+    projectOwnerEmail: normalizeUserEmail(raw.projectOwnerEmail || raw.ownerEmail || ''),
     createdAt: raw.createdAt || fallback,
     updatedAt: raw.updatedAt || fallback,
     selectedAddonConfig,
@@ -3800,6 +3827,7 @@ function cleanupMigratedProjectStorage(email){
 
 function clearProjectOverviewForLoggedOutUser(){
   projectState.projects = [];
+  projectState.projectOwnerEmails = [];
   projectState.expandedProjectId = null;
   updateProjectHistories();
   clearActiveProject();
@@ -3864,6 +3892,7 @@ async function fetchUserProjectsFromServer(email){
   const projects = Array.isArray(payload?.projects) ? payload.projects : [];
   return {
     updatedAt: typeof payload?.updatedAt === 'string' ? payload.updatedAt : null,
+    ownerEmails: Array.isArray(payload?.ownerEmails) ? payload.ownerEmails.map(normalizeUserEmail).filter(hasValidUserEmail) : [],
     projects: projects.map(normalizeProject).filter(Boolean)
   };
 }
@@ -3874,6 +3903,7 @@ async function pushUserProjectsToServer(email, projects){
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify({
       email,
+      ownerEmails: authState.isAdmin === true ? projectState.projectOwnerEmails : undefined,
       projects: Array.isArray(projects) ? projects : []
     })
   });
@@ -3893,6 +3923,9 @@ async function pushUserProjectsToServer(email, projects){
   }
   const payload = await res.json();
   const syncedProjects = Array.isArray(payload?.projects) ? payload.projects : [];
+  projectState.projectOwnerEmails = Array.isArray(payload?.ownerEmails)
+    ? payload.ownerEmails.map(normalizeUserEmail).filter(hasValidUserEmail)
+    : projectState.projectOwnerEmails;
   return syncedProjects.map(normalizeProject).filter(Boolean);
 }
 
@@ -4389,6 +4422,9 @@ async function syncProjectsForCurrentUser(){
   try{
     const remoteSnapshot = await fetchUserProjectsFromServer(email);
     const remoteProjects = Array.isArray(remoteSnapshot?.projects) ? remoteSnapshot.projects : [];
+    projectState.projectOwnerEmails = Array.isArray(remoteSnapshot?.ownerEmails) && remoteSnapshot.ownerEmails.length
+      ? remoteSnapshot.ownerEmails
+      : [email];
     const hasAuthoritativeEmptyRemote = !!remoteSnapshot?.updatedAt && remoteProjects.length === 0;
     const localProjects = hasAuthoritativeEmptyRemote
       ? []
@@ -4492,7 +4528,8 @@ function projectMatchesSearch(project, rawSearchTerm = projectState.projectSearc
   const haystack = [
     project?.name,
     project?.customer,
-    project?.contactPerson
+    project?.contactPerson,
+    getProjectResponsibleName(project)
   ].map(value=>String(value || '').toLowerCase()).join(' ');
   return haystack.includes(term);
 }
@@ -4731,6 +4768,7 @@ function createProject(projectName, customerName, contactPerson, details = {}){
     customerPostalPlace: String(details.customerPostalPlace || '').trim(),
     contactPhone: String(details.contactPhone || '').trim(),
     projectResponsible: getCurrentProjectResponsibleName(),
+    projectOwnerEmail: getCurrentUserEmail(),
     createdAt: now,
     updatedAt: now,
     selectedAddonConfig: normalizeSelectedAddonConfig(null, null),
@@ -4760,6 +4798,7 @@ function copyProject(sourceProjectId, customerName, contactPerson, details = {})
     customerPostalPlace: String(details.customerPostalPlace || '').trim(),
     contactPhone: String(details.contactPhone || '').trim(),
     projectResponsible: getCurrentProjectResponsibleName(),
+    projectOwnerEmail: getCurrentUserEmail(),
     createdAt: now,
     updatedAt: now,
     selectedAddonConfig: normalizeSelectedAddonConfig(source.selectedAddonConfig || null, null),
@@ -5863,6 +5902,7 @@ function offerRowMatchesSearch(row){
     project.name,
     project.customer,
     project.contactPerson,
+    getProjectResponsibleName(project),
     project.projectNumber,
     status.offerNumber,
     status.revision !== null && status.revision !== undefined ? `rev${status.revision}` : ''

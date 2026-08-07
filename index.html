@@ -54,13 +54,25 @@
         <span class="market-note" id="marketAlMeta">USD/t Â· ALI=F</span>
       </div>
       <div class="market-item">
-        <span class="market-label">USD / NOK</span>
-        <span class="market-value" id="marketUsdNok">--</span>
+        <div class="market-fx-grid">
+          <span class="market-label">USD / NOK</span>
+          <span class="market-label">1 uke</span>
+          <span class="market-label">1 MND</span>
+          <span class="market-value" id="marketUsdNok">--</span>
+          <span class="market-change-value" id="marketUsdWeek">--</span>
+          <span class="market-change-value" id="marketUsdMonth">--</span>
+        </div>
         <span class="market-note" id="marketUsdMeta">Henter...</span>
       </div>
       <div class="market-item">
-        <span class="market-label">EUR / NOK</span>
-        <span class="market-value" id="marketEurNok">--</span>
+        <div class="market-fx-grid">
+          <span class="market-label">EUR / NOK</span>
+          <span class="market-label">1 uke</span>
+          <span class="market-label">1 MND</span>
+          <span class="market-value" id="marketEurNok">--</span>
+          <span class="market-change-value" id="marketEurWeek">--</span>
+          <span class="market-change-value" id="marketEurMonth">--</span>
+        </div>
         <span class="market-note" id="marketEurMeta">Henter...</span>
       </div>
       <div class="market-item market-updated">
@@ -133,7 +145,7 @@
           <div class="dashboard-sort-row">
             <div class="dashboard-sort-controls dashboard-search-controls">
               <label for="projectSearchInput">S&oslash;k prosjekt</label>
-              <input id="projectSearchInput" type="search" autocomplete="off" placeholder="Prosjekt, kunde eller kontakt">
+              <input id="projectSearchInput" type="search" autocomplete="off" placeholder="Prosjekt, kunde, kontakt eller ansvarlig">
             </div>
             <div class="dashboard-sort-controls">
               <label for="projectSortSelect">Sorter prosjekter</label>
@@ -248,7 +260,7 @@
         <div class="dashboard-sort-row offers-sort-row section-toolbar">
           <div class="dashboard-sort-controls dashboard-search-controls">
             <label for="offerSearchInput">S&oslash;k tilbud</label>
-            <input id="offerSearchInput" type="search" autocomplete="off" placeholder="Prosjekt, kunde eller tilbudsnummer">
+            <input id="offerSearchInput" type="search" autocomplete="off" placeholder="Prosjekt, kunde, ansvarlig eller tilbudsnummer">
           </div>
           <div class="dashboard-sort-controls">
             <label for="offerSortSelect">Sorter tilbud</label>

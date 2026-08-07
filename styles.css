@@ -551,6 +551,26 @@ header p{margin:0 0 16px 0;color:var(--muted)}
   color:var(--text);
   white-space:nowrap;
 }
+.market-fx-grid{
+  display:grid;
+  grid-template-columns:repeat(3, minmax(0, 1fr));
+  gap:4px 12px;
+  align-items:end;
+}
+.market-change-value{
+  font-size:1.35rem;
+  font-weight:600;
+  white-space:nowrap;
+}
+.market-change-value.is-up{
+  color:var(--success);
+}
+.market-change-value.is-down{
+  color:var(--warning);
+}
+.market-change-value.is-flat{
+  color:var(--muted);
+}
 .market-value.small{
   font-size:1rem;
 }

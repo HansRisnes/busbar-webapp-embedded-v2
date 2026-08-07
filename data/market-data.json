@@ -10,18 +10,46 @@
   "fx": {
     "usdNok": {
       "pair": "USD/NOK",
-      "rate": 9.5462,
-      "date": "2026-08-04",
+      "rate": 9.5307,
+      "date": "2026-08-06",
+      "changes": {
+        "week": {
+          "percent": -0.34922261373260755,
+          "fromDate": "2026-07-30",
+          "toDate": "2026-08-06",
+          "rate": 9.5641
+        },
+        "month": {
+          "percent": -2.8312466865136123,
+          "fromDate": "2026-07-07",
+          "toDate": "2026-08-06",
+          "rate": 9.8084
+        }
+      },
       "source": "Norges Bank"
     },
     "eurNok": {
       "pair": "EUR/NOK",
-      "rate": 10.9925,
-      "date": "2026-08-04",
+      "rate": 11.0003,
+      "date": "2026-08-06",
+      "changes": {
+        "week": {
+          "percent": 0.2232183531040994,
+          "fromDate": "2026-07-30",
+          "toDate": "2026-08-06",
+          "rate": 10.9758
+        },
+        "month": {
+          "percent": -1.905653647226691,
+          "fromDate": "2026-07-07",
+          "toDate": "2026-08-06",
+          "rate": 11.214
+        }
+      },
       "source": "Norges Bank"
     },
     "source": "Norges Bank"
   },
-  "updatedAt": "2026-08-05T08:40:18.102Z",
+  "updatedAt": "2026-08-07T12:49:20.889Z",
   "mode": "auto-daily"
 }

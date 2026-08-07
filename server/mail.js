@@ -975,10 +975,50 @@ function normalizeProjectRecord(raw) {
     customerAddress: safeString(raw.customerAddress || raw.address),
     customerPostalPlace: safeString(raw.customerPostalPlace || raw.postalPlace),
     contactPhone: safeString(raw.contactPhone || raw.phone),
+    projectResponsible: safeString(raw.projectResponsible || raw.projectOwner || raw.ownerName),
+    projectOwnerEmail: normalizeEmail(raw.projectOwnerEmail || raw.ownerEmail),
     createdAt: toIsoTimestamp(raw.createdAt, now),
     updatedAt: toIsoTimestamp(raw.updatedAt || raw.createdAt, now),
     selectedAddonConfig,
     lines
+  };
+}
+
+function buildVisibleProjectsForAuth(archive, auth) {
+  const email = normalizeEmail(auth?.email);
+  if (!auth?.isAdmin) {
+    const user = archive.users[email] || { email, updatedAt: null, projects: [] };
+    return {
+      email,
+      updatedAt: user.updatedAt,
+      ownerEmails: [email],
+      projects: (Array.isArray(user.projects) ? user.projects : []).map(project => ({
+        ...project,
+        projectOwnerEmail: email
+      }))
+    };
+  }
+  const projects = [];
+  let updatedAt = null;
+  Object.entries(archive.users || {}).forEach(([ownerEmailRaw, user]) => {
+    const ownerEmail = normalizeEmail(ownerEmailRaw || user?.email);
+    if (!isValidEmail(ownerEmail)) return;
+    const userUpdatedAt = toIsoTimestamp(user?.updatedAt, '');
+    if (userUpdatedAt && (!updatedAt || new Date(userUpdatedAt) > new Date(updatedAt))) {
+      updatedAt = userUpdatedAt;
+    }
+    (Array.isArray(user?.projects) ? user.projects : []).forEach(project => {
+      projects.push({
+        ...project,
+        projectOwnerEmail: ownerEmail
+      });
+    });
+  });
+  return {
+    email,
+    updatedAt,
+    projects,
+    ownerEmails: Object.keys(archive.users || {}).map(normalizeEmail).filter(isValidEmail)
   };
 }
 
@@ -1221,6 +1261,13 @@ async function persistProjectNumberForUser(email, projectId, projectNumber) {
     project.projectNumber = normalizedProjectNumber;
     await writeProjectArchive(archive);
   });
+}
+
+function resolveWritableProjectOwnerEmail(project, auth) {
+  const fallback = normalizeEmail(auth?.email);
+  const requested = normalizeEmail(project?.projectOwnerEmail || project?.ownerEmail);
+  if (auth?.isAdmin === true && isValidEmail(requested)) return requested;
+  return fallback;
 }
 
 function resolveSelectedAddonFlag(value, fallback = true) {
@@ -2918,7 +2965,7 @@ function normalizeIsoTimestamp(value) {
   return new Date(parsed).toISOString();
 }
 
-function extractLatestObservationFromSdmx(payload, pair) {
+function extractObservationsFromSdmx(payload, pair) {
   const timeValues = payload?.data?.structure?.dimensions?.observation?.[0]?.values;
   const series = payload?.data?.dataSets?.[0]?.series;
 
@@ -2926,8 +2973,7 @@ function extractLatestObservationFromSdmx(payload, pair) {
     throw new Error(`SDMX-respons for ${pair} mangler nodene som trengs`);
   }
 
-  let latestIndex = -1;
-  let latestRate = NaN;
+  const observationsByDate = new Map();
 
   for (const seriesEntry of Object.values(series)) {
     const observations = seriesEntry?.observations;
@@ -2938,23 +2984,67 @@ function extractLatestObservationFromSdmx(payload, pair) {
       if (!Number.isInteger(idx) || idx < 0) continue;
       const rawRate = Array.isArray(rawValue) ? rawValue[0] : rawValue;
       const parsedRate = parseRate(rawRate);
-      if (idx > latestIndex && Number.isFinite(parsedRate)) {
-        latestIndex = idx;
-        latestRate = parsedRate;
+      const date = normalizeIsoDate(timeValues?.[idx]?.id);
+      if (date && Number.isFinite(parsedRate)) {
+        observationsByDate.set(date, { rate: parsedRate, date });
       }
     }
   }
 
-  if (latestIndex < 0 || !Number.isFinite(latestRate)) {
+  const observations = Array.from(observationsByDate.values())
+    .sort((a, b) => a.date.localeCompare(b.date));
+  if (!observations.length) {
     throw new Error(`Fant ikke gyldig siste datapunkt for ${pair}`);
   }
 
-  const date = normalizeIsoDate(timeValues?.[latestIndex]?.id);
-  if (!date) {
-    throw new Error(`Siste datapunkt for ${pair} mangler gyldig dato`);
-  }
+  return observations;
+}
 
-  return { rate: latestRate, date };
+function subtractUtcDays(isoDate, days) {
+  const parsed = Date.parse(`${isoDate}T00:00:00Z`);
+  if (Number.isNaN(parsed)) return '';
+  const next = new Date(parsed);
+  next.setUTCDate(next.getUTCDate() - days);
+  return next.toISOString().slice(0, 10);
+}
+
+function findObservationOnOrBefore(observations, targetDate) {
+  let match = null;
+  observations.forEach(point => {
+    if (point.date <= targetDate) match = point;
+  });
+  return match;
+}
+
+function calculateFxChange(latest, comparePoint) {
+  const current = Number(latest?.rate);
+  const previous = Number(comparePoint?.rate);
+  if (!Number.isFinite(current) || !Number.isFinite(previous) || previous <= 0) return null;
+  return {
+    rate: previous,
+    percent: ((current - previous) / previous) * 100,
+    fromDate: comparePoint.date,
+    toDate: latest.date
+  };
+}
+
+function buildFxChanges(observations, latest) {
+  const weekTarget = subtractUtcDays(latest.date, 7);
+  const monthTarget = subtractUtcDays(latest.date, 30);
+  return {
+    week: calculateFxChange(latest, findObservationOnOrBefore(observations, weekTarget)),
+    month: calculateFxChange(latest, findObservationOnOrBefore(observations, monthTarget))
+  };
+}
+
+function extractLatestObservationFromSdmx(payload, pair) {
+  const observations = extractObservationsFromSdmx(payload, pair);
+  const latest = observations[observations.length - 1];
+  return {
+    rate: latest.rate,
+    date: latest.date,
+    changes: buildFxChanges(observations, latest)
+  };
 }
 
 async function fetchNorgesBankRate(url, pair) {
@@ -2978,12 +3068,14 @@ async function fetchFxRatesFromNorgesBank() {
       pair: 'USD/NOK',
       rate: usd.rate,
       date: usd.date,
+      changes: usd.changes,
       source: 'Norges Bank'
     },
     eurNok: {
       pair: 'EUR/NOK',
       rate: eur.rate,
       date: eur.date,
+      changes: eur.changes,
       source: 'Norges Bank'
     },
     source: 'Norges Bank'
@@ -3017,6 +3109,7 @@ function normalizeFxPoint(rawPoint, pair, fallbackSource) {
         pair,
         rate,
         date,
+        changes: isObject(rawPoint.changes) ? rawPoint.changes : {},
         source: String(rawPoint.source || fallbackSource || 'Norges Bank')
       };
     }
@@ -3586,10 +3679,10 @@ app.get('/api/user-projects', requireUserAuth, async (req, res) => {
     if (!isValidEmail(email)) {
       return res.status(400).json({ error: 'Ugyldig e-post' });
     }
-    if (email !== req.userAuth.email) {
+    if (email !== req.userAuth.email && req.userAuth.isAdmin !== true) {
       return res.status(403).json({ error: 'Ingen tilgang til denne brukeren' });
     }
-    const userRecord = await withOfferNumberLock(async ()=>{
+    const visibleRecord = await withOfferNumberLock(async ()=>{
       const [counterState, projectNumbersRaw] = await Promise.all([
         readJsonFile(OFFER_COUNTER_FILE, { years: {} }),
         readJsonFile(OFFER_PROJECT_NUMBERS_FILE, {})
@@ -3607,16 +3700,13 @@ app.get('/api/user-projects', requireUserAuth, async (req, res) => {
         writeJsonFile(OFFER_COUNTER_FILE, counterState),
         writeJsonFile(OFFER_PROJECT_NUMBERS_FILE, projectNumbers)
       ]);
-      return archive.users[email] || {
-        email,
-        updatedAt: null,
-        projects: []
-      };
+      return buildVisibleProjectsForAuth(archive, req.userAuth);
     });
     return res.json({
-      email,
-      updatedAt: userRecord.updatedAt,
-      projects: userRecord.projects
+      email: visibleRecord.email,
+      updatedAt: visibleRecord.updatedAt,
+      ownerEmails: visibleRecord.ownerEmails,
+      projects: visibleRecord.projects
     });
   } catch (err) {
     console.error('Henting av brukerprosjekter feilet', err);
@@ -3630,7 +3720,7 @@ app.post('/api/user-projects/sync', requireUserAuth, async (req, res) => {
     if (!isValidEmail(email)) {
       return res.status(400).json({ error: 'Ugyldig e-post' });
     }
-    if (email !== req.userAuth.email) {
+    if (email !== req.userAuth.email && req.userAuth.isAdmin !== true) {
       return res.status(403).json({ error: 'Ingen tilgang til denne brukeren' });
     }
     if (!Array.isArray(req.body?.projects)) {
@@ -3658,13 +3748,46 @@ app.post('/api/user-projects/sync', requireUserAuth, async (req, res) => {
         normalizedProjects.forEach(project=>{
           ensureProjectNumber(project, projectNumbers, counterState);
         });
-        archive.users[email] = {
-          email,
-          updatedAt,
-          projects: normalizedProjects
-        };
+        if (req.userAuth.isAdmin === true) {
+          const grouped = new Map();
+          normalizedProjects.forEach(project => {
+            const ownerEmail = isValidEmail(project.projectOwnerEmail) ? project.projectOwnerEmail : email;
+            if (!grouped.has(ownerEmail)) grouped.set(ownerEmail, []);
+            grouped.get(ownerEmail).push({
+              ...project,
+              projectOwnerEmail: ownerEmail
+            });
+          });
+          grouped.forEach((projects, ownerEmail) => {
+            archive.users[ownerEmail] = {
+              email: ownerEmail,
+              updatedAt,
+              projects
+            };
+          });
+          const visibleOwnerEmails = Array.isArray(req.body?.ownerEmails)
+            ? req.body.ownerEmails.map(normalizeEmail).filter(isValidEmail)
+            : [];
+          visibleOwnerEmails.forEach(ownerEmail => {
+            if (grouped.has(ownerEmail)) return;
+            archive.users[ownerEmail] = {
+              email: ownerEmail,
+              updatedAt,
+              projects: []
+            };
+          });
+        } else {
+          archive.users[email] = {
+            email,
+            updatedAt,
+            projects: normalizedProjects.map(project => ({
+              ...project,
+              projectOwnerEmail: email
+            }))
+          };
+        }
         await writeProjectArchive(archive);
-        return archive.users[email];
+        return buildVisibleProjectsForAuth(archive, req.userAuth);
       });
       await Promise.all([
         writeJsonFile(OFFER_COUNTER_FILE, counterState),
@@ -3676,6 +3799,7 @@ app.post('/api/user-projects/sync', requireUserAuth, async (req, res) => {
     return res.json({
       email: nextUserRecord.email,
       updatedAt: nextUserRecord.updatedAt,
+      ownerEmails: nextUserRecord.ownerEmails,
       projects: nextUserRecord.projects
     });
   } catch (err) {
@@ -4218,7 +4342,8 @@ app.post('/api/generate-offer', requireUserAuth, async (req, res) => {
     const now = new Date();
     const { offerNumber, revision } = await allocateOfferIdentity(project, now);
     project.projectNumber = offerNumber;
-    await persistProjectNumberForUser(req.userAuth.email, project.id, offerNumber);
+    const projectOwnerEmail = resolveWritableProjectOwnerEmail(project, req.userAuth);
+    await persistProjectNumberForUser(projectOwnerEmail, project.id, offerNumber);
     const generated = await generateOfferDocx(project, offerNumber, now, revision, {
       email: userRecord.email,
       ...userRecord.profile
@@ -4247,9 +4372,8 @@ app.post('/api/generate-offer', requireUserAuth, async (req, res) => {
 app.get('/api/offer-status', requireUserAuth, async (req, res) => {
   try {
     const archive = await readProjectArchive();
-    const user = archive.users[req.userAuth.email];
-    const projects = Array.isArray(user?.projects) ? user.projects : [];
-    const offers = await getOfferStatusForProjects(projects);
+    const visible = buildVisibleProjectsForAuth(archive, req.userAuth);
+    const offers = await getOfferStatusForProjects(visible.projects);
     res.json({ offers });
   } catch (err) {
     console.error('Henting av tilbudsstatus feilet', err);
