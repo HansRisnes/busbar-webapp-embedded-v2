@@ -220,7 +220,12 @@ const MICROSOFT_GRAPH_SCOPE = 'https://graph.microsoft.com/.default';
 const MICROSOFT_AUTH_ISSUER = `https://login.microsoftonline.com/${MICROSOFT_AUTH_TENANT_ID}/v2.0`;
 const MICROSOFT_AUTH_JWKS_URL = `https://login.microsoftonline.com/${MICROSOFT_AUTH_TENANT_ID}/discovery/v2.0/keys`;
 const MICROSOFT_OWNER_CACHE_TTL_MS = 5 * 60 * 1000;
-const ADMIN_OWNER_EMAILS = new Set(['hans.jakob.risnes@busbar.no']);
+const ADMIN_OWNER_EMAILS = new Set([
+  ...parseCsvEnv(process.env.ADMIN_OWNER_EMAILS),
+  ...parseCsvEnv(process.env.MICROSOFT_AUTH_OWNER_EMAILS),
+  'hans.jakob.risnes@busbar.no',
+  'lars@busbar.no'
+].map(normalizeEmail).filter(isValidEmail));
 let microsoftJwksCache = { fetchedAt: 0, keys: [] };
 let microsoftOwnerCache = { fetchedAt: 0, ownerIds: new Set() };
 let microsoftOwnerSecretWarned = false;
@@ -583,27 +588,44 @@ async function fetchMicrosoftGraphJson(url) {
   return res.json();
 }
 
+async function collectMicrosoftOwnerIdsForCollection(collectionName) {
+  const filter = encodeURIComponent(`appId eq '${MICROSOFT_AUTH_CLIENT_ID}'`);
+  const payload = await fetchMicrosoftGraphJson(
+    `https://graph.microsoft.com/v1.0/${collectionName}?$filter=${filter}&$select=id,appId`
+  );
+  const objectId = Array.isArray(payload?.value) ? safeString(payload.value[0]?.id) : '';
+  const ownerIds = new Set();
+  if (!objectId) return ownerIds;
+
+  let nextUrl = `https://graph.microsoft.com/v1.0/${collectionName}/${encodeURIComponent(objectId)}/owners?$select=id`;
+  while (nextUrl) {
+    const ownersPayload = await fetchMicrosoftGraphJson(nextUrl);
+    (Array.isArray(ownersPayload?.value) ? ownersPayload.value : []).forEach(owner => {
+      const ownerId = safeString(owner?.id);
+      if (ownerId) ownerIds.add(ownerId);
+    });
+    nextUrl = safeString(ownersPayload?.['@odata.nextLink']);
+  }
+  return ownerIds;
+}
+
 async function getMicrosoftAuthAppOwnerIds() {
   const now = Date.now();
   if (microsoftOwnerCache.fetchedAt && now - microsoftOwnerCache.fetchedAt < MICROSOFT_OWNER_CACHE_TTL_MS) {
     return microsoftOwnerCache.ownerIds;
   }
-  const filter = encodeURIComponent(`appId eq '${MICROSOFT_AUTH_CLIENT_ID}'`);
-  const appPayload = await fetchMicrosoftGraphJson(
-    `https://graph.microsoft.com/v1.0/applications?$filter=${filter}&$select=id,appId`
-  );
-  const appObjectId = Array.isArray(appPayload?.value) ? safeString(appPayload.value[0]?.id) : '';
   const ownerIds = new Set();
-  if (appObjectId) {
-    let nextUrl = `https://graph.microsoft.com/v1.0/applications/${encodeURIComponent(appObjectId)}/owners?$select=id`;
-    while (nextUrl) {
-      const ownersPayload = await fetchMicrosoftGraphJson(nextUrl);
-      (Array.isArray(ownersPayload?.value) ? ownersPayload.value : []).forEach(owner => {
-        const ownerId = safeString(owner?.id);
-        if (ownerId) ownerIds.add(ownerId);
-      });
-      nextUrl = safeString(ownersPayload?.['@odata.nextLink']);
+  const errors = [];
+  for (const collectionName of ['applications', 'servicePrincipals']) {
+    try {
+      const ids = await collectMicrosoftOwnerIdsForCollection(collectionName);
+      ids.forEach(id => ownerIds.add(id));
+    } catch (err) {
+      errors.push(`${collectionName}: ${err?.message || err}`);
     }
+  }
+  if (!ownerIds.size && errors.length) {
+    throw new Error(errors.join('; '));
   }
   microsoftOwnerCache = { fetchedAt: now, ownerIds };
   return ownerIds;
@@ -728,10 +750,19 @@ function getBearerToken(req) {
   return header.slice(7).trim();
 }
 
-function requireUserAuth(req, res, next) {
+async function requireUserAuth(req, res, next) {
   const auth = verifyAuthToken(getBearerToken(req));
   if (!auth) {
     return res.status(401).json({ error: 'Logg inn for å hente prosjekter' });
+  }
+  if (auth.isAdmin !== true) {
+    try {
+      const store = await readUserAuthStore();
+      auth.isAdmin = resolveUserIsAdmin(store.users[auth.email] || { email: auth.email });
+    } catch (err) {
+      console.warn('[auth] Kunne ikke oppdatere adminstatus fra brukerregister', err?.message || err);
+      auth.isAdmin = isFallbackAdminEmail(auth.email);
+    }
   }
   req.userAuth = auth;
   return next();
@@ -3832,6 +3863,7 @@ app.get('/api/user-projects', requireUserAuth, async (req, res) => {
       email: visibleRecord.email,
       updatedAt: visibleRecord.updatedAt,
       ownerEmails: visibleRecord.ownerEmails,
+      isAdmin: req.userAuth.isAdmin === true,
       projects: visibleRecord.projects
     });
   } catch (err) {
@@ -3926,6 +3958,7 @@ app.post('/api/user-projects/sync', requireUserAuth, async (req, res) => {
       email: nextUserRecord.email,
       updatedAt: nextUserRecord.updatedAt,
       ownerEmails: nextUserRecord.ownerEmails,
+      isAdmin: req.userAuth.isAdmin === true,
       projects: nextUserRecord.projects
     });
   } catch (err) {

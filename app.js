@@ -4297,8 +4297,14 @@ async function fetchUserProjectsFromServer(email){
   }
   const payload = await res.json();
   const projects = Array.isArray(payload?.projects) ? payload.projects : [];
+  if (payload?.isAdmin === true && authState.isAdmin !== true){
+    authState.isAdmin = true;
+    persistAuthToSession();
+    updateAuthUI();
+  }
   return {
     updatedAt: typeof payload?.updatedAt === 'string' ? payload.updatedAt : null,
+    isAdmin: payload?.isAdmin === true,
     ownerEmails: Array.isArray(payload?.ownerEmails) ? payload.ownerEmails.map(normalizeUserEmail).filter(hasValidUserEmail) : [],
     projects: projects.map(normalizeProject).filter(Boolean)
   };
@@ -4329,6 +4335,11 @@ async function pushUserProjectsToServer(email, projects){
     throw new Error(appendApiBaseHint(message, res.status));
   }
   const payload = await res.json();
+  if (payload?.isAdmin === true && authState.isAdmin !== true){
+    authState.isAdmin = true;
+    persistAuthToSession();
+    updateAuthUI();
+  }
   const syncedProjects = Array.isArray(payload?.projects) ? payload.projects : [];
   projectState.projectOwnerEmails = Array.isArray(payload?.ownerEmails)
     ? payload.ownerEmails.map(normalizeUserEmail).filter(hasValidUserEmail)
@@ -4830,6 +4841,10 @@ async function syncProjectsForCurrentUser(){
   if (!email) return;
   try{
     const remoteSnapshot = await fetchUserProjectsFromServer(email);
+    if (remoteSnapshot?.isAdmin === true && authState.isAdmin !== true){
+      authState.isAdmin = true;
+      persistAuthToSession();
+    }
     const remoteProjects = Array.isArray(remoteSnapshot?.projects) ? remoteSnapshot.projects : [];
     projectState.projectOwnerEmails = Array.isArray(remoteSnapshot?.ownerEmails) && remoteSnapshot.ownerEmails.length
       ? remoteSnapshot.ownerEmails
