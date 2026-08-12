@@ -42,9 +42,10 @@ const PROJECT_SYNC_DEBOUNCE_MS = 800;
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MICROSOFT_AUTH_DEFAULT_SCOPES = Object.freeze(['openid', 'profile', 'email']);
 const MICROSOFT_GRAPH_CALENDAR_SCOPES = Object.freeze(['Calendars.ReadWrite']);
-const MICROSOFT_GRAPH_MAIL_SCOPES = Object.freeze(['Mail.ReadWrite', 'Mail.Send']);
+const MICROSOFT_GRAPH_MAIL_SCOPES = Object.freeze(['Mail.ReadWrite', 'Mail.Send', 'Mail.ReadWrite.Shared', 'Mail.Send.Shared']);
 const MICROSOFT_GRAPH_SHAREPOINT_SCOPES = Object.freeze(['Files.ReadWrite.All', 'Sites.Read.All']);
 const MICROSOFT_GRAPH_BASE_URL = 'https://graph.microsoft.com/v1.0';
+const PROJECT_MAILBOX_ADDRESS = 'prosjekt@busbar.no';
 const SHAREPOINT_FOLDER_CONFIG = Object.freeze({
   'project-folders': {
     title: 'Prosjektmapper',
@@ -70,13 +71,46 @@ const DASHBOARD_SIDEBAR_COLLAPSED_KEY = 'busbar.dashboard.sidebar.collapsed.v1';
 const PROJECT_SORT_STORAGE_KEY = 'busbar.project.sort.v1';
 const LINE_SORT_STORAGE_KEY = 'busbar.line.sort.v1';
 const OFFER_SORT_STORAGE_KEY = 'busbar.offer.sort.v1';
+const PROJECT_FLOW_STORAGE_KEY = 'busbar.project.flow.v1';
+const PROJECT_FLOW_ALL_PROJECTS = '__all__';
 const PROJECT_SORT_OPTIONS = Object.freeze(['date_newest', 'date_oldest', 'alpha_asc', 'alpha_desc']);
 const LINE_SORT_OPTIONS = Object.freeze(['date_newest', 'date_oldest', 'alpha_asc', 'alpha_desc']);
+const PROJECT_STATUS_OPTIONS = Object.freeze([
+  { id: 'unresolved', label: 'Uavklart', tone: 'idle' },
+  { id: 'won', label: 'Vunnet', tone: 'success' },
+  { id: 'lost', label: 'Tapt', tone: 'danger' },
+  { id: 'finished', label: 'Ferdig', tone: 'done' }
+]);
+const PROJECT_ARCHIVE_STATUS_IDS = Object.freeze(['lost', 'finished']);
+const PROJECT_FLOW_PHASES = Object.freeze([
+  { id: 'request', label: 'Forespørsel' },
+  { id: 'offer', label: 'Tilbud' },
+  { id: 'order', label: 'Ordre' },
+  { id: 'engineering', label: 'Prosjektering' },
+  { id: 'procurement', label: 'Innkjøp' },
+  { id: 'production', label: 'Produksjon' },
+  { id: 'delivery', label: 'Levering' },
+  { id: 'finished', label: 'Ferdig' }
+]);
+const PROJECT_FLOW_ZOOM_LEVELS = Object.freeze([42, 56, 72, 96, 124]);
+const PROJECT_FLOW_DEFAULT_ZOOM_INDEX = 2;
 const projectSyncState = {
   timerId: null,
   inFlight: false,
   pending: false
 };
+const projectFolderStatusState = {
+  loaded: false,
+  loading: false,
+  byProjectId: {}
+};
+
+function resetProjectFolderStatusState(){
+  projectFolderStatusState.loaded = false;
+  projectFolderStatusState.loading = false;
+  projectFolderStatusState.byProjectId = {};
+}
+
 const dashboardState = {
   activePage: 'dashboard',
   sidebarCollapsed: false
@@ -97,7 +131,8 @@ const projectState = {
   expandedProjectId: null,
   projectSearchTerm: '',
   projectSort: 'date_newest',
-  lineSort: 'date_newest'
+  lineSort: 'date_newest',
+  showArchive: false
 };
 const projectModalState = {
   mode: 'create',
@@ -107,6 +142,9 @@ const projectModalState = {
   copySourceProjectId: null
 };
 const projectMarginModalState = {
+  projectId: null
+};
+const projectStatusModalState = {
   projectId: null
 };
 const offerDetailsWarningState = {
@@ -146,6 +184,21 @@ const emailViewState = {
   selectedMessageId: ''
 };
 const sharePointFolderState = {};
+const projectFlowState = {
+  selectedProjectId: PROJECT_FLOW_ALL_PROJECTS,
+  milestonesByProjectId: {},
+  editingMilestoneId: '',
+  editingProjectId: '',
+  collapsedPhaseIds: new Set(),
+  zoomIndex: PROJECT_FLOW_DEFAULT_ZOOM_INDEX,
+  fitDayWidth: null,
+  datePickerCursor: new Date(),
+  datePickerTargetId: '',
+  drag: null,
+  linkDrag: null,
+  taskColumnWidth: 260,
+  suppressClickUntil: 0
+};
 
 // --- CSV ---
 function parseCSVAuto(text){
@@ -178,6 +231,57 @@ const $ = id=>document.getElementById(id);
 const hasDashboardUI = ()=>Boolean($('dashboardView') && $('projectList'));
 const hasCalculatorUI = ()=>Boolean($('calcBtn') && $('series'));
 
+function ensureFormModal(formId, titleText){
+  const form = $(formId);
+  if (!form) return null;
+  const modalId = `${formId}Modal`;
+  let modal = $(modalId);
+  if (!modal){
+    modal = document.createElement('div');
+    modal.id = modalId;
+    modal.className = 'form-modal-backdrop';
+    modal.hidden = true;
+    modal.innerHTML = `
+      <div class="form-modal-panel" role="dialog" aria-modal="true" aria-labelledby="${modalId}Title">
+        <div class="form-modal-header">
+          <h3 id="${modalId}Title"></h3>
+          <button type="button" class="form-modal-close" aria-label="Lukk">x</button>
+        </div>
+        <div class="form-modal-body"></div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+    modal.addEventListener('click', evt=>{
+      if (evt.target === modal) closeFormModal(formId);
+    });
+    modal.querySelector('.form-modal-close')?.addEventListener('click', ()=>closeFormModal(formId));
+  }
+  const title = modal.querySelector('.form-modal-header h3');
+  if (title) title.textContent = titleText || '';
+  const body = modal.querySelector('.form-modal-body');
+  if (body && form.parentElement !== body){
+    body.appendChild(form);
+  }
+  return modal;
+}
+
+function openFormModal(formId, titleText){
+  const modal = ensureFormModal(formId, titleText);
+  if (!modal) return;
+  modal.hidden = false;
+  document.body.classList.add('has-form-modal-open');
+}
+
+function closeFormModal(formId){
+  const form = $(formId);
+  if (form) form.hidden = true;
+  const modal = $(`${formId}Modal`);
+  if (modal) modal.hidden = true;
+  if (!document.querySelector('.form-modal-backdrop:not([hidden])')){
+    document.body.classList.remove('has-form-modal-open');
+  }
+}
+
 function buildAppUrl(fileName, params = {}){
   const url = new URL(fileName, window.location.href);
   Object.entries(params).forEach(([key, value])=>{
@@ -195,6 +299,13 @@ function goToDashboard(params = {}){
 
 function goToCalculator(params = {}){
   window.location.href = buildAppUrl('calculator.html', params).toString();
+}
+
+function updateMarketTickerVisibility(){
+  const ticker = $('marketTicker');
+  if (!ticker) return;
+  const shouldShow = hasCalculatorUI() || dashboardState.activePage === 'dashboard';
+  ticker.hidden = !shouldShow;
 }
 
 function setDashboardPage(page){
@@ -218,6 +329,7 @@ function setDashboardPage(page){
     item.classList.toggle('is-active', active);
     item.setAttribute('aria-current', active ? 'page' : 'false');
   });
+  updateMarketTickerVisibility();
   handleDashboardPageActivated(dashboardState.activePage);
 }
 
@@ -228,6 +340,8 @@ function handleDashboardPageActivated(page){
     loadEmailMessages({ silent: true });
   } else if (page === 'offers'){
     loadOfferStatus({ silent: true });
+  } else if (page === 'project-flow'){
+    renderProjectFlowView();
   } else if (page === 'customers' || page === 'company-card'){
     loadGlobalCustomerDatabase({ silent: true });
   } else if (page === 'project-folders' || page === 'supplier-folders'){
@@ -384,9 +498,10 @@ function buildStaticAssetUrl(relativePath){
 const round2 = n=>Math.round(n*100)/100;
 const fmtNO = new Intl.NumberFormat('no-NO', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fmtIntNO = new Intl.NumberFormat('no-NO', { maximumFractionDigits: 0 });
-const fmtFxNO = new Intl.NumberFormat('no-NO', { minimumFractionDigits: 4, maximumFractionDigits: 4 });
+const fmtFxNO = new Intl.NumberFormat('no-NO', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fmtTimestampNO = new Intl.DateTimeFormat('no-NO', { dateStyle: 'short', timeStyle: 'short' });
 const fmtPercentNO = new Intl.NumberFormat('no-NO', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+const fmtMarketPercentNO = new Intl.NumberFormat('no-NO', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const MIN_MONTERING_TOTAL = 30000;
 let currentMarginRate = DEFAULT_MATERIAL_MARGIN_RATE;
 let currentMontasjeMarginRate = DEFAULT_MARGIN_RATE;
@@ -1250,7 +1365,7 @@ function formatMarketChangeValue(change){
   const rate = Number(change?.rate);
   const rateText = Number.isFinite(rate) ? fmtFxNO.format(rate) : '--';
   const arrow = percent > 0 ? '↑' : percent < 0 ? '↓' : '→';
-  return `${rateText} ${arrow} ${fmtPercentNO.format(Math.abs(percent))} %`;
+  return `${rateText} ${arrow} ${fmtMarketPercentNO.format(Math.abs(percent))} %`;
 }
 
 function setMarketChangeValue(elementId, change){
@@ -1424,6 +1539,43 @@ function canEditGlobalCustomerData(){
   return authState.isAdmin === true || ADMIN_NAV_ALLOWED_EMAILS.includes(normalizeUserEmail(authState.username));
 }
 
+function canAccessProjectMailbox(){
+  return canEditGlobalCustomerData();
+}
+
+function projectMailboxGraphPath(path){
+  const suffix = String(path || '');
+  return `/users/${encodeURIComponent(PROJECT_MAILBOX_ADDRESS)}${suffix.startsWith('/') ? suffix : `/${suffix}`}`;
+}
+
+function updateEmailMailboxAccessUi(){
+  const canAccess = canAccessProjectMailbox();
+  const composeBtn = $('composeEmailBtn');
+  const refreshBtn = $('refreshEmailBtn');
+  const list = $('emailMessagesList');
+
+  if (composeBtn){
+    composeBtn.hidden = !canAccess;
+    composeBtn.disabled = !canAccess;
+  }
+  if (refreshBtn){
+    refreshBtn.disabled = !canAccess;
+  }
+  if (!canAccess){
+    closeEmailComposeForm();
+    emailViewState.selectedMessageId = '';
+    renderEmailMessages([]);
+    if (list) delete list.dataset.loaded;
+    setGraphStatus(
+      'emailStatus',
+      authState.loggedIn
+        ? `E-post er kun synlig for Owners. ${PROJECT_MAILBOX_ADDRESS} vises ikke for denne brukeren.`
+        : 'Logg inn med Microsoft for å vise e-post.',
+      authState.loggedIn ? '' : 'error'
+    );
+  }
+}
+
 function updateAuthUI(){
   const calcBtn = $('calcBtn');
   if (calcBtn) calcBtn.disabled = !authState.loggedIn;
@@ -1436,6 +1588,7 @@ function updateAuthUI(){
   const dashboardShell = $('dashboardShell');
   const canOpenAdmin = canEditGlobalCustomerData();
 
+  document.body.classList.toggle('is-auth-locked', !authState.loggedIn);
   if (loginBtn) loginBtn.hidden = authState.loggedIn;
   if (logoutBtn) logoutBtn.hidden = !authState.loggedIn;
   if (dashboardShell) dashboardShell.classList.toggle('is-authenticated', authState.loggedIn);
@@ -1473,7 +1626,7 @@ function updateAuthUI(){
 
   const newProjectBtn = $('newProjectBtn');
   if (newProjectBtn){
-    newProjectBtn.disabled = !authState.loggedIn;
+    newProjectBtn.disabled = !authState.loggedIn || projectState.showArchive === true;
   }
   const refreshProjectsBtn = $('refreshProjectsBtn');
   if (refreshProjectsBtn){
@@ -1481,9 +1634,11 @@ function updateAuthUI(){
   }
   const createProjectButtons = Array.from(document.querySelectorAll('button[data-action="create-project"]'));
   createProjectButtons.forEach(btn=>{
-    btn.disabled = !authState.loggedIn;
+    btn.disabled = !authState.loggedIn || projectState.showArchive === true;
   });
+  updateEmailMailboxAccessUi();
   renderGlobalCustomerViews();
+  renderProjectFlowView();
 }
 
 function authHeaders(){
@@ -2267,13 +2422,13 @@ function openCalendarEventForm(event = null){
   const deleteBtn = $('deleteCalendarEventBtn');
   if (deleteBtn) deleteBtn.hidden = !id;
   form.hidden = false;
+  openFormModal('calendarEventForm', id ? 'Endre avtale' : 'Ny avtale');
   void ensureCalendarAttendeeSuggestions();
   if (subjectEl) subjectEl.focus();
 }
 
 function closeCalendarEventForm(){
-  const form = $('calendarEventForm');
-  if (form) form.hidden = true;
+  closeFormModal('calendarEventForm');
 }
 
 function getCalendarEventPayloadFromForm(){
@@ -2447,25 +2602,34 @@ function updateEmailMessageActions(){
   if (label){
     label.textContent = message ? `Valgt: ${message.subject || '(Uten emne)'}` : '';
   }
+  const markBtn = $('markSelectedEmailReadBtn');
+  if (markBtn){
+    markBtn.textContent = message?.isRead ? 'Marker ulest' : 'Marker lest';
+  }
 }
 
 function selectEmailMessage(id){
-  emailViewState.selectedMessageId = String(id || '').trim();
+  const nextId = String(id || '').trim();
+  emailViewState.selectedMessageId = emailViewState.selectedMessageId === nextId ? '' : nextId;
   renderEmailMessages(emailViewState.messages);
 }
 
 function openEmailComposeForm(){
+  if (!canAccessProjectMailbox()){
+    setGraphStatus('emailStatus', 'E-post er kun tilgjengelig for Owners.', 'error');
+    return;
+  }
   const form = $('emailComposeForm');
   if (!form) return;
   form.reset();
   form.hidden = false;
+  openFormModal('emailComposeForm', 'Ny e-post');
   const input = $('emailToInput');
   if (input) input.focus();
 }
 
 function closeEmailComposeForm(){
-  const form = $('emailComposeForm');
-  if (form) form.hidden = true;
+  closeFormModal('emailComposeForm');
 }
 
 function getEmailComposePayload(){
@@ -2488,13 +2652,17 @@ function getEmailComposePayload(){
 }
 
 async function sendEmailFromForm(){
+  if (!canAccessProjectMailbox()){
+    setGraphStatus('emailStatus', 'E-post er kun tilgjengelig for Owners.', 'error');
+    return;
+  }
   const form = $('emailComposeForm');
   if (!form) return;
   const submitBtn = form.querySelector('button[type="submit"]');
   if (submitBtn) submitBtn.disabled = true;
   setGraphStatus('emailStatus', 'Sender e-post...');
   try{
-    await microsoftGraphRequest('/me/sendMail', MICROSOFT_GRAPH_MAIL_SCOPES, {
+    await microsoftGraphRequest(projectMailboxGraphPath('/sendMail'), MICROSOFT_GRAPH_MAIL_SCOPES, {
       method: 'POST',
       body: getEmailComposePayload()
     });
@@ -2510,28 +2678,37 @@ async function sendEmailFromForm(){
 }
 
 async function markSelectedEmailRead(){
+  if (!canAccessProjectMailbox()){
+    setGraphStatus('emailStatus', 'E-post er kun tilgjengelig for Owners.', 'error');
+    return;
+  }
   const message = getSelectedEmailMessage();
   if (!message?.id) return;
-  setGraphStatus('emailStatus', 'Markerer e-post som lest...');
+  const nextIsRead = !message.isRead;
+  setGraphStatus('emailStatus', nextIsRead ? 'Markerer e-post som lest...' : 'Markerer e-post som ulest...');
   try{
-    await microsoftGraphRequest(`/me/messages/${encodeURIComponent(message.id)}`, MICROSOFT_GRAPH_MAIL_SCOPES, {
+    await microsoftGraphRequest(projectMailboxGraphPath(`/messages/${encodeURIComponent(message.id)}`), MICROSOFT_GRAPH_MAIL_SCOPES, {
       method: 'PATCH',
-      body: { isRead: true }
+      body: { isRead: nextIsRead }
     });
     await loadEmailMessages();
   }catch(err){
     console.warn('Markering av e-post feilet', err);
-    setGraphStatus('emailStatus', err?.message || 'Kunne ikke markere e-post.', 'error');
+    setGraphStatus('emailStatus', err?.message || 'Kunne ikke endre lest-status.', 'error');
   }
 }
 
 async function deleteSelectedEmail(){
+  if (!canAccessProjectMailbox()){
+    setGraphStatus('emailStatus', 'E-post er kun tilgjengelig for Owners.', 'error');
+    return;
+  }
   const message = getSelectedEmailMessage();
   if (!message?.id) return;
   if (!window.confirm('Slette valgt e-post?')) return;
   setGraphStatus('emailStatus', 'Sletter e-post...');
   try{
-    await microsoftGraphRequest(`/me/messages/${encodeURIComponent(message.id)}`, MICROSOFT_GRAPH_MAIL_SCOPES, {
+    await microsoftGraphRequest(projectMailboxGraphPath(`/messages/${encodeURIComponent(message.id)}`), MICROSOFT_GRAPH_MAIL_SCOPES, {
       method: 'DELETE'
     });
     emailViewState.selectedMessageId = '';
@@ -2786,14 +2963,20 @@ function sanitizeSharePointFolderName(value, fallback = 'Prosjekt'){
 }
 
 function formatProjectFolderName(project){
+  const existingName = String(project?.projectFolderName || '').trim();
+  if (existingName) return sanitizeSharePointFolderName(existingName);
   const number = String(project?.projectNumber || '').trim();
   const name = String(project?.name || '').trim() || 'Uten navn';
   return sanitizeSharePointFolderName([number, name].filter(Boolean).join(' - '));
 }
 
+function sharePointNameEquals(a, b){
+  return String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
+}
+
 async function getSharePointFolderChildren(driveId, itemId){
   const query = new URLSearchParams({
-    '$select': 'id,name,folder,file,size,lastModifiedDateTime',
+    '$select': 'id,name,webUrl,folder,file,size,lastModifiedDateTime',
     '$top': '200'
   });
   const payload = await microsoftGraphRequest(
@@ -2861,6 +3044,128 @@ async function getSharePointRootFolderItem(page){
   return { ...state, rootItem: root };
 }
 
+async function findProjectSharePointFolder(project){
+  const state = await getSharePointRootFolderItem('project-folders');
+  const folderName = formatProjectFolderName(project);
+  const children = await getSharePointFolderChildren(state.driveId, state.rootItem.id);
+  const folder = children.find(item=>item?.folder && sharePointNameEquals(item.name, folderName));
+  return { ...state, folderName, folder: folder || null };
+}
+
+function getProjectFolderStatus(project){
+  const id = String(project?.id || '').trim();
+  return id ? projectFolderStatusState.byProjectId[id] || null : null;
+}
+
+function projectHasConfirmedFolder(project){
+  return getProjectFolderStatus(project)?.exists === true;
+}
+
+async function refreshProjectFolderStatuses(options = {}){
+  if (!authState.loggedIn || projectFolderStatusState.loading) return;
+  const projects = Array.isArray(projectState.projects) ? projectState.projects : [];
+  if (!projects.length) return;
+  projectFolderStatusState.loading = true;
+  try{
+    const state = await getSharePointRootFolderItem('project-folders');
+    const children = await getSharePointFolderChildren(state.driveId, state.rootItem.id);
+    const folders = children.filter(item=>item?.folder);
+    const next = {};
+    let changedProjects = false;
+    projects.forEach(project=>{
+      const expectedName = formatProjectFolderName(project);
+      const folder = folders.find(item=>sharePointNameEquals(item.name, expectedName));
+      next[project.id] = {
+        exists: Boolean(folder?.id),
+        folderName: folder?.name || expectedName,
+        webUrl: folder?.webUrl || ''
+      };
+      if (folder?.id){
+        if (project.projectFolderName !== folder.name || project.projectFolderWebUrl !== folder.webUrl || project.projectFolderCreated !== true){
+          project.projectFolderName = String(folder.name || expectedName).trim();
+          project.projectFolderCreated = true;
+          project.projectFolderWebUrl = String(folder.webUrl || '').trim();
+          changedProjects = true;
+        }
+      }
+    });
+    projectFolderStatusState.byProjectId = next;
+    projectFolderStatusState.loaded = true;
+    if (changedProjects) saveProjectsToStorage();
+    if (options.render !== false) renderProjectDashboard();
+  }catch(err){
+    console.warn('Kunne ikke hente prosjektmappestatus', err);
+    projectFolderStatusState.loaded = true;
+  }finally{
+    projectFolderStatusState.loading = false;
+  }
+}
+
+function ensureProjectFolderStatusesLoaded(){
+  if (!authState.loggedIn || projectFolderStatusState.loaded || projectFolderStatusState.loading) return;
+  void refreshProjectFolderStatuses();
+}
+
+async function ensureProjectOfferSharePointFolder(project){
+  const state = await findProjectSharePointFolder(project);
+  if (!state.folder?.id){
+    throw new Error(`Prosjektmappe må opprettes før tilbud kan genereres: ${state.folderName}`);
+  }
+  const children = await getSharePointFolderChildren(state.driveId, state.folder.id);
+  const existingOfferFolder = children.find(item=>item?.folder && sharePointNameEquals(item.name, 'Tilbud'));
+  if (existingOfferFolder?.id){
+    return { driveId: state.driveId, projectFolder: state.folder, offerFolder: existingOfferFolder };
+  }
+  const offerFolder = await createSharePointChildFolder(state.driveId, state.folder.id, 'Tilbud', 'fail');
+  if (!offerFolder?.id) throw new Error('Kunne ikke opprette Tilbud-mappe i prosjektmappen.');
+  return { driveId: state.driveId, projectFolder: state.folder, offerFolder };
+}
+
+async function uploadProjectOfferToSharePoint(project, generatedOffer, targetFolder = null){
+  if (!generatedOffer?.blob) throw new Error('Tilbudsfilen mangler.');
+  const { driveId, offerFolder } = targetFolder || await ensureProjectOfferSharePointFolder(project);
+  const normalizedOfferFileName = String(generatedOffer.fileName || 'Tilbud.docx')
+    .replace(/-rev(\d+)(?=(\.[^.]+)?$)/i, '-$1');
+  const safeFileName = sanitizeSharePointFolderName(normalizedOfferFileName, 'Tilbud.docx');
+  const fileName = encodeURIComponent(safeFileName);
+  return microsoftGraphRequest(
+    `/drives/${encodeURIComponent(driveId)}/items/${encodeURIComponent(offerFolder.id)}:/${fileName}:/content`,
+    MICROSOFT_GRAPH_SHAREPOINT_SCOPES,
+    {
+      method: 'PUT',
+      body: generatedOffer.blob,
+      rawBody: true,
+      contentType: generatedOffer.blob.type || 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    }
+  );
+}
+
+async function findProjectOfferSharePointFolder(project){
+  const state = await findProjectSharePointFolder(project);
+  if (!state.folder?.id){
+    throw new Error(`Fant ikke prosjektmappe i SharePoint: ${state.folderName}`);
+  }
+  const children = await getSharePointFolderChildren(state.driveId, state.folder.id);
+  const offerFolder = children.find(item=>item?.folder && sharePointNameEquals(item.name, 'Tilbud'));
+  if (!offerFolder?.id){
+    throw new Error(`Fant ikke Tilbud-mappe under prosjektmappen ${state.folderName}.`);
+  }
+  return { driveId: state.driveId, projectFolder: state.folder, offerFolder };
+}
+
+async function findLatestProjectOfferFile(project){
+  const { driveId, offerFolder } = await findProjectOfferSharePointFolder(project);
+  const children = await getSharePointFolderChildren(driveId, offerFolder.id);
+  const files = children
+    .filter(item=>item?.file && /\.(docx?|pdf)$/i.test(String(item.name || '')))
+    .sort((a, b)=>new Date(b.lastModifiedDateTime || 0).getTime() - new Date(a.lastModifiedDateTime || 0).getTime());
+  const latest = files[0] || null;
+  if (!latest?.webUrl){
+    throw new Error('Fant ingen Word- eller PDF-fil i Tilbud-mappen for prosjektet.');
+  }
+  return latest;
+}
+
 async function createProjectFolderFromTemplate(projectId, triggerBtn){
   const project = getProjectById(projectId);
   if (!project) return;
@@ -2888,6 +3193,18 @@ async function createProjectFolderFromTemplate(projectId, triggerBtn){
     const projectFolder = await createSharePointChildFolder(state.driveId, state.rootItem.id, folderName, 'fail');
     if (!projectFolder?.id) throw new Error('Prosjektmappen ble ikke opprettet.');
     await cloneSharePointFolderContents(state.driveId, template.id, projectFolder.id);
+    project.projectFolderName = folderName;
+    project.projectFolderCreated = true;
+    project.projectFolderWebUrl = projectFolder.webUrl || project.projectFolderWebUrl || '';
+    projectFolderStatusState.byProjectId[project.id] = {
+      exists: true,
+      folderName,
+      webUrl: project.projectFolderWebUrl || ''
+    };
+    projectFolderStatusState.loaded = true;
+    project.updatedAt = new Date().toISOString();
+    saveProjectsToStorage();
+    renderProjectDashboard();
     await loadSharePointFolder('project-folders');
     setGraphStatus('projectFoldersStatus', `Opprettet ${folderName}`, 'ok');
     if (projectFolder.webUrl && window.confirm('Prosjektmappe opprettet. Åpne mappen i SharePoint?')){
@@ -2901,6 +3218,51 @@ async function createProjectFolderFromTemplate(projectId, triggerBtn){
     if (btn){
       btn.disabled = false;
       btn.textContent = originalText || 'Opprett prosjektmappe';
+    }
+  }
+}
+
+async function openProjectSharePointFolder(projectId, triggerBtn){
+  const project = getProjectById(projectId);
+  if (!project) return;
+  if (!authState.loggedIn){
+    showLoginModal();
+    return;
+  }
+  const btn = triggerBtn && triggerBtn.tagName === 'BUTTON' ? triggerBtn : null;
+  const originalText = btn?.textContent || '';
+  if (btn){
+    btn.disabled = true;
+    btn.textContent = 'Åpner...';
+  }
+  try{
+    let webUrl = String(project.projectFolderWebUrl || '').trim();
+    if (!webUrl){
+      const state = await findProjectSharePointFolder(project);
+      if (!state.folder?.id){
+        throw new Error(`Fant ikke prosjektmappe i SharePoint: ${state.folderName}`);
+      }
+      webUrl = String(state.folder.webUrl || '').trim();
+      project.projectFolderName = String(state.folder.name || state.folderName || '').trim();
+      project.projectFolderCreated = true;
+      project.projectFolderWebUrl = webUrl;
+      projectFolderStatusState.byProjectId[project.id] = {
+        exists: true,
+        folderName: project.projectFolderName,
+        webUrl
+      };
+      project.updatedAt = new Date().toISOString();
+      saveProjectsToStorage();
+      renderProjectDashboard();
+    }
+    if (!webUrl) throw new Error('Fant prosjektmappen, men SharePoint returnerte ingen åpne-lenke.');
+    window.open(webUrl, '_blank', 'noopener,noreferrer');
+  }catch(err){
+    window.alert(String(err?.message || 'Kunne ikke åpne prosjektmappe.'));
+  }finally{
+    if (btn){
+      btn.disabled = false;
+      btn.textContent = originalText || 'Åpne prosjektmappe';
     }
   }
 }
@@ -2999,23 +3361,31 @@ async function loadCalendarEvents(options = {}){
 }
 
 async function loadEmailMessages(options = {}){
+  const list = $('emailMessagesList');
+  if (!list) return;
   if (!authState.loggedIn){
+    renderEmailMessages([]);
+    delete list.dataset.loaded;
     setGraphStatus('emailStatus', 'Logg inn med Microsoft for å vise e-post.', 'error');
     return;
   }
-  const list = $('emailMessagesList');
-  if (!list) return;
+  if (!canAccessProjectMailbox()){
+    renderEmailMessages([]);
+    delete list.dataset.loaded;
+    setGraphStatus('emailStatus', `E-post er kun synlig for Owners. ${PROJECT_MAILBOX_ADDRESS} vises ikke for denne brukeren.`);
+    return;
+  }
   if (options.silent && list.dataset.loaded === '1') return;
   const btn = $('refreshEmailBtn');
   if (btn) btn.disabled = true;
-  setGraphStatus('emailStatus', 'Henter e-post...');
+  setGraphStatus('emailStatus', `Henter e-post fra ${PROJECT_MAILBOX_ADDRESS}...`);
   try{
     const query = new URLSearchParams({
       '$top': '25',
       '$orderby': 'receivedDateTime desc',
       '$select': 'id,subject,from,receivedDateTime,bodyPreview,isRead,importance,webLink'
     });
-    const payload = await microsoftGraphRequest(`/me/messages?${query.toString()}`, MICROSOFT_GRAPH_MAIL_SCOPES);
+    const payload = await microsoftGraphRequest(projectMailboxGraphPath(`/mailFolders/inbox/messages?${query.toString()}`), MICROSOFT_GRAPH_MAIL_SCOPES);
     const messages = Array.isArray(payload?.value) ? payload.value : [];
     renderEmailMessages(messages);
     list.dataset.loaded = '1';
@@ -3065,6 +3435,7 @@ async function handleMicrosoftLogin(){
 
 function clearAuthSession(){
   authState = { loggedIn: false, username: '', token: '', profile: null, isAdmin: false };
+  resetProjectFolderStatusState();
   projectState.customerDatabase = [];
   projectState.globalCustomerDatabaseLoaded = false;
   renderGlobalCustomerViews();
@@ -3711,6 +4082,30 @@ function generateProjectId(){
   return `proj-${Date.now().toString(36)}-${Math.random().toString(16).slice(2, 10)}`;
 }
 
+function normalizeProjectStatus(value){
+  const raw = String(value || '').trim().toLowerCase();
+  if (!raw) return PROJECT_STATUS_OPTIONS[0].id;
+  if (PROJECT_STATUS_OPTIONS.some(option=>option.id === raw)) return raw;
+  const mapped = {
+    uavklart: 'unresolved',
+    vunnet: 'won',
+    tapt: 'lost',
+    ferdig: 'finished'
+  };
+  return mapped[raw] || PROJECT_STATUS_OPTIONS[0].id;
+}
+
+function getProjectStatusConfig(projectOrStatus){
+  const status = typeof projectOrStatus === 'string'
+    ? normalizeProjectStatus(projectOrStatus)
+    : normalizeProjectStatus(projectOrStatus?.projectStatus);
+  return PROJECT_STATUS_OPTIONS.find(option=>option.id === status) || PROJECT_STATUS_OPTIONS[0];
+}
+
+function projectIsArchived(project){
+  return PROJECT_ARCHIVE_STATUS_IDS.includes(getProjectStatusConfig(project).id);
+}
+
 function normalizeProject(raw){
   if (!raw) return null;
   const fallback = new Date().toISOString();
@@ -3726,6 +4121,10 @@ function normalizeProject(raw){
     contactPhone: String(raw.contactPhone || raw.phone || '').trim(),
     projectResponsible: String(raw.projectResponsible || raw.projectOwner || raw.ownerName || '').trim(),
     projectOwnerEmail: normalizeUserEmail(raw.projectOwnerEmail || raw.ownerEmail || ''),
+    projectFolderName: String(raw.projectFolderName || '').trim(),
+    projectFolderCreated: raw.projectFolderCreated === true,
+    projectFolderWebUrl: String(raw.projectFolderWebUrl || '').trim(),
+    projectStatus: normalizeProjectStatus(raw.projectStatus || raw.status),
     createdAt: raw.createdAt || fallback,
     updatedAt: raw.updatedAt || fallback,
     selectedAddonConfig,
@@ -3859,8 +4258,16 @@ function mergeProjectsByLatest(localProjects, remoteProjects){
     }
     const existingTs = getProjectUpdateTimestamp(existing);
     const candidateTs = getProjectUpdateTimestamp(normalized);
-    if (candidateTs >= existingTs){
+    if (candidateTs > existingTs){
       merged.set(key, normalized);
+      return;
+    }
+    if (candidateTs === existingTs){
+      const existingStatus = normalizeProjectStatus(existing.projectStatus);
+      const candidateStatus = normalizeProjectStatus(project?.projectStatus || project?.status);
+      if (candidateStatus !== 'unresolved' || existingStatus === 'unresolved'){
+        merged.set(key, normalized);
+      }
     }
   };
   (Array.isArray(localProjects) ? localProjects : []).forEach(add);
@@ -4247,6 +4654,7 @@ function openCompanyEditForm(customer = null) {
   if (!form) return;
   form.dataset.editing = '1';
   form.hidden = false;
+  openFormModal('companyEditForm', customer ? 'Endre kunde' : 'Legg til kunde');
   $('companyOriginalName').value = customer?.name || '';
   $('companyNameInput').value = customer?.name || '';
   $('companyAddressInput').value = customer?.address || '';
@@ -4260,7 +4668,7 @@ function closeCompanyEditForm() {
   const form = $('companyEditForm');
   if (!form) return;
   form.dataset.editing = '0';
-  form.hidden = true;
+  closeFormModal('companyEditForm');
   form.reset();
 }
 
@@ -4270,6 +4678,7 @@ function openContactEditForm(contact = null) {
   if (!form) return;
   form.dataset.editing = '1';
   form.hidden = false;
+  openFormModal('contactEditForm', contact ? 'Endre kontakt' : 'Legg til kontakt');
   $('contactOriginalCustomer').value = contact?.customerName || '';
   $('contactOriginalName').value = contact?.name || '';
   $('contactCompanyInput').value = contact?.customerName || '';
@@ -4283,7 +4692,7 @@ function closeContactEditForm() {
   const form = $('contactEditForm');
   if (!form) return;
   form.dataset.editing = '0';
-  form.hidden = true;
+  closeFormModal('contactEditForm');
   form.reset();
 }
 
@@ -4529,7 +4938,8 @@ function projectMatchesSearch(project, rawSearchTerm = projectState.projectSearc
     project?.name,
     project?.customer,
     project?.contactPerson,
-    getProjectResponsibleName(project)
+    getProjectResponsibleName(project),
+    getProjectStatusConfig(project).label
   ].map(value=>String(value || '').toLowerCase()).join(' ');
   return haystack.includes(term);
 }
@@ -5519,6 +5929,59 @@ function closeProjectMarginModal(){
   if (errorEl) errorEl.textContent = '';
 }
 
+function openProjectStatusModal(projectId){
+  const project = getProjectById(projectId);
+  if (!project) return;
+  const modal = $('projectStatusModal');
+  if (!modal) return;
+  projectStatusModalState.projectId = project.id;
+  modal.dataset.projectId = project.id;
+  const nameEl = $('projectStatusProjectName');
+  if (nameEl){
+    const title = project.projectNumber
+      ? `${project.projectNumber} - ${project.name || 'Uten navn'}`
+      : (project.name || 'Uten navn');
+    nameEl.textContent = title;
+  }
+  const currentStatus = getProjectStatusConfig(project).id;
+  modal.querySelectorAll('[data-project-status-option]').forEach(btn=>{
+    const active = btn.getAttribute('data-project-status-option') === currentStatus;
+    btn.classList.toggle('is-active', active);
+    btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+  });
+  modal.style.display = 'flex';
+}
+
+function closeProjectStatusModal(){
+  const modal = $('projectStatusModal');
+  if (modal){
+    modal.style.display = 'none';
+    delete modal.dataset.projectId;
+  }
+  projectStatusModalState.projectId = null;
+}
+
+function setProjectStatus(projectId, status){
+  const project = getProjectById(projectId);
+  if (!project) return;
+  const nextStatus = normalizeProjectStatus(status);
+  project.projectStatus = nextStatus;
+  project.updatedAt = new Date().toISOString();
+  saveProjectsToStorage();
+  sortProjects();
+  if (PROJECT_ARCHIVE_STATUS_IDS.includes(nextStatus)){
+    projectState.expandedProjectId = null;
+  }
+  const statusEl = $('projectsStatus');
+  if (statusEl){
+    statusEl.textContent = `Prosjektstatus endret til ${getProjectStatusConfig(nextStatus).label}.`;
+    statusEl.classList.remove('error');
+    statusEl.classList.add('ok');
+  }
+  closeProjectStatusModal();
+  renderProjectDashboard();
+}
+
 function submitProjectMarginModal(){
   const projectId = projectMarginModalState.projectId;
   if (!projectId){
@@ -5714,34 +6177,43 @@ function buildAddonSelectorControl(config, options = {}){
     return group;
   };
 
-  wrapper.appendChild(buildSelectorGroup('Inkluder i tilbud:', 'include', 'includeKey'));
-  wrapper.appendChild(buildSelectorGroup('Synliggjør pris:', 'show', 'showKey'));
-  const unitGroup = document.createElement('div');
-  unitGroup.className = 'addon-selectors';
-  const unitTitle = document.createElement('span');
-  unitTitle.className = 'addon-selectors-title';
-  const unitStrong = document.createElement('strong');
-  unitStrong.textContent = 'Inkluder enhetspriser:';
-  unitTitle.appendChild(unitStrong);
-  unitGroup.appendChild(unitTitle);
-  const unitLabel = document.createElement('label');
-  const unitInput = document.createElement('input');
-  unitInput.type = 'checkbox';
-  unitInput.checked = Boolean(normalized.includeUnitPrices);
-  unitInput.dataset.addonField = 'includeUnitPrices';
-  unitInput.dataset.addonMode = 'unit';
-  if (options.scope === 'project'){
-    unitInput.dataset.projectAddon = '1';
-    unitInput.dataset.projectId = options.projectId || '';
-  } else if (options.scope === 'line'){
-    unitInput.dataset.lineAddon = '1';
-    unitInput.dataset.projectId = options.projectId || '';
-    unitInput.dataset.lineId = options.lineId || '';
-  }
-  unitLabel.appendChild(unitInput);
-  unitLabel.appendChild(document.createTextNode(' Enhetspriser'));
-  unitGroup.appendChild(unitLabel);
-  wrapper.appendChild(unitGroup);
+  const buildUnitGroup = ()=>{
+    const unitGroup = document.createElement('div');
+    unitGroup.className = 'addon-selectors';
+    const unitTitle = document.createElement('span');
+    unitTitle.className = 'addon-selectors-title';
+    const unitStrong = document.createElement('strong');
+    unitStrong.textContent = 'Inkluder enhetspriser:';
+    unitTitle.appendChild(unitStrong);
+    unitGroup.appendChild(unitTitle);
+    const unitLabel = document.createElement('label');
+    const unitInput = document.createElement('input');
+    unitInput.type = 'checkbox';
+    unitInput.checked = Boolean(normalized.includeUnitPrices);
+    unitInput.dataset.addonField = 'includeUnitPrices';
+    unitInput.dataset.addonMode = 'unit';
+    if (options.scope === 'project'){
+      unitInput.dataset.projectAddon = '1';
+      unitInput.dataset.projectId = options.projectId || '';
+    } else if (options.scope === 'line'){
+      unitInput.dataset.lineAddon = '1';
+      unitInput.dataset.projectId = options.projectId || '';
+      unitInput.dataset.lineId = options.lineId || '';
+    }
+    unitLabel.appendChild(unitInput);
+    unitLabel.appendChild(document.createTextNode(' Enhetspriser'));
+    unitGroup.appendChild(unitLabel);
+    return unitGroup;
+  };
+
+  const groups = Array.isArray(options.groups) && options.groups.length
+    ? options.groups
+    : ['include', 'show', 'unit'];
+  groups.forEach(group=>{
+    if (group === 'include') wrapper.appendChild(buildSelectorGroup('Inkluder i tilbud:', 'include', 'includeKey'));
+    if (group === 'show') wrapper.appendChild(buildSelectorGroup('Synliggjør pris:', 'show', 'showKey'));
+    if (group === 'unit') wrapper.appendChild(buildUnitGroup());
+  });
   return wrapper;
 }
 
@@ -5831,7 +6303,7 @@ async function generateProjectOffer(project){
   const offerNumber = String(res.headers.get('X-Offer-Number') || '').trim();
   const revision = String(res.headers.get('X-Offer-Revision') || '').trim();
   const projectName = sanitizeDownloadFileName(project?.name || 'prosjekt');
-  const fallbackName = `Tilbud-${projectName}${offerNumber ? `-${offerNumber}` : ''}${revision ? `-rev${revision}` : ''}.docx`;
+  const fallbackName = `Tilbud-${projectName}${offerNumber ? `-${offerNumber}` : ''}${revision ? `-${revision}` : ''}.docx`;
   return {
     blob,
     fileName: headerName || fallbackName,
@@ -5868,7 +6340,7 @@ async function generateLatestProjectOffer(project){
   const offerNumber = String(res.headers.get('X-Offer-Number') || '').trim();
   const revision = String(res.headers.get('X-Offer-Revision') || '').trim();
   const projectName = sanitizeDownloadFileName(project?.name || 'prosjekt');
-  const fallbackName = `Tilbud-${projectName}${offerNumber ? `-${offerNumber}` : ''}${revision ? `-rev${revision}` : ''}.docx`;
+  const fallbackName = `Tilbud-${projectName}${offerNumber ? `-${offerNumber}` : ''}${revision ? `-${revision}` : ''}.docx`;
   return {
     blob,
     fileName: headerName || fallbackName,
@@ -5905,7 +6377,7 @@ function offerRowMatchesSearch(row){
     getProjectResponsibleName(project),
     project.projectNumber,
     status.offerNumber,
-    status.revision !== null && status.revision !== undefined ? `rev${status.revision}` : ''
+    status.revision !== null && status.revision !== undefined ? `-${status.revision}` : ''
   ].map(value=>String(value || '').toLowerCase()).join(' ');
   return haystack.includes(term);
 }
@@ -5954,7 +6426,7 @@ function renderOffersList(){
       ['Prosjektansvarlig', getProjectResponsibleName(project)],
       ['Kunde', project.customer],
       ['Kontaktperson', project.contactPerson],
-      ['Tilbud', status.hasOffer ? `${status.offerNumber || '-'} rev${status.revision ?? '-'}` : 'Ingen genererte tilbud'],
+      ['Tilbud', status.hasOffer ? `${status.offerNumber || '-'}-${status.revision ?? '-'}` : 'Ingen genererte tilbud'],
       ['Oppdatert', formatProjectTimestamp(project.updatedAt || project.createdAt)]
     ]);
 
@@ -5965,7 +6437,7 @@ function renderOffersList(){
     openWordBtn.className = 'btn';
     openWordBtn.dataset.openOfferWord = project.id;
     openWordBtn.textContent = 'Åpne Word';
-    openWordBtn.disabled = !status.hasOffer;
+    openWordBtn.disabled = !authState.loggedIn;
     const pdfBtn = document.createElement('button');
     pdfBtn.type = 'button';
     pdfBtn.className = 'btn alt';
@@ -6101,8 +6573,8 @@ async function openLatestOfferForProject(projectId, triggerBtn){
     btn.textContent = 'Åpner...';
   }
   try{
-    const generated = await generateLatestProjectOffer(project);
-    downloadBlob(generated.blob, generated.fileName);
+    const latestFile = await findLatestProjectOfferFile(project);
+    window.open(latestFile.webUrl, '_blank', 'noopener,noreferrer');
   }catch(err){
     window.alert(String(err?.message || err));
   }finally{
@@ -6171,18 +6643,28 @@ async function requestGenerateProjectOffer(projectId, triggerBtn){
   }
 
   try{
+    const offerTarget = await ensureProjectOfferSharePointFolder(project);
+    project.projectFolderName = String(offerTarget.projectFolder?.name || formatProjectFolderName(project)).trim();
+    project.projectFolderCreated = true;
+    project.projectFolderWebUrl = offerTarget.projectFolder?.webUrl || project.projectFolderWebUrl || '';
+    projectFolderStatusState.byProjectId[project.id] = {
+      exists: true,
+      folderName: project.projectFolderName,
+      webUrl: project.projectFolderWebUrl || ''
+    };
     const generated = await generateProjectOffer(project);
+    await uploadProjectOfferToSharePoint(project, generated, offerTarget);
     if (generated.offerNumber){
       project.projectNumber = generated.offerNumber;
-      saveProjectsToStorage();
-      offerListState.loaded = false;
-      renderProjectDashboard();
-      void loadOfferStatus({ silent: true });
     }
-    downloadBlob(generated.blob, generated.fileName);
+    project.updatedAt = new Date().toISOString();
+    saveProjectsToStorage();
+    offerListState.loaded = false;
+    renderProjectDashboard();
+    void loadOfferStatus({ silent: true });
 
     if (buttonEl){
-      buttonEl.textContent = generated.offerNumber ? `Generert ${generated.offerNumber}` : 'Generert';
+      buttonEl.textContent = generated.offerNumber ? `Lagret ${generated.offerNumber}` : 'Lagret';
     }
   }catch(err){
     failed = true;
@@ -6200,9 +6682,1966 @@ async function requestGenerateProjectOffer(projectId, triggerBtn){
   }
 }
 
+function readProjectFlowStore(){
+  if (typeof localStorage === 'undefined') return {};
+  try{
+    const raw = localStorage.getItem(getProjectFlowStorageKey());
+    const parsed = raw ? JSON.parse(raw) : {};
+    if (!parsed || typeof parsed !== 'object') return {};
+    return parsed;
+  }catch(_err){
+    return {};
+  }
+}
+
+function persistProjectFlowStore(){
+  if (typeof localStorage === 'undefined') return;
+  try{
+    localStorage.setItem(getProjectFlowStorageKey(), JSON.stringify(projectFlowState.milestonesByProjectId || {}));
+  }catch(_err){}
+}
+
+function getProjectFlowStorageKey(){
+  const email = getCurrentUserEmail();
+  return email ? `${PROJECT_FLOW_STORAGE_KEY}.${email}` : `${PROJECT_FLOW_STORAGE_KEY}.local`;
+}
+
+function normalizeProjectFlowMilestones(items){
+  return (Array.isArray(items) ? items : [])
+    .map(item=>{
+      const startDate = String(item?.startDate || item?.date || '').trim();
+      const endDate = String(item?.endDate || item?.date || startDate).trim();
+      return {
+        id: String(item?.id || '').trim(),
+        phaseId: PROJECT_FLOW_PHASES.some(phase=>phase.id === item?.phaseId) ? item.phaseId : PROJECT_FLOW_PHASES[0].id,
+        title: String(item?.title || '').trim(),
+        startDate,
+        endDate,
+        date: startDate,
+        durationValue: Math.max(1, Number.parseInt(item?.durationValue, 10) || 1),
+        durationUnit: ['days', 'weeks', 'months'].includes(item?.durationUnit) ? item.durationUnit : 'days',
+        fileName: String(item?.fileName || '').trim(),
+        drivenByTaskId: String(item?.drivenByTaskId || (item?.dependencyRelation === 'drivenBy' ? item?.dependencyTaskId : '') || '').trim(),
+        drivesTaskId: String(item?.drivesTaskId || (item?.dependencyRelation === 'drives' ? item?.dependencyTaskId : '') || '').trim(),
+        dependencyRelation: ['drives', 'drivenBy'].includes(item?.dependencyRelation) ? item.dependencyRelation : '',
+        dependencyTaskId: String(item?.dependencyTaskId || '').trim(),
+        createdAt: String(item?.createdAt || item?.updatedAt || '').trim(),
+        updatedAt: String(item?.updatedAt || item?.createdAt || '').trim(),
+        completed: Boolean(item?.completed)
+      };
+    })
+    .filter(item=>{
+      if (!item.id) return false;
+      const start = parseProjectFlowDate(item.startDate);
+      const end = parseProjectFlowDate(item.endDate);
+      return Boolean(start && end && start <= end);
+    });
+}
+
+function loadProjectFlowState(){
+  const store = readProjectFlowStore();
+  const normalized = {};
+  Object.entries(store).forEach(([projectId, items])=>{
+    const key = String(projectId || '').trim();
+    if (!key) return;
+    normalized[key] = normalizeProjectFlowMilestones(items);
+  });
+  projectFlowState.milestonesByProjectId = normalized;
+}
+
+function getProjectFlowMilestones(projectId){
+  const key = String(projectId || '').trim();
+  return normalizeProjectFlowMilestones(projectFlowState.milestonesByProjectId[key] || []);
+}
+
+function setProjectFlowMilestones(projectId, milestones){
+  const key = String(projectId || '').trim();
+  if (!key) return;
+  projectFlowState.milestonesByProjectId[key] = normalizeProjectFlowMilestones(milestones);
+  persistProjectFlowStore();
+}
+
+function createProjectFlowId(){
+  if (window.crypto?.randomUUID) return window.crypto.randomUUID();
+  return `flow-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+}
+
+function parseProjectFlowDate(value){
+  const raw = String(value || '').trim();
+  const isoMatch = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const displayMatch = raw.match(/^(\d{1,2})[/.](\d{1,2})[/.](\d{4})$/);
+  const match = isoMatch || displayMatch;
+  if (!match) return null;
+  const year = isoMatch ? Number(match[1]) : Number(match[3]);
+  const month = isoMatch ? Number(match[2]) : Number(match[2]);
+  const day = isoMatch ? Number(match[3]) : Number(match[1]);
+  const date = new Date(year, month - 1, day);
+  if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) return null;
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function formatProjectFlowDate(date){
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return '';
+  const yyyy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, '0');
+  const dd = String(date.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function formatProjectFlowDisplayDate(value){
+  const date = parseProjectFlowDate(value);
+  if (!date) return '-';
+  return date.toLocaleDateString('no-NO', { day: '2-digit', month: '2-digit', year: 'numeric' });
+}
+
+function formatProjectFlowInputDate(value){
+  const date = value instanceof Date ? value : parseProjectFlowDate(value);
+  if (!date) return '';
+  const dd = String(date.getDate()).padStart(2, '0');
+  const mm = String(date.getMonth() + 1).padStart(2, '0');
+  return `${dd}/${mm}/${date.getFullYear()}`;
+}
+
+function getProjectFlowDatePickerTarget(){
+  const targetId = String(projectFlowState.datePickerTargetId || '').trim();
+  return targetId ? $(targetId) : null;
+}
+
+function closeProjectFlowDatePickerPopover(){
+  const popover = $('projectFlowDatePickerPopover');
+  if (popover) popover.hidden = true;
+  projectFlowState.datePickerTargetId = '';
+}
+
+function renderProjectFlowDatePickerPopover(){
+  const popover = $('projectFlowDatePickerPopover');
+  const targetInput = getProjectFlowDatePickerTarget();
+  if (!popover || !targetInput) return;
+  const selected = parseProjectFlowDate(targetInput.value);
+  const cursor = projectFlowState.datePickerCursor instanceof Date
+    ? projectFlowState.datePickerCursor
+    : selected || new Date();
+  const monthStart = startOfMonth(cursor);
+  const gridStart = startOfWeekMonday(monthStart);
+  const today = startOfDay(new Date());
+  popover.innerHTML = '';
+
+  const head = document.createElement('div');
+  head.className = 'calendar-date-picker-head';
+  const title = document.createElement('div');
+  title.className = 'calendar-date-picker-title';
+  title.textContent = new Intl.DateTimeFormat('no-NO', { month: 'long', year: 'numeric' }).format(cursor);
+  const nav = document.createElement('div');
+  nav.className = 'calendar-date-picker-nav';
+  const prev = document.createElement('button');
+  prev.type = 'button';
+  prev.setAttribute('aria-label', 'Forrige måned');
+  prev.textContent = '‹';
+  prev.addEventListener('click', ()=>{
+    projectFlowState.datePickerCursor = addMonths(cursor, -1);
+    renderProjectFlowDatePickerPopover();
+  });
+  const next = document.createElement('button');
+  next.type = 'button';
+  next.setAttribute('aria-label', 'Neste måned');
+  next.textContent = '›';
+  next.addEventListener('click', ()=>{
+    projectFlowState.datePickerCursor = addMonths(cursor, 1);
+    renderProjectFlowDatePickerPopover();
+  });
+  nav.append(prev, next);
+  head.append(title, nav);
+  popover.appendChild(head);
+
+  const grid = document.createElement('div');
+  grid.className = 'calendar-date-picker-grid';
+  ['Ma', 'Ti', 'On', 'To', 'Fr', 'Lø', 'Sø'].forEach(label=>{
+    const weekday = document.createElement('div');
+    weekday.className = 'calendar-date-picker-weekday';
+    weekday.textContent = label;
+    grid.appendChild(weekday);
+  });
+  for (let index = 0; index < 42; index += 1){
+    const day = addDays(gridStart, index);
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'calendar-date-picker-day';
+    btn.classList.toggle('is-outside', day.getMonth() !== cursor.getMonth());
+    btn.classList.toggle('is-today', sameCalendarDay(day, today));
+    btn.classList.toggle('is-selected', selected ? sameCalendarDay(day, selected) : false);
+    btn.textContent = String(day.getDate());
+    btn.addEventListener('click', ()=>{
+      targetInput.value = formatProjectFlowInputDate(day);
+      if (targetInput.id === 'projectFlowEndDateInput'){
+        updateProjectFlowDurationFromEndDate();
+      } else {
+        updateProjectFlowEndDateFromDuration();
+      }
+      closeProjectFlowDatePickerPopover();
+    });
+    grid.appendChild(btn);
+  }
+  popover.appendChild(grid);
+}
+
+function openProjectFlowDatePickerPopover(targetId){
+  const targetInput = $(targetId);
+  const popover = $('projectFlowDatePickerPopover');
+  if (!targetInput || !popover) return;
+  projectFlowState.datePickerTargetId = targetId;
+  projectFlowState.datePickerCursor = parseProjectFlowDate(targetInput.value) || new Date();
+  const targetRow = targetInput.closest('.calendar-date-input-row');
+  if (targetRow && popover.parentElement !== targetRow){
+    targetRow.appendChild(popover);
+  }
+  renderProjectFlowDatePickerPopover();
+  popover.hidden = false;
+}
+
+function addProjectFlowDays(date, days){
+  const copy = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  copy.setDate(copy.getDate() + Number(days || 0));
+  return copy;
+}
+
+function addProjectFlowDuration(startDate, value, unit){
+  const amount = Math.max(1, Number.parseInt(value, 10) || 1);
+  const start = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate());
+  if (unit === 'weeks'){
+    return addProjectFlowDays(start, (amount * 7) - 1);
+  }
+  if (unit === 'months'){
+    const end = new Date(start.getFullYear(), start.getMonth() + amount, start.getDate());
+    return addProjectFlowDays(end, -1);
+  }
+  return addProjectFlowDays(start, amount - 1);
+}
+
+function getProjectFlowDurationFromDates(startDate, endDate){
+  const days = Math.max(1, getProjectFlowDayDiff(startDate, endDate) + 1);
+  if (days >= 28 && days % 30 === 0) return { value: days / 30, unit: 'months' };
+  if (days >= 7 && days % 7 === 0) return { value: days / 7, unit: 'weeks' };
+  return { value: days, unit: 'days' };
+}
+
+function getProjectFlowDayDiff(start, end){
+  const startUtc = Date.UTC(start.getFullYear(), start.getMonth(), start.getDate());
+  const endUtc = Date.UTC(end.getFullYear(), end.getMonth(), end.getDate());
+  return Math.round((endUtc - startUtc) / 86400000);
+}
+
+function getProjectFlowWeekNumber(date){
+  const utc = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  const day = utc.getUTCDay() || 7;
+  utc.setUTCDate(utc.getUTCDate() + 4 - day);
+  const yearStart = new Date(Date.UTC(utc.getUTCFullYear(), 0, 1));
+  return Math.ceil((((utc - yearStart) / 86400000) + 1) / 7);
+}
+
+function getProjectFlowWeekKey(date){
+  const utc = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  const day = utc.getUTCDay() || 7;
+  utc.setUTCDate(utc.getUTCDate() + 4 - day);
+  return `${utc.getUTCFullYear()}-${String(getProjectFlowWeekNumber(date)).padStart(2, '0')}`;
+}
+
+function getProjectFlowWeekSpans(dates){
+  const spans = [];
+  dates.forEach(date=>{
+    const key = getProjectFlowWeekKey(date);
+    const weekNumber = getProjectFlowWeekNumber(date);
+    const current = spans[spans.length - 1];
+    if (current && current.key === key){
+      current.days += 1;
+    } else {
+      spans.push({ key, weekNumber, days: 1 });
+    }
+  });
+  return spans;
+}
+
+function isProjectFlowWeekStart(date, index){
+  return index > 0 && date.getDay() === 1;
+}
+
+function getProjectFlowVisibleProjects(){
+  const selectedId = String(projectFlowState.selectedProjectId || PROJECT_FLOW_ALL_PROJECTS).trim();
+  if (selectedId && selectedId !== PROJECT_FLOW_ALL_PROJECTS){
+    const project = projectState.projects.find(item=>item.id === selectedId);
+    return project ? [project] : [];
+  }
+  return [...projectState.projects];
+}
+
+function getProjectFlowAllTasks(){
+  return projectState.projects.flatMap(project=>{
+    return getProjectFlowMilestones(project.id).map(task=>({
+      ...task,
+      projectId: project.id,
+      projectName: project.name || 'Uten navn',
+      projectNumber: project.projectNumber || ''
+    }));
+  });
+}
+
+function getProjectFlowDateKey(date){
+  return formatProjectFlowDate(date);
+}
+
+function getProjectFlowRange(milestones){
+  const today = new Date();
+  const currentWeekStart = startOfWeekMonday(today);
+  let start = currentWeekStart;
+  const taskDates = milestones
+    .flatMap(item=>[parseProjectFlowDate(item.startDate), parseProjectFlowDate(item.endDate)])
+    .filter(Boolean);
+  if (taskDates.length){
+    const earliestTaskDate = new Date(Math.min(...taskDates.map(date=>date.getTime())));
+    const earliestTaskWeekStart = startOfWeekMonday(earliestTaskDate);
+    if (earliestTaskWeekStart < start) start = earliestTaskWeekStart;
+  }
+  const lastDayOfYear = new Date(today.getFullYear(), 11, 31);
+  let end = addProjectFlowDays(startOfWeekMonday(lastDayOfYear), 6);
+  const taskEndDates = taskDates;
+  if (taskEndDates.length){
+    const latestTaskEnd = new Date(Math.max(...taskEndDates.map(date=>date.getTime())));
+    if (latestTaskEnd > end){
+      end = addProjectFlowDays(startOfWeekMonday(latestTaskEnd), 6);
+    }
+  }
+  return { start, end };
+}
+
+function buildProjectFlowDates(start, end){
+  const dates = [];
+  let cursor = new Date(start.getFullYear(), start.getMonth(), start.getDate());
+  while (cursor <= end && dates.length < 900){
+    dates.push(new Date(cursor));
+    cursor = addProjectFlowDays(cursor, 1);
+  }
+  return dates;
+}
+
+function syncProjectFlowTopScrollbar(scroller, topScrollbar){
+  if (!scroller || !topScrollbar) return;
+  let syncing = false;
+  let middlePan = null;
+  let middlePanFrame = 0;
+  const applyMiddlePanScroll = ()=>{
+    middlePanFrame = 0;
+    if (!middlePan) return;
+    syncing = true;
+    scroller.scrollLeft = Math.max(0, Math.min(scroller.scrollWidth - scroller.clientWidth, middlePan.targetScrollLeft));
+    topScrollbar.scrollLeft = scroller.scrollLeft;
+    renderProjectFlowDependencyLines();
+    syncing = false;
+  };
+  topScrollbar.addEventListener('scroll', ()=>{
+    if (syncing) return;
+    syncing = true;
+    scroller.scrollLeft = topScrollbar.scrollLeft;
+    renderProjectFlowDependencyLines();
+    syncing = false;
+  });
+  scroller.addEventListener('scroll', ()=>{
+    if (syncing) return;
+    syncing = true;
+    topScrollbar.scrollLeft = scroller.scrollLeft;
+    renderProjectFlowDependencyLines();
+    syncing = false;
+  });
+  scroller.addEventListener('mousedown', evt=>{
+    if (evt.button !== 1) return;
+    evt.preventDefault();
+    middlePan = {
+      startX: evt.clientX,
+      startScrollLeft: scroller.scrollLeft,
+      targetScrollLeft: scroller.scrollLeft
+    };
+    scroller.classList.add('is-middle-panning');
+  });
+  scroller.addEventListener('auxclick', evt=>{
+    if (evt.button === 1) evt.preventDefault();
+  });
+  window.addEventListener('mousemove', evt=>{
+    if (!middlePan) return;
+    evt.preventDefault();
+    middlePan.targetScrollLeft = middlePan.startScrollLeft - (evt.clientX - middlePan.startX);
+    if (!middlePanFrame){
+      middlePanFrame = window.requestAnimationFrame(applyMiddlePanScroll);
+    }
+  });
+  window.addEventListener('mouseup', evt=>{
+    if (evt.button !== 1 || !middlePan) return;
+    if (middlePanFrame){
+      window.cancelAnimationFrame(middlePanFrame);
+      middlePanFrame = 0;
+      applyMiddlePanScroll();
+    }
+    middlePan = null;
+    scroller.classList.remove('is-middle-panning');
+  });
+}
+
+function getProjectFlowSvgPoint(scroller, element, side = 'center'){
+  if (!scroller || !(element instanceof Element)) return null;
+  const scrollRect = scroller.getBoundingClientRect();
+  const rect = element.getBoundingClientRect();
+  const x = (side === 'right' ? rect.right : side === 'left' ? rect.left : rect.left + (rect.width / 2)) - scrollRect.left + scroller.scrollLeft;
+  const y = rect.top + (rect.height / 2) - scrollRect.top + scroller.scrollTop;
+  return { x, y };
+}
+
+function snapProjectFlowXToDateCenter(x){
+  const taskWidth = getProjectFlowTaskColumnWidth();
+  const dayWidth = getProjectFlowDayWidth();
+  if (!Number.isFinite(x) || x < taskWidth) return x;
+  const dayIndex = Math.max(0, Math.round((x - taskWidth - (dayWidth / 2)) / dayWidth));
+  return taskWidth + (dayIndex * dayWidth) + (dayWidth / 2);
+}
+
+function snapProjectFlowXAwayFromPoint(originX, side = 'right', minDistance = 0){
+  const dayWidth = getProjectFlowDayWidth();
+  const direction = side === 'left' ? -1 : 1;
+  const minimum = Math.max(8, Number(minDistance) || dayWidth * 0.55);
+  let snapped = snapProjectFlowXToDateCenter(originX + (direction * minimum));
+  const isOutward = direction > 0 ? snapped > originX : snapped < originX;
+  if (!isOutward || Math.abs(snapped - originX) < Math.min(12, dayWidth * 0.25)){
+    snapped = snapProjectFlowXToDateCenter(originX + (direction * (minimum + dayWidth)));
+  }
+  return snapped;
+}
+
+function getProjectFlowTaskBarObstacles(scroller, excludeTaskIds = []){
+  if (!scroller) return [];
+  const excluded = new Set((Array.isArray(excludeTaskIds) ? excludeTaskIds : []).map(id=>String(id || '')));
+  const scrollRect = scroller.getBoundingClientRect();
+  return Array.from(scroller.querySelectorAll('[data-project-flow-task-bar]'))
+    .filter(bar=>!excluded.has(String(bar.getAttribute('data-project-flow-task-bar') || '')))
+    .map(bar=>{
+      const rect = bar.getBoundingClientRect();
+      return {
+        left: rect.left - scrollRect.left + scroller.scrollLeft - 8,
+        right: rect.right - scrollRect.left + scroller.scrollLeft + 8,
+        top: rect.top - scrollRect.top + scroller.scrollTop - 8,
+        bottom: rect.bottom - scrollRect.top + scroller.scrollTop + 8
+      };
+    });
+}
+
+function projectFlowRangeIntersects(aStart, aEnd, bStart, bEnd){
+  return Math.max(aStart, bStart) <= Math.min(aEnd, bEnd);
+}
+
+function projectFlowHorizontalRouteIsClear(y, x1, x2, obstacles){
+  const minX = Math.min(x1, x2);
+  const maxX = Math.max(x1, x2);
+  return !(Array.isArray(obstacles) ? obstacles : []).some(obstacle=>
+    obstacle.axis !== 'v'
+    &&
+    y >= obstacle.top
+    && y <= obstacle.bottom
+    && projectFlowRangeIntersects(minX, maxX, obstacle.left, obstacle.right)
+  );
+}
+
+function projectFlowVerticalRouteIsClear(x, y1, y2, obstacles){
+  const minY = Math.min(y1, y2);
+  const maxY = Math.max(y1, y2);
+  return !(Array.isArray(obstacles) ? obstacles : []).some(obstacle=>
+    obstacle.axis !== 'h'
+    &&
+    x >= obstacle.left
+    && x <= obstacle.right
+    && projectFlowRangeIntersects(minY, maxY, obstacle.top, obstacle.bottom)
+  );
+}
+
+function getProjectFlowXRouteCandidates(centerX){
+  const dayWidth = getProjectFlowDayWidth();
+  const base = snapProjectFlowXToDateCenter(centerX);
+  const laneOffset = Math.max(8, Math.min(18, dayWidth * 0.22));
+  return [
+    base,
+    base - laneOffset,
+    base + laneOffset,
+    base - (laneOffset * 2),
+    base + (laneOffset * 2)
+  ];
+}
+
+function findProjectFlowClearRouteY(preferredY, x1, x2, fromY, toY, obstacles){
+  const rowStep = 52;
+  const candidates = [preferredY, fromY + rowStep, fromY - rowStep, toY + rowStep, toY - rowStep];
+  for (let offset = 2; offset <= 10; offset += 1){
+    candidates.push(preferredY + (rowStep * offset), preferredY - (rowStep * offset));
+  }
+  const seen = new Set();
+  for (const candidate of candidates){
+    const y = Math.max(0, Math.round(candidate));
+    if (seen.has(y)) continue;
+    seen.add(y);
+    if (projectFlowHorizontalRouteIsClear(y, x1, x2, obstacles)){
+      return y;
+    }
+  }
+  return preferredY;
+}
+
+function findProjectFlowClearRouteX(preferredX, x1, x2, fromY, toY, obstacles){
+  const dayWidth = getProjectFlowDayWidth();
+  const minX = Math.min(x1, x2);
+  const maxX = Math.max(x1, x2);
+  const candidates = [...getProjectFlowXRouteCandidates(preferredX)];
+  for (let x = snapProjectFlowXToDateCenter(minX); x <= maxX; x += dayWidth){
+    candidates.push(...getProjectFlowXRouteCandidates(x));
+  }
+  for (let offset = 1; offset <= 8; offset += 1){
+    candidates.push(
+      ...getProjectFlowXRouteCandidates(minX - (dayWidth * offset)),
+      ...getProjectFlowXRouteCandidates(maxX + (dayWidth * offset))
+    );
+  }
+  const seen = new Set();
+  for (const candidate of candidates){
+    const x = Math.round(candidate);
+    if (seen.has(x)) continue;
+    seen.add(x);
+    if (projectFlowVerticalRouteIsClear(x, fromY, toY, obstacles)){
+      return x;
+    }
+  }
+  return snapProjectFlowXToDateCenter(preferredX);
+}
+
+function buildRoundedProjectFlowPath(points, radius = 10){
+  const validPoints = points.filter(point=>Array.isArray(point) && point.length === 2);
+  if (validPoints.length < 2) return '';
+  const commands = [`M ${validPoints[0][0]} ${validPoints[0][1]}`];
+  for (let index = 1; index < validPoints.length - 1; index += 1){
+    const prev = validPoints[index - 1];
+    const current = validPoints[index];
+    const next = validPoints[index + 1];
+    const v1 = { x: current[0] - prev[0], y: current[1] - prev[1] };
+    const v2 = { x: next[0] - current[0], y: next[1] - current[1] };
+    const len1 = Math.hypot(v1.x, v1.y);
+    const len2 = Math.hypot(v2.x, v2.y);
+    if (!len1 || !len2 || (v1.x && v1.y) || (v2.x && v2.y)){
+      commands.push(`L ${current[0]} ${current[1]}`);
+      continue;
+    }
+    const cornerRadius = Math.min(radius, len1 / 2, len2 / 2);
+    const before = [
+      current[0] - (v1.x / len1) * cornerRadius,
+      current[1] - (v1.y / len1) * cornerRadius
+    ];
+    const after = [
+      current[0] + (v2.x / len2) * cornerRadius,
+      current[1] + (v2.y / len2) * cornerRadius
+    ];
+    commands.push(`L ${before[0]} ${before[1]}`);
+    commands.push(`Q ${current[0]} ${current[1]} ${after[0]} ${after[1]}`);
+  }
+  const last = validPoints[validPoints.length - 1];
+  commands.push(`L ${last[0]} ${last[1]}`);
+  return commands.join(' ');
+}
+
+function drawProjectFlowDependencyPath(svg, from, to, className = '', fromSide = 'right', toSide = 'left', obstacles = []){
+  if (!svg || !from || !to) return [];
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  const dayWidth = getProjectFlowDayWidth();
+  const fromDir = fromSide === 'left' ? -1 : 1;
+  const toDir = toSide === 'left' ? -1 : 1;
+  const stub = Math.max(28, dayWidth * 0.55);
+  const fromOut = snapProjectFlowXAwayFromPoint(from.x, fromSide, stub);
+  const toIn = snapProjectFlowXAwayFromPoint(to.x, toSide, stub);
+  const hasRoomBetweenStubs = fromDir === 1 && toDir === -1
+    ? fromOut < toIn
+    : fromDir === -1 && toDir === 1
+      ? fromOut > toIn
+      : Math.abs(fromOut - toIn) >= dayWidth;
+  const points = hasRoomBetweenStubs
+    ? (() => {
+      const routeX = findProjectFlowClearRouteX((fromOut + toIn) / 2, fromOut, toIn, from.y, to.y, obstacles);
+      return [
+        [from.x, from.y],
+        [fromOut, from.y],
+        [routeX, from.y],
+        [routeX, to.y],
+        [toIn, to.y],
+        [to.x, to.y]
+      ];
+    })()
+    : (() => {
+      const routeY = findProjectFlowClearRouteY(from.y + ((to.y - from.y) / 2), fromOut, toIn, from.y, to.y, obstacles);
+      return [
+        [from.x, from.y],
+        [fromOut, from.y],
+        [fromOut, routeY],
+        [toIn, routeY],
+        [toIn, to.y],
+        [to.x, to.y]
+      ];
+    })();
+  path.setAttribute('d', buildRoundedProjectFlowPath(points, 8));
+  path.setAttribute('class', `project-flow-link-line ${className}`.trim());
+  svg.appendChild(path);
+  return points;
+}
+
+function getProjectFlowLineRouteObstacles(routes, projectId){
+  const currentProjectId = String(projectId || '');
+  return (Array.isArray(routes) ? routes : [])
+    .filter(route=>route.projectId !== currentProjectId)
+    .flatMap(route=>route.obstacles || []);
+}
+
+function buildProjectFlowLineRouteObstacles(points){
+  const items = [];
+  const validPoints = Array.isArray(points) ? points : [];
+  for (let index = 1; index < validPoints.length; index += 1){
+    const prev = validPoints[index - 1];
+    const current = validPoints[index];
+    if (!Array.isArray(prev) || !Array.isArray(current)) continue;
+    if (Math.round(prev[1]) === Math.round(current[1])){
+      items.push({
+        axis: 'h',
+        left: Math.min(prev[0], current[0]),
+        right: Math.max(prev[0], current[0]),
+        top: prev[1] - 7,
+        bottom: prev[1] + 7
+      });
+    } else if (Math.round(prev[0]) === Math.round(current[0])){
+      items.push({
+        axis: 'v',
+        left: prev[0] - 7,
+        right: prev[0] + 7,
+        top: Math.min(prev[1], current[1]),
+        bottom: Math.max(prev[1], current[1])
+      });
+    }
+  }
+  return items;
+}
+
+function renderProjectFlowDependencyLines(){
+  const root = $('projectFlowTimeline');
+  const scroller = root?.querySelector?.('.project-flow-scroller');
+  const svg = root?.querySelector?.('.project-flow-link-overlay');
+  if (!scroller || !svg) return;
+  svg.setAttribute('width', String(scroller.scrollWidth));
+  svg.setAttribute('height', String(scroller.scrollHeight));
+  svg.setAttribute('viewBox', `0 0 ${scroller.scrollWidth} ${scroller.scrollHeight}`);
+  svg.innerHTML = '';
+  const drawnEdges = new Set();
+  const drawnRoutes = [];
+  getProjectFlowVisibleProjects().forEach(project=>{
+    getProjectFlowMilestones(project.id).forEach(task=>{
+      const drivesTaskId = getProjectFlowRelationTaskId(task, 'drives');
+      if (!drivesTaskId) return;
+      const dependency = findProjectFlowTaskLocation(drivesTaskId);
+      if (!dependency?.task) return;
+      if (dependency.project.id !== project.id) return;
+      const edgeKey = [task.id, dependency.task.id].sort().join('|');
+      if (drawnEdges.has(edgeKey)) return;
+      drawnEdges.add(edgeKey);
+      const taskBar = scroller.querySelector(`[data-project-flow-task-bar="${projectFlowCssEscape(task.id)}"][data-project-id="${projectFlowCssEscape(project.id)}"]`);
+      const dependencyBar = scroller.querySelector(`[data-project-flow-task-bar="${projectFlowCssEscape(dependency.task.id)}"][data-project-id="${projectFlowCssEscape(dependency.project.id)}"]`);
+      if (!taskBar || !dependencyBar) return;
+      const obstacles = [
+        ...getProjectFlowTaskBarObstacles(scroller, [task.id, dependency.task.id]),
+        ...getProjectFlowLineRouteObstacles(drawnRoutes, project.id)
+      ];
+      let points = [];
+      points = drawProjectFlowDependencyPath(svg, getProjectFlowSvgPoint(scroller, taskBar, 'right'), getProjectFlowSvgPoint(scroller, dependencyBar, 'left'), '', 'right', 'left', obstacles);
+      if (points.length){
+        drawnRoutes.push({
+          projectId: project.id,
+          obstacles: buildProjectFlowLineRouteObstacles(points)
+        });
+      }
+    });
+  });
+  const drag = projectFlowState.linkDrag;
+  if (drag?.source){
+    const sourceBar = scroller.querySelector(`[data-project-flow-task-bar="${projectFlowCssEscape(drag.source.taskId)}"][data-project-id="${projectFlowCssEscape(drag.source.projectId)}"]`);
+    const fromSide = drag.source.type === 'drives' ? 'right' : 'left';
+    const from = getProjectFlowSvgPoint(scroller, sourceBar, fromSide);
+    const scrollRect = scroller.getBoundingClientRect();
+    const to = {
+      x: drag.x - scrollRect.left + scroller.scrollLeft,
+      y: drag.y - scrollRect.top + scroller.scrollTop
+    };
+    const obstacles = getProjectFlowTaskBarObstacles(scroller, [drag.source.taskId]);
+    drawProjectFlowDependencyPath(svg, from, to, 'is-preview', fromSide, fromSide === 'right' ? 'left' : 'right', obstacles);
+  }
+}
+
+function scrollProjectFlowToCurrentWeek(scroller, rangeStart, topScrollbar = null){
+  if (!scroller || !(rangeStart instanceof Date)) return;
+  const currentWeekStart = startOfWeekMonday(new Date());
+  const offsetDays = Math.max(0, getProjectFlowDayDiff(rangeStart, currentWeekStart));
+  const dayWidth = getProjectFlowDayWidth();
+  requestAnimationFrame(()=>{
+    const nextScrollLeft = Math.max(0, (offsetDays * dayWidth) - 12);
+    scroller.scrollLeft = nextScrollLeft;
+    if (topScrollbar) topScrollbar.scrollLeft = nextScrollLeft;
+  });
+}
+
+function getProjectFlowSelectedProject(){
+  const selectedId = String(projectFlowState.selectedProjectId || '').trim();
+  if (selectedId === PROJECT_FLOW_ALL_PROJECTS) return null;
+  return projectState.projects.find(project=>project.id === selectedId) || projectState.projects[0] || null;
+}
+
+function updateProjectFlowProjectSelect(){
+  const select = $('projectFlowProjectSelect');
+  if (!select) return;
+  const current = String(projectFlowState.selectedProjectId || '').trim();
+  select.innerHTML = '';
+  if (!projectState.projects.length){
+    const option = document.createElement('option');
+    option.value = '';
+    option.textContent = 'Ingen prosjekter';
+    select.appendChild(option);
+    projectFlowState.selectedProjectId = '';
+    select.disabled = true;
+    return;
+  }
+  const allOption = document.createElement('option');
+  allOption.value = PROJECT_FLOW_ALL_PROJECTS;
+  allOption.textContent = 'Alle prosjekter';
+  select.appendChild(allOption);
+  projectState.projects.forEach(project=>{
+    const option = document.createElement('option');
+    option.value = project.id || '';
+    option.textContent = project.projectNumber
+      ? `${project.projectNumber} - ${project.name || 'Uten navn'}`
+      : project.name || 'Uten navn';
+    select.appendChild(option);
+  });
+  const exists = current === PROJECT_FLOW_ALL_PROJECTS || projectState.projects.some(project=>project.id === current);
+  projectFlowState.selectedProjectId = exists ? current : PROJECT_FLOW_ALL_PROJECTS;
+  select.value = projectFlowState.selectedProjectId;
+  select.disabled = false;
+}
+
+function populateProjectFlowTaskProjectSelect(selectedProjectId = '', options = {}){
+  const select = $('projectFlowTaskProjectSelect');
+  if (!select) return;
+  select.innerHTML = '';
+  const emptyOption = document.createElement('option');
+  emptyOption.value = '';
+  emptyOption.textContent = 'Velg prosjekt';
+  select.appendChild(emptyOption);
+  const excludedProjectIds = new Set((Array.isArray(options.excludeProjectIds) ? options.excludeProjectIds : []).map(id=>String(id || '')));
+  const selectableProjects = projectState.projects.filter(project=>{
+    if (!project?.id) return false;
+    if (selectedProjectId && project.id === selectedProjectId) return true;
+    return !excludedProjectIds.has(project.id);
+  });
+  selectableProjects.forEach(project=>{
+    const option = document.createElement('option');
+    option.value = project.id || '';
+    option.textContent = project.projectNumber
+      ? `${project.projectNumber} - ${project.name || 'Uten navn'}`
+      : project.name || 'Uten navn';
+    select.appendChild(option);
+  });
+  select.value = selectableProjects.some(project=>project.id === selectedProjectId) ? selectedProjectId : '';
+  select.disabled = !projectState.projects.length;
+}
+
+function populateProjectFlowPhaseSelect(){
+  const select = $('projectFlowPhaseSelect');
+  if (!select || select.options.length) return;
+  PROJECT_FLOW_PHASES.forEach(phase=>{
+    const option = document.createElement('option');
+    option.value = phase.id;
+    option.textContent = phase.label;
+    select.appendChild(option);
+  });
+}
+
+function getProjectFlowDependencyOptionLabel(task){
+  const projectLabel = task.projectNumber
+    ? `${task.projectNumber} - ${task.projectName}`
+    : task.projectName;
+  return `${projectLabel}: ${getProjectFlowPhaseLabel(task.phaseId)}`;
+}
+
+function populateProjectFlowDependencySelect(select, selectedTaskId = '', currentTaskId = '', relation = '', currentProjectId = ''){
+  if (!select) return;
+  select.innerHTML = '';
+  const emptyOption = document.createElement('option');
+  emptyOption.value = '';
+  emptyOption.textContent = 'Ingen oppgave';
+  select.appendChild(emptyOption);
+  getProjectFlowAllTasks()
+    .filter(task=>task.id !== currentTaskId)
+    .filter(task=>!currentProjectId || task.projectId === currentProjectId)
+    .filter(task=>!wouldCreateProjectFlowMutualDependency(currentTaskId, relation, task.id))
+    .forEach(task=>{
+      const option = document.createElement('option');
+      option.value = task.id;
+      option.textContent = getProjectFlowDependencyOptionLabel(task);
+      select.appendChild(option);
+    });
+  select.value = selectedTaskId || '';
+  if (select.value !== selectedTaskId) select.value = '';
+}
+
+function populateProjectFlowDependencyTaskSelect(milestone = null){
+  const drivenBySelect = $('projectFlowDependencyRelationSelect');
+  const drivesSelect = $('projectFlowDependencyTaskSelect');
+  const currentTaskId = milestone?.id || '';
+  const drivenBySelected = getProjectFlowRelationTaskId(milestone, 'drivenBy');
+  const drivesSelected = getProjectFlowRelationTaskId(milestone, 'drives');
+  const currentProjectId = String(milestone?.projectId || projectFlowState.editingProjectId || $('projectFlowTaskProjectSelect')?.value || '').trim();
+  populateProjectFlowDependencySelect(drivenBySelect, drivenBySelected, currentTaskId, 'drivenBy', currentProjectId);
+  populateProjectFlowDependencySelect(drivesSelect, drivesSelected, currentTaskId, 'drives', currentProjectId);
+}
+
+function setProjectFlowStatus(message, type = ''){
+  const el = $('projectFlowStatus');
+  if (!el) return;
+  el.textContent = message || '';
+  el.classList.toggle('ok', type === 'ok');
+  el.classList.toggle('error', type === 'error');
+}
+
+function getProjectFlowDayWidth(){
+  const fit = Number(projectFlowState.fitDayWidth);
+  if (Number.isFinite(fit) && fit > 0) return fit;
+  return PROJECT_FLOW_ZOOM_LEVELS[projectFlowState.zoomIndex] || PROJECT_FLOW_ZOOM_LEVELS[PROJECT_FLOW_DEFAULT_ZOOM_INDEX];
+}
+
+function getProjectFlowTaskColumnWidth(){
+  const width = Number(projectFlowState.taskColumnWidth);
+  return Number.isFinite(width) && width > 0 ? width : 260;
+}
+
+function measureProjectFlowTaskColumnWidth(labels){
+  const values = (Array.isArray(labels) ? labels : [])
+    .map(label=>String(label || '').trim())
+    .filter(Boolean);
+  let maxWidth = 0;
+  const canvas = document.createElement('canvas');
+  const context = canvas.getContext?.('2d');
+  if (context){
+    context.font = '700 16px Arial, sans-serif';
+    values.forEach(label=>{
+      maxWidth = Math.max(maxWidth, context.measureText(label).width);
+    });
+  } else {
+    values.forEach(label=>{
+      maxWidth = Math.max(maxWidth, label.length * 8);
+    });
+  }
+  return Math.ceil(Math.max(260, Math.min(900, maxWidth + 96)));
+}
+
+function setProjectFlowZoomIndex(nextIndex){
+  const clamped = Math.max(0, Math.min(PROJECT_FLOW_ZOOM_LEVELS.length - 1, Number(nextIndex)));
+  projectFlowState.zoomIndex = Number.isFinite(clamped) ? clamped : PROJECT_FLOW_DEFAULT_ZOOM_INDEX;
+  projectFlowState.fitDayWidth = null;
+  renderProjectFlowView();
+}
+
+function getProjectFlowTasksByPhase(tasks){
+  const grouped = new Map(PROJECT_FLOW_PHASES.map(phase=>[phase.id, []]));
+  (Array.isArray(tasks) ? tasks : []).forEach(task=>{
+    const phaseId = PROJECT_FLOW_PHASES.some(phase=>phase.id === task.phaseId) ? task.phaseId : PROJECT_FLOW_PHASES[0].id;
+    const list = grouped.get(phaseId) || [];
+    list.push(task);
+    grouped.set(phaseId, list);
+  });
+  grouped.forEach(list=>{
+    list.sort((a, b)=>String(a.startDate || '').localeCompare(String(b.startDate || ''), 'no'));
+  });
+  return grouped;
+}
+
+function getProjectFlowProjectLabel(project){
+  if (!project) return 'Ukjent prosjekt';
+  return project.projectNumber
+    ? `${project.projectNumber} - ${project.name || 'Uten navn'}`
+    : project.name || 'Uten navn';
+}
+
+function getProjectFlowPhaseLabel(phaseId){
+  return PROJECT_FLOW_PHASES.find(phase=>phase.id === phaseId)?.label || PROJECT_FLOW_PHASES[0].label;
+}
+
+function getProjectFlowTaskLabel(item, includeProject = false){
+  if (includeProject){
+    return item.projectNumber
+      ? `${item.projectNumber} - ${item.projectName || 'Uten navn'}`
+      : item.projectName || 'Uten navn';
+  }
+  return getProjectFlowPhaseLabel(item.phaseId);
+}
+
+function getProjectFlowTaskActivityTime(task){
+  const explicit = new Date(task?.updatedAt || task?.createdAt || 0).getTime();
+  if (Number.isFinite(explicit) && explicit > 0) return explicit;
+  const end = parseProjectFlowDate(task?.endDate);
+  if (end) return end.getTime();
+  const start = parseProjectFlowDate(task?.startDate);
+  return start ? start.getTime() : 0;
+}
+
+function formatProjectFlowStatusHours(milliseconds){
+  return `${Math.max(1, Math.floor(milliseconds / 3600000))} t`;
+}
+
+function formatProjectFlowStatusDays(milliseconds){
+  return `${Math.max(1, Math.floor(milliseconds / 86400000))} d`;
+}
+
+function getProjectFlowStatusForProject(project){
+  const projectId = typeof project === 'object' ? project?.id : project;
+  const tasks = getProjectFlowMilestones(projectId);
+  const tasksByPhase = getProjectFlowTasksByPhase(tasks);
+  const firstPhaseTasks = tasksByPhase.get(PROJECT_FLOW_PHASES[0].id) || [];
+  if (!firstPhaseTasks.some(task=>task.completed)){
+    const projectTime = new Date(project?.createdAt || 0).getTime();
+    const untreatedAge = Number.isFinite(projectTime) && projectTime > 0 ? Date.now() - projectTime : 0;
+    const stale = untreatedAge >= 24 * 60 * 60 * 1000;
+    return {
+      label: 'Ubehandlet',
+      tone: stale ? 'danger' : 'idle',
+      ageText: stale ? formatProjectFlowStatusHours(untreatedAge) : ''
+    };
+  }
+  let lastCompletedPhase = PROJECT_FLOW_PHASES[0];
+  for (const phase of PROJECT_FLOW_PHASES.slice(1)){
+    const phaseTasks = tasksByPhase.get(phase.id) || [];
+    if (!phaseTasks.length) break;
+    const hasOpenTask = phaseTasks.some(task=>!task.completed);
+    if (hasOpenTask){
+      const latestActivity = Math.max(...phaseTasks.filter(task=>!task.completed).map(getProjectFlowTaskActivityTime));
+      const age = Number.isFinite(latestActivity) && latestActivity > 0 ? Date.now() - latestActivity : 0;
+      const stale = age >= 7 * 24 * 60 * 60 * 1000;
+      return {
+        label: phase.label,
+        tone: stale ? 'danger' : 'warning',
+        ageText: stale ? formatProjectFlowStatusDays(age) : ''
+      };
+    }
+    lastCompletedPhase = phase;
+  }
+  return { label: lastCompletedPhase.label, tone: 'success' };
+}
+
+function setProjectFlowAllExpanded(expanded){
+  if (expanded){
+    projectFlowState.collapsedPhaseIds.clear();
+  } else {
+    projectFlowState.collapsedPhaseIds = new Set(PROJECT_FLOW_PHASES.map(phase=>phase.id));
+  }
+  renderProjectFlowView();
+}
+
+function setProjectFlowZoomToFit(){
+  const root = $('projectFlowTimeline');
+  const scroller = root?.querySelector?.('.project-flow-scroller');
+  const grid = root?.querySelector?.('.project-flow-grid');
+  const dayCount = Number(grid?.style?.getPropertyValue('--project-flow-days') || 0);
+  if (!scroller || !dayCount){
+    projectFlowState.fitDayWidth = null;
+    renderProjectFlowView();
+    return;
+  }
+  const taskWidth = getProjectFlowTaskColumnWidth();
+  const available = Math.max(240, scroller.clientWidth - taskWidth - 24);
+  projectFlowState.fitDayWidth = Math.max(26, Math.min(96, Math.floor(available / dayCount)));
+  renderProjectFlowView();
+}
+
+function openProjectFlowMilestoneForm(milestone = null, options = {}){
+  const form = $('projectFlowMilestoneForm');
+  if (!form) return;
+  populateProjectFlowPhaseSelect();
+  const selectedProjectId = options.projectId || milestone?.projectId || '';
+  populateProjectFlowTaskProjectSelect(selectedProjectId, {
+    excludeProjectIds: options.excludeProjectIds
+  });
+  populateProjectFlowDependencyTaskSelect(milestone);
+  projectFlowState.editingMilestoneId = milestone?.id || '';
+  projectFlowState.editingProjectId = selectedProjectId;
+  const idInput = $('projectFlowMilestoneId');
+  const clickedDateInput = $('projectFlowClickedDateInput');
+  const phaseSelect = $('projectFlowPhaseSelect');
+  const dateInput = $('projectFlowDateInput');
+  const endDateInput = $('projectFlowEndDateInput');
+  const durationValueInput = $('projectFlowDurationValueInput');
+  const durationUnitSelect = $('projectFlowDurationUnitSelect');
+  const fileInput = $('projectFlowFileInput');
+  const deleteBtn = $('deleteProjectFlowMilestoneBtn');
+  const clickedDate = options.clickedDate || '';
+  const originalStart = parseProjectFlowDate(milestone?.startDate || milestone?.date || '');
+  const originalEnd = parseProjectFlowDate(milestone?.endDate || milestone?.date || '');
+  const originalDuration = originalStart && originalEnd
+    ? getProjectFlowDurationFromDates(originalStart, originalEnd)
+    : { value: 1, unit: 'days' };
+  const fallbackStart = clickedDate || milestone?.startDate || milestone?.date || formatProjectFlowDate(new Date());
+  const parsedStart = parseProjectFlowDate(fallbackStart);
+  const fallbackEnd = clickedDate && parsedStart
+    ? formatProjectFlowDate(addProjectFlowDuration(parsedStart, milestone?.durationValue || originalDuration.value, milestone?.durationUnit || originalDuration.unit))
+    : (milestone?.endDate || milestone?.date || fallbackStart);
+  const parsedEnd = parseProjectFlowDate(fallbackEnd);
+  const duration = parsedStart && parsedEnd
+    ? getProjectFlowDurationFromDates(parsedStart, parsedEnd)
+    : originalDuration;
+  if (idInput) idInput.value = milestone?.id || '';
+  if (clickedDateInput) clickedDateInput.value = clickedDate;
+  if (phaseSelect) phaseSelect.value = milestone?.phaseId || options.phaseId || PROJECT_FLOW_PHASES[0].id;
+  if (dateInput) dateInput.value = formatProjectFlowInputDate(fallbackStart);
+  if (endDateInput) endDateInput.value = formatProjectFlowInputDate(fallbackEnd);
+  if (durationValueInput) durationValueInput.value = String(milestone?.durationValue || duration.value || 1);
+  if (durationUnitSelect) durationUnitSelect.value = milestone?.durationUnit || duration.unit || 'days';
+  if (fileInput) fileInput.value = '';
+  if (deleteBtn) deleteBtn.hidden = !milestone?.id;
+  form.hidden = false;
+  openFormModal('projectFlowMilestoneForm', milestone?.id ? 'Endre oppgave' : 'Ny oppgave');
+  dateInput?.focus();
+}
+
+function updateProjectFlowEndDateFromDuration(){
+  const startInput = $('projectFlowDateInput');
+  const endInput = $('projectFlowEndDateInput');
+  const valueInput = $('projectFlowDurationValueInput');
+  const unitSelect = $('projectFlowDurationUnitSelect');
+  const startDate = parseProjectFlowDate(startInput?.value || '');
+  if (!startDate || !endInput) return;
+  const endDate = addProjectFlowDuration(startDate, valueInput?.value || 1, unitSelect?.value || 'days');
+  endInput.value = formatProjectFlowInputDate(endDate);
+}
+
+function updateProjectFlowDurationFromEndDate(){
+  const startDate = parseProjectFlowDate($('projectFlowDateInput')?.value || '');
+  const endDate = parseProjectFlowDate($('projectFlowEndDateInput')?.value || '');
+  const valueInput = $('projectFlowDurationValueInput');
+  const unitSelect = $('projectFlowDurationUnitSelect');
+  if (!startDate || !endDate || endDate < startDate || !valueInput || !unitSelect) return;
+  valueInput.value = String(getProjectFlowDayDiff(startDate, endDate) + 1);
+  unitSelect.value = 'days';
+}
+
+function closeProjectFlowMilestoneForm(){
+  const form = $('projectFlowMilestoneForm');
+  if (!form) return;
+  closeProjectFlowDatePickerPopover();
+  closeFormModal('projectFlowMilestoneForm');
+  form.reset();
+  projectFlowState.editingMilestoneId = '';
+  projectFlowState.editingProjectId = '';
+}
+
+function findProjectFlowTaskLocation(taskId){
+  const wanted = String(taskId || '').trim();
+  if (!wanted) return null;
+  for (const project of projectState.projects){
+    const tasks = getProjectFlowMilestones(project.id);
+    const task = tasks.find(item=>item.id === wanted);
+    if (task) return { project, task, tasks };
+  }
+  return null;
+}
+
+function shiftProjectFlowTaskStart(task, startDate){
+  const parsedStart = parseProjectFlowDate(startDate);
+  if (!parsedStart) return task;
+  const durationValue = Math.max(1, Number.parseInt(task.durationValue, 10) || 1);
+  const durationUnit = ['days', 'weeks', 'months'].includes(task.durationUnit) ? task.durationUnit : 'days';
+  const endDate = formatProjectFlowDate(addProjectFlowDuration(parsedStart, durationValue, durationUnit));
+  return {
+    ...task,
+    startDate: formatProjectFlowDate(parsedStart),
+    endDate,
+    date: formatProjectFlowDate(parsedStart),
+    updatedAt: new Date().toISOString()
+  };
+}
+
+function shiftProjectFlowTaskByDays(task, deltaDays){
+  const startDate = parseProjectFlowDate(task?.startDate);
+  const endDate = parseProjectFlowDate(task?.endDate);
+  const delta = Number.parseInt(deltaDays, 10) || 0;
+  if (!task || !startDate || !endDate || !delta) return task;
+  return {
+    ...task,
+    startDate: formatProjectFlowDate(addProjectFlowDays(startDate, delta)),
+    endDate: formatProjectFlowDate(addProjectFlowDays(endDate, delta)),
+    date: formatProjectFlowDate(addProjectFlowDays(startDate, delta)),
+    updatedAt: new Date().toISOString()
+  };
+}
+
+function propagateProjectFlowDrivenTaskOffsets(projectId, taskId, moveDeltaDays = 0, durationDeltaDays = 0, visited = new Set()){
+  const sourceKey = String(taskId || '');
+  if (!projectId || !sourceKey || visited.has(sourceKey)) return;
+  visited.add(sourceKey);
+  const moveDelta = Number.parseInt(moveDeltaDays, 10) || 0;
+  const durationDelta = Number.parseInt(durationDeltaDays, 10) || 0;
+  const totalDelta = moveDelta + durationDelta;
+  if (!totalDelta) return;
+  const milestones = getProjectFlowMilestones(projectId);
+  const drivenTasks = milestones.filter(item=>getProjectFlowRelationTaskId(item, 'drivenBy') === sourceKey);
+  drivenTasks.forEach(drivenTask=>{
+    const shiftedTask = shiftProjectFlowTaskByDays(drivenTask, totalDelta);
+    if (shiftedTask === drivenTask) return;
+    const latestMilestones = getProjectFlowMilestones(projectId);
+    setProjectFlowMilestones(projectId, latestMilestones.map(item=>item.id === drivenTask.id ? shiftedTask : item));
+    propagateProjectFlowDrivenTaskOffsets(projectId, drivenTask.id, totalDelta, 0, visited);
+  });
+}
+
+function getProjectFlowDateChangeDeltas(previousTask, nextStartDate, nextEndDate){
+  const previousStart = parseProjectFlowDate(previousTask?.startDate);
+  const previousEnd = parseProjectFlowDate(previousTask?.endDate);
+  const nextStart = parseProjectFlowDate(nextStartDate);
+  const nextEnd = parseProjectFlowDate(nextEndDate);
+  if (!previousStart || !previousEnd || !nextStart || !nextEnd) return { moveDelta: 0, durationDelta: 0 };
+  const startDelta = getProjectFlowDayDiff(previousStart, nextStart);
+  const endDelta = getProjectFlowDayDiff(previousEnd, nextEnd);
+  const previousDuration = getProjectFlowDayDiff(previousStart, previousEnd) + 1;
+  const nextDuration = getProjectFlowDayDiff(nextStart, nextEnd) + 1;
+  const isPureMove = startDelta === endDelta && previousDuration === nextDuration;
+  return {
+    moveDelta: isPureMove ? startDelta : 0,
+    durationDelta: isPureMove ? 0 : endDelta
+  };
+}
+
+function applyProjectFlowDrivenByDependency(task){
+  return task;
+}
+
+function applyProjectFlowDrivesDependency(projectId, task){
+  return { projectId, task };
+}
+
+function getProjectFlowRelationTaskId(task, relation){
+  if (!task) return '';
+  if (relation === 'drivenBy'){
+    return String(task.drivenByTaskId || (task.dependencyRelation === 'drivenBy' ? task.dependencyTaskId : '') || '').trim();
+  }
+  if (relation === 'drives'){
+    return String(task.drivesTaskId || (task.dependencyRelation === 'drives' ? task.dependencyTaskId : '') || '').trim();
+  }
+  return '';
+}
+
+function setProjectFlowRelationOnTask(task, relation, taskId){
+  const nextTaskId = String(taskId || '').trim();
+  const next = { ...task, updatedAt: new Date().toISOString() };
+  if (relation === 'drivenBy'){
+    next.drivenByTaskId = nextTaskId;
+  } else if (relation === 'drives'){
+    next.drivesTaskId = nextTaskId;
+  }
+  if (next.drivenByTaskId){
+    next.dependencyRelation = 'drivenBy';
+    next.dependencyTaskId = next.drivenByTaskId;
+  } else if (next.drivesTaskId){
+    next.dependencyRelation = 'drives';
+    next.dependencyTaskId = next.drivesTaskId;
+  } else {
+    next.dependencyRelation = '';
+    next.dependencyTaskId = '';
+  }
+  return next;
+}
+
+function updateProjectFlowTaskDates(projectId, taskId, startDate, endDate){
+  const parsedStart = parseProjectFlowDate(startDate);
+  const parsedEnd = parseProjectFlowDate(endDate);
+  if (!projectId || !taskId || !parsedStart || !parsedEnd || parsedEnd < parsedStart) return false;
+  const milestones = getProjectFlowMilestones(projectId);
+  const previousTask = milestones.find(item=>item.id === taskId);
+  let updatedTask = null;
+  const updated = milestones.map(item=>{
+    if (item.id !== taskId) return item;
+    const duration = getProjectFlowDurationFromDates(parsedStart, parsedEnd);
+    updatedTask = {
+      ...item,
+      startDate: formatProjectFlowDate(parsedStart),
+      endDate: formatProjectFlowDate(parsedEnd),
+      date: formatProjectFlowDate(parsedStart),
+      durationValue: duration.value,
+      durationUnit: duration.unit,
+      updatedAt: new Date().toISOString()
+    };
+    return updatedTask;
+  });
+  if (!updatedTask) return false;
+  setProjectFlowMilestones(projectId, updated);
+  const deltas = getProjectFlowDateChangeDeltas(previousTask, updatedTask.startDate, updatedTask.endDate);
+  propagateProjectFlowDrivenTaskOffsets(projectId, taskId, deltas.moveDelta, deltas.durationDelta);
+  return true;
+}
+
+function moveProjectFlowTaskByDays(projectId, taskId, deltaDays){
+  const location = findProjectFlowTaskLocation(taskId);
+  if (!location?.task || location.project.id !== projectId) return false;
+  const startDate = parseProjectFlowDate(location.task.startDate);
+  const endDate = parseProjectFlowDate(location.task.endDate);
+  if (!startDate || !endDate) return false;
+  return updateProjectFlowTaskDates(
+    projectId,
+    taskId,
+    formatProjectFlowDate(addProjectFlowDays(startDate, deltaDays)),
+    formatProjectFlowDate(addProjectFlowDays(endDate, deltaDays))
+  );
+}
+
+function resizeProjectFlowTaskByDays(projectId, taskId, edge, deltaDays){
+  const location = findProjectFlowTaskLocation(taskId);
+  if (!location?.task || location.project.id !== projectId) return false;
+  const startDate = parseProjectFlowDate(location.task.startDate);
+  const endDate = parseProjectFlowDate(location.task.endDate);
+  if (!startDate || !endDate) return false;
+  let nextStart = startDate;
+  let nextEnd = endDate;
+  if (edge === 'start'){
+    nextStart = addProjectFlowDays(startDate, deltaDays);
+    if (nextStart > endDate) nextStart = endDate;
+  } else if (edge === 'end'){
+    nextEnd = addProjectFlowDays(endDate, deltaDays);
+    if (nextEnd < startDate) nextEnd = startDate;
+  } else {
+    return false;
+  }
+  return updateProjectFlowTaskDates(projectId, taskId, formatProjectFlowDate(nextStart), formatProjectFlowDate(nextEnd));
+}
+
+function getProjectFlowReciprocalRelation(relation){
+  if (relation === 'drivenBy') return 'drives';
+  if (relation === 'drives') return 'drivenBy';
+  return '';
+}
+
+function wouldCreateProjectFlowMutualDependency(taskId, relation, dependencyTaskId){
+  const current = findProjectFlowTaskLocation(taskId);
+  const dependency = findProjectFlowTaskLocation(dependencyTaskId);
+  if (!dependency?.task) return false;
+  const reciprocalRelation = getProjectFlowReciprocalRelation(relation);
+  if (current?.task && getProjectFlowRelationTaskId(current.task, reciprocalRelation) === dependencyTaskId) return true;
+  return getProjectFlowRelationTaskId(dependency.task, relation) === taskId;
+}
+
+function clearProjectFlowReciprocalDependency(taskId, relation, dependencyTaskId){
+  const reciprocalRelation = getProjectFlowReciprocalRelation(relation);
+  if (!taskId || !reciprocalRelation || !dependencyTaskId) return;
+  const dependency = findProjectFlowTaskLocation(dependencyTaskId);
+  if (!dependency?.project?.id || !dependency.task) return;
+  if (getProjectFlowRelationTaskId(dependency.task, reciprocalRelation) !== taskId) return;
+  const updated = dependency.tasks.map(item=>item.id === dependency.task.id
+    ? setProjectFlowRelationOnTask(item, reciprocalRelation, '')
+    : item
+  );
+  setProjectFlowMilestones(dependency.project.id, updated);
+}
+
+function setProjectFlowReciprocalDependency(taskId, relation, dependencyTaskId){
+  const reciprocalRelation = getProjectFlowReciprocalRelation(relation);
+  if (!taskId || !reciprocalRelation || !dependencyTaskId) return;
+  const dependency = findProjectFlowTaskLocation(dependencyTaskId);
+  if (!dependency?.project?.id || !dependency.task) return;
+  const previousTaskId = getProjectFlowRelationTaskId(dependency.task, reciprocalRelation);
+  if (previousTaskId && previousTaskId !== taskId){
+    clearProjectFlowReciprocalDependency(dependencyTaskId, reciprocalRelation, previousTaskId);
+  }
+  const latest = findProjectFlowTaskLocation(dependencyTaskId) || dependency;
+  const updated = latest.tasks.map(item=>item.id === latest.task.id
+    ? setProjectFlowRelationOnTask(item, reciprocalRelation, taskId)
+    : item
+  );
+  setProjectFlowMilestones(latest.project.id, updated);
+}
+
+function setProjectFlowTaskDependency(projectId, taskId, relation, dependencyTaskId){
+  if (!projectId || !taskId || !dependencyTaskId || taskId === dependencyTaskId) return false;
+  const dependency = findProjectFlowTaskLocation(dependencyTaskId);
+  if (!dependency?.task) return false;
+  if (dependency.project.id !== projectId){
+    setProjectFlowStatus('Oppgaver kan bare kobles mot oppgaver i samme prosjekt.', 'error');
+    return false;
+  }
+  if (wouldCreateProjectFlowMutualDependency(taskId, relation, dependencyTaskId)){
+    setProjectFlowStatus('Oppgaver kan ikke styre og styres av hverandre samtidig.', 'error');
+    return false;
+  }
+  const milestones = getProjectFlowMilestones(projectId);
+  let nextTask = null;
+  const previousTask = milestones.find(item=>item.id === taskId);
+  const previousDependencyTaskId = getProjectFlowRelationTaskId(previousTask, relation);
+  const updated = milestones.map(item=>{
+    if (item.id !== taskId) return item;
+    nextTask = setProjectFlowRelationOnTask(item, relation, dependencyTaskId);
+    applyProjectFlowDrivenByDependency(nextTask);
+    return nextTask;
+  });
+  if (!nextTask) return false;
+  setProjectFlowMilestones(projectId, updated);
+  if (previousDependencyTaskId && previousDependencyTaskId !== dependencyTaskId){
+    clearProjectFlowReciprocalDependency(taskId, relation, previousDependencyTaskId);
+  }
+  setProjectFlowReciprocalDependency(taskId, relation, dependencyTaskId);
+  applyProjectFlowDrivesDependency(projectId, nextTask);
+  return true;
+}
+
+function connectProjectFlowTasks(source, target){
+  if (!source || !target || source.taskId === target.taskId) return false;
+  if (source.projectId !== target.projectId){
+    setProjectFlowStatus('Oppgaver kan bare kobles mot oppgaver i samme prosjekt.', 'error');
+    return false;
+  }
+  const sourceType = source.type;
+  const targetType = target.type;
+  if (sourceType === targetType) return false;
+  if (!canConnectProjectFlowLinkHandles(source, target)){
+    setProjectFlowStatus('Oppgaver kan ikke styre og styres av hverandre samtidig.', 'error');
+    return false;
+  }
+  if (sourceType === 'drives' && targetType === 'drivenBy'){
+    return setProjectFlowTaskDependency(source.projectId, source.taskId, 'drives', target.taskId);
+  }
+  if (sourceType === 'drivenBy' && targetType === 'drives'){
+    return setProjectFlowTaskDependency(source.projectId, source.taskId, 'drivenBy', target.taskId);
+  }
+  return false;
+}
+
+function getProjectFlowLinkHandleData(handle){
+  if (!(handle instanceof Element)) return null;
+  return {
+    projectId: handle.getAttribute('data-project-id') || '',
+    taskId: handle.getAttribute('data-project-flow-link-task') || '',
+    type: handle.getAttribute('data-project-flow-link') || ''
+  };
+}
+
+function canConnectProjectFlowLinkHandles(source, target){
+  if (!source || !target || source.taskId === target.taskId) return false;
+  if (source.projectId !== target.projectId) return false;
+  if (source.type === target.type) return false;
+  const relation = source.type === 'drivenBy' ? 'drivenBy' : 'drives';
+  return !wouldCreateProjectFlowMutualDependency(source.taskId, relation, target.taskId);
+}
+
+function updateProjectFlowLinkTargetHighlights(){
+  const root = $('projectFlowTimeline');
+  const drag = projectFlowState.linkDrag;
+  const handles = Array.from(root?.querySelectorAll?.('[data-project-flow-link]') || []);
+  handles.forEach(handle=>{
+    const data = getProjectFlowLinkHandleData(handle);
+    const valid = Boolean(drag?.source && canConnectProjectFlowLinkHandles(drag.source, data));
+    handle.classList.toggle('is-valid-link-target', valid);
+  });
+}
+
+function clearProjectFlowLinkTargetHighlights(){
+  const root = $('projectFlowTimeline');
+  Array.from(root?.querySelectorAll?.('[data-project-flow-link]') || []).forEach(handle=>{
+    handle.classList.remove('is-valid-link-target');
+  });
+}
+
+function projectFlowCssEscape(value){
+  const raw = String(value || '');
+  if (window.CSS?.escape) return window.CSS.escape(raw);
+  return raw.replace(/["\\]/g, '\\$&');
+}
+
+function startProjectFlowLinkDrag(evt, handle){
+  if (!(evt instanceof PointerEvent) || !(handle instanceof HTMLElement) || evt.button !== 0) return;
+  const data = getProjectFlowLinkHandleData(handle);
+  if (!data?.projectId || !data.taskId || !['drives', 'drivenBy'].includes(data.type)) return;
+  evt.preventDefault();
+  handle.setPointerCapture?.(evt.pointerId);
+  projectFlowState.linkDrag = {
+    pointerId: evt.pointerId,
+    source: data,
+    handle,
+    x: evt.clientX,
+    y: evt.clientY
+  };
+  handle.classList.add('is-linking');
+  updateProjectFlowLinkTargetHighlights();
+  renderProjectFlowDependencyLines();
+}
+
+function updateProjectFlowLinkDrag(evt){
+  const drag = projectFlowState.linkDrag;
+  if (!drag || evt.pointerId !== drag.pointerId) return;
+  drag.x = evt.clientX;
+  drag.y = evt.clientY;
+  updateProjectFlowLinkTargetHighlights();
+  renderProjectFlowDependencyLines();
+  evt.preventDefault();
+}
+
+function finishProjectFlowLinkDrag(evt){
+  const drag = projectFlowState.linkDrag;
+  if (!drag || evt.pointerId !== drag.pointerId) return;
+  drag.handle?.releasePointerCapture?.(evt.pointerId);
+  drag.handle?.classList?.remove('is-linking');
+  const targetEl = document.elementFromPoint(evt.clientX, evt.clientY)?.closest?.('[data-project-flow-link]');
+  const target = getProjectFlowLinkHandleData(targetEl);
+  projectFlowState.linkDrag = null;
+  clearProjectFlowLinkTargetHighlights();
+  if (connectProjectFlowTasks(drag.source, target)){
+    renderProjectFlowView();
+    setProjectFlowStatus('Oppgavekobling lagret.', 'ok');
+  } else {
+    renderProjectFlowDependencyLines();
+  }
+  projectFlowState.suppressClickUntil = Date.now() + 350;
+}
+
+function startProjectFlowTaskDrag(evt, bar){
+  if (!(evt instanceof PointerEvent) || !(bar instanceof HTMLElement)) return;
+  if (evt.button !== 0) return;
+  const resizeTarget = evt.target instanceof Element ? evt.target.closest('[data-project-flow-resize]') : null;
+  if (evt.target instanceof Element && !resizeTarget && evt.target.closest('input,[data-project-flow-delete]')) return;
+  const projectId = bar.getAttribute('data-project-id') || '';
+  const taskId = bar.getAttribute('data-project-flow-drag') || '';
+  const mode = resizeTarget
+    ? resizeTarget.getAttribute('data-project-flow-resize')
+    : 'move';
+  const location = findProjectFlowTaskLocation(taskId);
+  if (!projectId || !taskId || !location?.task) return;
+  const startDate = parseProjectFlowDate(location.task.startDate);
+  const endDate = parseProjectFlowDate(location.task.endDate);
+  if (!startDate || !endDate) return;
+  evt.preventDefault();
+  bar.setPointerCapture?.(evt.pointerId);
+  bar.classList.add('is-dragging');
+  projectFlowState.drag = {
+    pointerId: evt.pointerId,
+    projectId,
+    taskId,
+    mode: mode === 'start' || mode === 'end' ? mode : 'move',
+    startX: evt.clientX,
+    deltaDays: 0,
+    moved: false,
+    startDate: formatProjectFlowDate(startDate),
+    endDate: formatProjectFlowDate(endDate),
+    durationDays: getProjectFlowDayDiff(startDate, endDate) + 1,
+    bar
+  };
+}
+
+function updateProjectFlowTaskDrag(evt){
+  const drag = projectFlowState.drag;
+  if (!drag || evt.pointerId !== drag.pointerId) return;
+  const dayWidth = getProjectFlowDayWidth();
+  const movedPixels = evt.clientX - drag.startX;
+  drag.moved = drag.moved || Math.abs(movedPixels) >= 5;
+  let deltaDays = Math.round((evt.clientX - drag.startX) / dayWidth);
+  if (drag.mode === 'start'){
+    deltaDays = Math.min(Math.max(deltaDays, -(drag.durationDays - 1)), drag.durationDays - 1);
+  } else if (drag.mode === 'end'){
+    deltaDays = Math.max(deltaDays, -(drag.durationDays - 1));
+  }
+  drag.deltaDays = deltaDays;
+  drag.bar?.style?.setProperty('--project-flow-drag-days', String(deltaDays));
+  drag.bar?.style?.setProperty('--project-flow-resize-days', String(deltaDays));
+  drag.bar?.classList?.toggle('is-resizing-start', drag.mode === 'start');
+  drag.bar?.classList?.toggle('is-resizing-end', drag.mode === 'end');
+  evt.preventDefault();
+}
+
+function finishProjectFlowTaskDrag(evt){
+  const drag = projectFlowState.drag;
+  if (!drag || evt.pointerId !== drag.pointerId) return;
+  drag.bar?.releasePointerCapture?.(evt.pointerId);
+  drag.bar?.classList?.remove('is-dragging', 'is-resizing-start', 'is-resizing-end');
+  drag.bar?.style?.removeProperty('--project-flow-drag-days');
+  drag.bar?.style?.removeProperty('--project-flow-resize-days');
+  projectFlowState.drag = null;
+  if (drag.moved) projectFlowState.suppressClickUntil = Date.now() + 800;
+  if (!drag.deltaDays) return;
+  const changed = drag.mode === 'move'
+    ? moveProjectFlowTaskByDays(drag.projectId, drag.taskId, drag.deltaDays)
+    : resizeProjectFlowTaskByDays(drag.projectId, drag.taskId, drag.mode, drag.deltaDays);
+  if (changed){
+    renderProjectFlowView();
+    setProjectFlowStatus('Oppgave oppdatert.', 'ok');
+  }
+}
+
+function handleProjectFlowMilestoneSave(evt){
+  evt?.preventDefault?.();
+  const projectIdFromForm = String($('projectFlowTaskProjectSelect')?.value || '').trim();
+  const project = projectState.projects.find(item=>item.id === projectIdFromForm) || getProjectFlowSelectedProject() || projectState.projects[0] || null;
+  if (!project?.id){
+    setProjectFlowStatus('Velg et prosjekt først.', 'error');
+    return;
+  }
+  const startDateInputValue = String($('projectFlowDateInput')?.value || '').trim();
+  const durationValue = Math.max(1, Number.parseInt($('projectFlowDurationValueInput')?.value || '1', 10) || 1);
+  const durationUnit = String($('projectFlowDurationUnitSelect')?.value || 'days').trim();
+  const phaseId = String($('projectFlowPhaseSelect')?.value || '').trim();
+  const title = getProjectFlowPhaseLabel(phaseId);
+  const drivenByTaskId = String($('projectFlowDependencyRelationSelect')?.value || '').trim();
+  const drivesTaskId = String($('projectFlowDependencyTaskSelect')?.value || '').trim();
+  const fileInput = $('projectFlowFileInput');
+  const fileName = fileInput?.files?.[0]?.name ? String(fileInput.files[0].name).trim() : '';
+  const id = String($('projectFlowMilestoneId')?.value || '').trim() || createProjectFlowId();
+  const parsedStart = parseProjectFlowDate(startDateInputValue);
+  const parsedEnd = parsedStart ? addProjectFlowDuration(parsedStart, durationValue, durationUnit) : null;
+  const endDate = parsedEnd ? formatProjectFlowDate(parsedEnd) : '';
+  const startDate = parsedStart ? formatProjectFlowDate(parsedStart) : '';
+  if (!parsedStart || !parsedEnd || !PROJECT_FLOW_PHASES.some(phase=>phase.id === phaseId)){
+    setProjectFlowStatus('Fyll inn punkt, startdato og varighet.', 'error');
+    return;
+  }
+  if (drivenByTaskId && drivesTaskId && drivenByTaskId === drivesTaskId){
+    setProjectFlowStatus('Samme oppgave kan ikke både styre og styres av denne oppgaven.', 'error');
+    return;
+  }
+  if (drivenByTaskId && wouldCreateProjectFlowMutualDependency(id, 'drivenBy', drivenByTaskId)){
+    setProjectFlowStatus('Oppgaver kan ikke styre og styres av hverandre samtidig.', 'error');
+    return;
+  }
+  if (drivesTaskId && wouldCreateProjectFlowMutualDependency(id, 'drives', drivesTaskId)){
+    setProjectFlowStatus('Oppgaver kan ikke styre og styres av hverandre samtidig.', 'error');
+    return;
+  }
+  const milestones = getProjectFlowMilestones(project.id);
+  const existing = milestones.find(item=>item.id === id);
+  const now = new Date().toISOString();
+  const next = {
+    id,
+    phaseId,
+    title,
+    startDate,
+    endDate,
+    date: startDate,
+    durationValue,
+    durationUnit,
+    fileName: fileName || existing?.fileName || '',
+    drivenByTaskId,
+    drivesTaskId,
+    dependencyRelation: drivenByTaskId ? 'drivenBy' : (drivesTaskId ? 'drives' : ''),
+    dependencyTaskId: drivenByTaskId || drivesTaskId,
+    createdAt: existing?.createdAt || now,
+    updatedAt: now,
+    completed: Boolean(existing?.completed)
+  };
+  applyProjectFlowDrivenByDependency(next);
+  const originalProjectId = String(projectFlowState.editingProjectId || '').trim();
+  if (originalProjectId && originalProjectId !== project.id && id){
+    const originalTasks = getProjectFlowMilestones(originalProjectId);
+    const originalTask = originalTasks.find(item=>item.id === id);
+    if (originalTask){
+      setProjectFlowMilestones(originalProjectId, originalTasks.filter(item=>item.id !== id));
+      clearProjectFlowReciprocalDependency(id, 'drivenBy', getProjectFlowRelationTaskId(originalTask, 'drivenBy'));
+      clearProjectFlowReciprocalDependency(id, 'drives', getProjectFlowRelationTaskId(originalTask, 'drives'));
+    }
+  }
+  const updated = existing
+    ? milestones.map(item=>item.id === id ? next : item)
+    : [...milestones, next];
+  setProjectFlowMilestones(project.id, updated);
+  if (existing && getProjectFlowRelationTaskId(existing, 'drivenBy') !== next.drivenByTaskId){
+    clearProjectFlowReciprocalDependency(id, 'drivenBy', getProjectFlowRelationTaskId(existing, 'drivenBy'));
+  }
+  if (existing && getProjectFlowRelationTaskId(existing, 'drives') !== next.drivesTaskId){
+    clearProjectFlowReciprocalDependency(id, 'drives', getProjectFlowRelationTaskId(existing, 'drives'));
+  }
+  if (next.drivenByTaskId){
+    setProjectFlowReciprocalDependency(id, 'drivenBy', next.drivenByTaskId);
+  }
+  if (next.drivesTaskId){
+    setProjectFlowReciprocalDependency(id, 'drives', next.drivesTaskId);
+  }
+  if (existing){
+    const deltas = getProjectFlowDateChangeDeltas(existing, next.startDate, next.endDate);
+    propagateProjectFlowDrivenTaskOffsets(project.id, id, deltas.moveDelta, deltas.durationDelta);
+  }
+  closeProjectFlowMilestoneForm();
+  renderProjectFlowView();
+  setProjectFlowStatus('Oppgave lagret.', 'ok');
+}
+
+function toggleProjectFlowMilestone(projectId, milestoneId, completed){
+  const milestones = getProjectFlowMilestones(projectId);
+  const updated = milestones.map(item=>item.id === milestoneId ? { ...item, completed: Boolean(completed), updatedAt: new Date().toISOString() } : item);
+  setProjectFlowMilestones(projectId, updated);
+  renderProjectFlowView();
+}
+
+function deleteProjectFlowMilestone(projectId, milestoneId){
+  const milestones = getProjectFlowMilestones(projectId);
+  const milestone = milestones.find(item=>item.id === milestoneId);
+  if (!milestone) return;
+  if (!window.confirm(`Slette oppgaven "${getProjectFlowPhaseLabel(milestone.phaseId)}"?`)) return;
+  clearProjectFlowReciprocalDependency(milestoneId, 'drivenBy', getProjectFlowRelationTaskId(milestone, 'drivenBy'));
+  clearProjectFlowReciprocalDependency(milestoneId, 'drives', getProjectFlowRelationTaskId(milestone, 'drives'));
+  setProjectFlowMilestones(projectId, milestones.filter(item=>item.id !== milestoneId));
+  renderProjectFlowView();
+  setProjectFlowStatus('Oppgave slettet.', 'ok');
+}
+
+function deleteProjectFlowMilestoneFromForm(){
+  const projectId = String(projectFlowState.editingProjectId || '').trim();
+  const milestoneId = String(projectFlowState.editingMilestoneId || '').trim();
+  if (!projectId || !milestoneId) return;
+  closeProjectFlowMilestoneForm();
+  deleteProjectFlowMilestone(projectId, milestoneId);
+}
+
+function renderProjectFlowView(){
+  const root = $('projectFlowTimeline');
+  if (!root) return;
+  loadProjectFlowState();
+  updateProjectFlowProjectSelect();
+  populateProjectFlowPhaseSelect();
+  root.innerHTML = '';
+  const addBtn = $('addProjectFlowMilestoneBtn');
+  const refreshBtn = $('refreshProjectFlowBtn');
+  const visibleProjects = getProjectFlowVisibleProjects();
+  if (addBtn) addBtn.disabled = !projectState.projects.length;
+  if (refreshBtn) refreshBtn.disabled = false;
+  if (!visibleProjects.length){
+    const empty = document.createElement('div');
+    empty.className = 'graph-empty';
+    empty.textContent = 'Ingen prosjekter er tilgjengelige for prosjektflyt.';
+    root.appendChild(empty);
+    return;
+  }
+
+  const milestones = visibleProjects.flatMap(project=>{
+    return getProjectFlowMilestones(project.id).map(task=>({
+      ...task,
+      projectId: project.id,
+      projectName: project.name || 'Uten navn',
+      projectNumber: project.projectNumber || ''
+    }));
+  });
+  const { start, end } = getProjectFlowRange(milestones);
+  const dates = buildProjectFlowDates(start, end);
+  const todayKey = getProjectFlowDateKey(new Date());
+  const sortedMilestones = [...milestones].sort((a, b)=>{
+    const phaseA = PROJECT_FLOW_PHASES.findIndex(phase=>phase.id === a.phaseId);
+    const phaseB = PROJECT_FLOW_PHASES.findIndex(phase=>phase.id === b.phaseId);
+    if (phaseA !== phaseB) return phaseA - phaseB;
+    return String(a.startDate || '').localeCompare(String(b.startDate || ''), 'no');
+  });
+
+  const title = document.createElement('div');
+  title.className = 'project-flow-title';
+  const heading = document.createElement('h3');
+  const selectedProject = getProjectFlowSelectedProject();
+  projectFlowState.taskColumnWidth = measureProjectFlowTaskColumnWidth([
+    'Oppgave',
+    'Ny oppgave',
+    'Ingen oppgaver',
+    ...PROJECT_FLOW_PHASES.map(phase=>phase.label),
+    ...visibleProjects.map(project=>getProjectFlowProjectLabel(project)),
+    ...sortedMilestones.map(item=>getProjectFlowTaskLabel(item, !selectedProject))
+  ]);
+  heading.textContent = selectedProject
+    ? (selectedProject.projectNumber
+      ? `${selectedProject.projectNumber} - ${selectedProject.name || 'Uten navn'}`
+      : selectedProject.name || 'Uten navn')
+    : 'Alle prosjekter';
+  const meta = document.createElement('p');
+  const completedCount = sortedMilestones.filter(item=>item.completed).length;
+  meta.className = 'muted-text';
+  meta.textContent = `${completedCount} av ${sortedMilestones.length} oppgaver fullført`;
+  title.append(heading, meta);
+
+  const scroller = document.createElement('div');
+  scroller.className = 'project-flow-scroller';
+  const topScrollbar = document.createElement('div');
+  topScrollbar.className = 'project-flow-top-scrollbar';
+  const topScrollbarInner = document.createElement('div');
+  topScrollbarInner.className = 'project-flow-top-scrollbar-inner';
+  topScrollbarInner.style.setProperty('--project-flow-days', String(dates.length));
+  topScrollbarInner.style.setProperty('--project-flow-day-width', `${getProjectFlowDayWidth()}px`);
+  topScrollbarInner.style.setProperty('--project-flow-task-width', `${getProjectFlowTaskColumnWidth()}px`);
+  topScrollbar.appendChild(topScrollbarInner);
+  const grid = document.createElement('div');
+  grid.className = 'project-flow-grid';
+  grid.style.setProperty('--project-flow-days', String(dates.length));
+  grid.style.setProperty('--project-flow-day-width', `${getProjectFlowDayWidth()}px`);
+  grid.style.setProperty('--project-flow-task-width', `${getProjectFlowTaskColumnWidth()}px`);
+
+  const phaseHead = document.createElement('div');
+  phaseHead.className = 'project-flow-phase-head';
+  phaseHead.textContent = 'Oppgave';
+  grid.appendChild(phaseHead);
+
+  getProjectFlowWeekSpans(dates).forEach(span=>{
+    const week = document.createElement('div');
+    week.className = 'project-flow-week-head';
+    week.style.gridColumn = `span ${span.days}`;
+    week.textContent = `UKE ${span.weekNumber}`;
+    grid.appendChild(week);
+  });
+
+  dates.forEach((date, index)=>{
+    const day = document.createElement('div');
+    day.className = 'project-flow-day-head';
+    const dateKey = getProjectFlowDateKey(date);
+    if (dateKey === todayKey) day.classList.add('is-today');
+    if (isProjectFlowWeekStart(date, index)) day.classList.add('is-week-start');
+    const dateLine = document.createElement('span');
+    dateLine.className = 'project-flow-date-line';
+    const month = document.createElement('span');
+    month.textContent = date.toLocaleDateString('no-NO', { month: 'short' }).replace('.', '');
+    const dayNumber = document.createElement('strong');
+    dayNumber.textContent = String(date.getDate());
+    dateLine.append(month, dayNumber);
+    const weekday = document.createElement('span');
+    weekday.className = 'project-flow-weekday';
+    weekday.textContent = date.toLocaleDateString('no-NO', { weekday: 'short' }).replace('.', '');
+    day.append(dateLine, weekday);
+    grid.appendChild(day);
+  });
+
+  const renderGroups = selectedProject
+    ? [{ id: selectedProject.id, label: getProjectFlowProjectLabel(selectedProject), tasks: sortedMilestones.filter(task=>task.projectId === selectedProject.id), showHeader: false, includeProjectInTask: false }]
+    : [{
+      id: PROJECT_FLOW_ALL_PROJECTS,
+      label: 'Alle prosjekter',
+      tasks: sortedMilestones,
+      showHeader: false,
+      includeProjectInTask: false,
+      projectRows: visibleProjects.filter(project=>getProjectFlowMilestones(project.id).length)
+    }];
+
+  renderGroups.forEach(group=>{
+    if (group.showHeader){
+      const projectLabel = document.createElement('div');
+      projectLabel.className = 'project-flow-project-label';
+      projectLabel.textContent = group.label;
+      grid.appendChild(projectLabel);
+      dates.forEach((date, index)=>{
+        const cell = document.createElement('div');
+        cell.className = 'project-flow-project-cell';
+        if (getProjectFlowDateKey(date) === todayKey) cell.classList.add('is-today');
+        if (isProjectFlowWeekStart(date, index)) cell.classList.add('is-week-start');
+        grid.appendChild(cell);
+      });
+    }
+
+    const tasksByPhase = getProjectFlowTasksByPhase(group.tasks);
+    PROJECT_FLOW_PHASES.forEach(phase=>{
+      const phaseTasks = tasksByPhase.get(phase.id) || [];
+      const collapsed = projectFlowState.collapsedPhaseIds.has(phase.id);
+      const phaseLabel = document.createElement('button');
+      phaseLabel.type = 'button';
+      phaseLabel.className = 'project-flow-group-label';
+      phaseLabel.dataset.projectFlowPhaseToggle = phase.id;
+      phaseLabel.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+      phaseLabel.innerHTML = `<span class="project-flow-group-caret">${collapsed ? '+' : '-'}</span><span>${phase.label}</span><strong>${phaseTasks.length}</strong>`;
+      grid.appendChild(phaseLabel);
+      dates.forEach((date, index)=>{
+        const dateKey = getProjectFlowDateKey(date);
+        const cell = document.createElement('div');
+        cell.className = 'project-flow-group-cell';
+        if (dateKey === todayKey) cell.classList.add('is-today');
+        if (isProjectFlowWeekStart(date, index)) cell.classList.add('is-week-start');
+        grid.appendChild(cell);
+      });
+      if (collapsed) return;
+
+      if (!phaseTasks.length && !group.projectRows?.length){
+        const emptyLabel = document.createElement('div');
+        emptyLabel.className = 'project-flow-task-label is-empty';
+        emptyLabel.textContent = 'Ingen oppgaver';
+        grid.appendChild(emptyLabel);
+        dates.forEach((date, index)=>{
+          const dateKey = getProjectFlowDateKey(date);
+          const cell = document.createElement('div');
+          cell.className = 'project-flow-cell is-empty';
+          cell.dataset.projectFlowDateCell = '';
+          cell.dataset.phaseId = phase.id;
+          cell.dataset.projectId = selectedProject?.id || '';
+          cell.dataset.date = dateKey;
+          if (dateKey === todayKey) cell.classList.add('is-today');
+          if (isProjectFlowWeekStart(date, index)) cell.classList.add('is-week-start');
+          grid.appendChild(cell);
+        });
+        return;
+      }
+
+      const appendEmptyTaskRow = (labelText = 'Ny oppgave', projectId = selectedProject?.id || '', isProjectRow = false)=>{
+        const emptyLabel = document.createElement('div');
+        emptyLabel.className = 'project-flow-task-label is-empty';
+        if (isProjectRow) emptyLabel.classList.add('is-project-row');
+        emptyLabel.textContent = labelText;
+        grid.appendChild(emptyLabel);
+        dates.forEach((date, index)=>{
+          const dateKey = getProjectFlowDateKey(date);
+          const cell = document.createElement('div');
+          cell.className = 'project-flow-cell is-empty';
+          cell.dataset.projectFlowDateCell = '';
+          cell.dataset.phaseId = phase.id;
+          cell.dataset.projectId = projectId;
+          cell.dataset.date = dateKey;
+          if (dateKey === todayKey) cell.classList.add('is-today');
+          if (isProjectFlowWeekStart(date, index)) cell.classList.add('is-week-start');
+          grid.appendChild(cell);
+        });
+      };
+
+      const rowsToRender = group.projectRows?.length
+        ? group.projectRows.flatMap(project=>{
+          const projectTasks = phaseTasks.filter(task=>task.projectId === project.id);
+          return projectTasks.length
+            ? projectTasks.map(task=>({ type: 'task', task, project }))
+            : [{ type: 'empty', project }];
+        })
+        : phaseTasks.map(task=>({ type: 'task', task, project: null }));
+
+      rowsToRender.forEach(row=>{
+        if (row.type === 'empty'){
+          appendEmptyTaskRow(getProjectFlowProjectLabel(row.project), row.project.id, true);
+          return;
+        }
+        const item = row.task;
+        const projectRowLabel = group.projectRows?.length
+          ? getProjectFlowProjectLabel(row.project || projectState.projects.find(project=>project.id === item.projectId))
+          : getProjectFlowTaskLabel(item, group.includeProjectInTask);
+        const taskLabel = document.createElement('div');
+        taskLabel.className = 'project-flow-task-label';
+        taskLabel.dataset.projectFlowTaskRow = item.id;
+        taskLabel.dataset.projectId = item.projectId;
+        if (item.completed) taskLabel.classList.add('is-completed');
+        const taskTitle = document.createElement('button');
+        taskTitle.type = 'button';
+        taskTitle.dataset.projectFlowEdit = item.id;
+        taskTitle.dataset.projectId = item.projectId;
+        taskTitle.textContent = projectRowLabel;
+        const taskMeta = document.createElement('span');
+        taskMeta.textContent = `${formatProjectFlowDisplayDate(item.startDate)} - ${formatProjectFlowDisplayDate(item.endDate)}`;
+        taskLabel.append(taskTitle, taskMeta);
+        if (item.fileName){
+          const fileMeta = document.createElement('span');
+          fileMeta.className = 'project-flow-task-file';
+          fileMeta.textContent = `Fil: ${item.fileName}`;
+          taskLabel.appendChild(fileMeta);
+        }
+        grid.appendChild(taskLabel);
+
+        const startDate = parseProjectFlowDate(item.startDate);
+        const endDate = parseProjectFlowDate(item.endDate);
+        const startIndex = startDate ? getProjectFlowDayDiff(start, startDate) : -1;
+        const endIndex = endDate ? getProjectFlowDayDiff(start, endDate) : startIndex;
+        const spanDays = Math.max(1, endIndex - startIndex + 1);
+        dates.forEach((date, index)=>{
+          const dateKey = getProjectFlowDateKey(date);
+          const cell = document.createElement('div');
+          cell.className = 'project-flow-cell';
+          cell.dataset.projectId = item.projectId;
+          cell.dataset.phaseId = item.phaseId;
+          cell.dataset.projectFlowRowTask = item.id;
+          cell.dataset.date = dateKey;
+          if (dateKey === todayKey) cell.classList.add('is-today');
+          if (isProjectFlowWeekStart(date, index)) cell.classList.add('is-week-start');
+          const dateIndex = getProjectFlowDayDiff(start, date);
+          const isCovered = dateIndex >= startIndex && dateIndex <= endIndex;
+          cell.dataset.projectFlowDateCell = isCovered ? item.id : '';
+          if (isCovered) cell.classList.add('is-covered');
+          if (isCovered && dateIndex !== startIndex) cell.classList.add('is-covered-continuation');
+          if (dateIndex === startIndex){
+            const bar = document.createElement('div');
+            bar.className = 'project-flow-bar';
+            bar.dataset.projectFlowDrag = item.id;
+            bar.dataset.projectFlowTaskBar = item.id;
+            bar.dataset.projectId = item.projectId;
+            if (spanDays <= 1) bar.classList.add('is-single-day');
+            if (item.completed) bar.classList.add('is-completed');
+            bar.style.setProperty('--project-flow-span-days', String(spanDays));
+            const resizeStart = document.createElement('span');
+            resizeStart.className = 'project-flow-resize-handle is-start';
+            resizeStart.dataset.projectFlowResize = 'start';
+            resizeStart.setAttribute('aria-hidden', 'true');
+            const check = document.createElement('input');
+            check.type = 'checkbox';
+            check.checked = item.completed;
+            check.dataset.projectFlowToggle = item.id;
+            check.dataset.projectId = item.projectId;
+            check.title = 'Marker fullført';
+            const text = document.createElement('button');
+            text.type = 'button';
+            text.className = 'project-flow-bar-title';
+            text.dataset.projectFlowEdit = item.id;
+            text.dataset.projectId = item.projectId;
+            text.textContent = projectRowLabel;
+            const remove = document.createElement('button');
+            remove.type = 'button';
+            remove.className = 'project-flow-delete';
+            remove.dataset.projectFlowDelete = item.id;
+            remove.dataset.projectId = item.projectId;
+            remove.textContent = '×';
+            remove.title = 'Slett oppgave';
+            const resizeEnd = document.createElement('span');
+            resizeEnd.className = 'project-flow-resize-handle is-end';
+            resizeEnd.dataset.projectFlowResize = 'end';
+            resizeEnd.setAttribute('aria-hidden', 'true');
+            const linkIn = document.createElement('button');
+            linkIn.type = 'button';
+            linkIn.className = 'project-flow-link-handle is-driven-by';
+            linkIn.dataset.projectFlowLink = 'drivenBy';
+            linkIn.dataset.projectFlowLinkTask = item.id;
+            linkIn.dataset.projectId = item.projectId;
+            linkIn.title = 'Styres av';
+            linkIn.setAttribute('aria-label', 'Styres av');
+            const linkOut = document.createElement('button');
+            linkOut.type = 'button';
+            linkOut.className = 'project-flow-link-handle is-drives';
+            linkOut.dataset.projectFlowLink = 'drives';
+            linkOut.dataset.projectFlowLinkTask = item.id;
+            linkOut.dataset.projectId = item.projectId;
+            linkOut.title = 'Styrer';
+            linkOut.setAttribute('aria-label', 'Styrer');
+            if (spanDays <= 1){
+              bar.append(linkIn, check, linkOut);
+            } else {
+              bar.append(linkIn, resizeStart, check, text, remove, resizeEnd, linkOut);
+            }
+            cell.appendChild(bar);
+          }
+          grid.appendChild(cell);
+        });
+      });
+      appendEmptyTaskRow();
+    });
+  });
+
+  scroller.appendChild(grid);
+  const linkOverlay = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  linkOverlay.classList.add('project-flow-link-overlay');
+  scroller.appendChild(linkOverlay);
+  syncProjectFlowTopScrollbar(scroller, topScrollbar);
+  root.append(title, topScrollbar, scroller);
+  scrollProjectFlowToCurrentWeek(scroller, start, topScrollbar);
+  requestAnimationFrame(renderProjectFlowDependencyLines);
+  if (!milestones.length){
+    const empty = document.createElement('div');
+    empty.className = 'graph-empty project-flow-empty';
+    empty.textContent = 'Ingen Gantt-oppgaver er opprettet ennå.';
+    root.appendChild(empty);
+  }
+}
+
 function renderProjectDashboard(){
   const listEl = $('projectList');
   if (!listEl) return;
+  loadProjectFlowState();
+  updateProjectArchiveUi();
   listEl.innerHTML = '';
   if (!projectState.projects.length){
     const empty = document.createElement('div');
@@ -6214,23 +8653,32 @@ function renderProjectDashboard(){
     btn.className = 'btn alt';
     btn.dataset.action = 'create-project';
     btn.textContent = 'Nytt prosjekt';
-    btn.disabled = !authState.loggedIn;
+    btn.disabled = !authState.loggedIn || projectState.showArchive === true;
     empty.appendChild(text);
     empty.appendChild(btn);
     listEl.appendChild(empty);
     projectState.expandedProjectId = null;
     renderOffersList();
+    renderProjectFlowView();
     return;
   }
-  const visibleProjects = projectState.projects.filter(project=>projectMatchesSearch(project));
+  const archiveMode = projectState.showArchive === true;
+  const projectsForView = projectState.projects.filter(project=>archiveMode ? projectIsArchived(project) : !projectIsArchived(project));
+  const visibleProjects = projectsForView.filter(project=>projectMatchesSearch(project));
+  ensureProjectFolderStatusesLoaded();
   if (!visibleProjects.length){
     const empty = document.createElement('div');
     empty.className = 'empty-state';
     const text = document.createElement('p');
-    text.textContent = 'Ingen prosjekter matcher søket.';
+    if (!projectsForView.length){
+      text.textContent = archiveMode ? 'Ingen prosjekter i arkivet.' : 'Ingen aktive prosjekter.';
+    } else {
+      text.textContent = 'Ingen prosjekter matcher søket.';
+    }
     empty.appendChild(text);
     listEl.appendChild(empty);
     renderOffersList();
+    renderProjectFlowView();
     return;
   }
   const frag = document.createDocumentFragment();
@@ -6241,9 +8689,17 @@ function renderProjectDashboard(){
       const lineTotal = resolveLineDisplayTotal(line);
       return Number.isFinite(lineTotal) ? sum + lineTotal : sum;
     }, 0));
+    const projectBusbarTotal = round2(projectLines.reduce((sum, line)=>{
+      const busbarTotal = Number(line?.totals?.totalExMontasje);
+      return Number.isFinite(busbarTotal) ? sum + busbarTotal : sum;
+    }, 0));
     const projectSkinMaterialTotal = round2(projectLines.reduce((sum, line)=>{
       const material = resolveLineSkinMaterialCost(line);
       return Number.isFinite(material) ? sum + material : sum;
+    }, 0));
+    const projectMontasjeTotal = round2(projectLines.reduce((sum, line)=>{
+      const montasjeTotal = Number(line?.totals?.totalInclMontasje);
+      return Number.isFinite(montasjeTotal) ? sum + montasjeTotal : sum;
     }, 0));
     const row = document.createElement('section');
     row.className = 'project-row';
@@ -6259,19 +8715,47 @@ function renderProjectDashboard(){
     title.textContent = project.projectNumber
       ? `${project.projectNumber} - ${projectTitle}`
       : projectTitle;
-    const responsible = document.createElement('p');
-    responsible.textContent = `Prosjektansvarlig: ${getProjectResponsibleName(project) || '-'}`;
-    const customer = document.createElement('p');
-    customer.textContent = project.customer ? `Kunde: ${project.customer}` : 'Kunde: -';
-    const contact = document.createElement('p');
-    contact.textContent = project.contactPerson ? `Kontaktperson: ${project.contactPerson}` : 'Kontaktperson: -';
-    const created = document.createElement('p');
-    created.className = 'project-row-meta';
-    created.textContent = `Opprettet: ${formatProjectTimestamp(project.createdAt)}`;
-    const summary = document.createElement('p');
-    summary.className = 'project-row-meta';
+    const flowStatus = getProjectFlowStatusForProject(project);
+    const titleRow = document.createElement('div');
+    titleRow.className = 'project-title-row';
+    const statusBadge = document.createElement('span');
+    statusBadge.className = `project-flow-status-badge is-${flowStatus.tone}`;
+    statusBadge.textContent = flowStatus.ageText
+      ? `${flowStatus.label} - ${flowStatus.ageText}`
+      : flowStatus.label;
+    const projectStatus = getProjectStatusConfig(project);
+    const projectStatusBtn = document.createElement('button');
+    projectStatusBtn.type = 'button';
+    projectStatusBtn.className = `project-status-badge is-${projectStatus.tone}`;
+    projectStatusBtn.dataset.projectStatusEdit = project.id;
+    projectStatusBtn.textContent = projectStatus.label;
+    projectStatusBtn.title = archiveMode
+      ? 'Endre prosjektstatus for å flytte prosjektet tilbake til prosjektoversikten.'
+      : 'Endre prosjektstatus';
+    titleRow.append(title, statusBadge, projectStatusBtn);
+    const projectAddonConfig = getProjectSelectedAddonConfig(project);
+    const createFieldText = (label, value)=>{
+      const wrapper = document.createElement('span');
+      wrapper.className = 'project-field-text';
+      const labelEl = document.createElement('strong');
+      labelEl.textContent = `${label}:`;
+      const valueEl = document.createElement('span');
+      valueEl.textContent = ` ${value || '-'}`;
+      wrapper.append(labelEl, valueEl);
+      return wrapper;
+    };
+    const createInfoRow = (label, value)=>{
+      const infoRow = document.createElement('div');
+      infoRow.className = 'project-info-row project-row-meta';
+      infoRow.appendChild(createFieldText(label, value));
+      return infoRow;
+    };
+    const responsible = createInfoRow('Prosjektansvarlig', getProjectResponsibleName(project) || '-');
+    const customer = createInfoRow('Kunde', project.customer || '-');
+    const contact = createInfoRow('Kontaktperson', project.contactPerson || '-');
+    const created = createInfoRow('Opprettet', formatProjectTimestamp(project.createdAt));
     const lineCount = projectLines.length;
-    summary.textContent = `Linjer: ${lineCount} | Materiell skinne: ${fmtNO.format(projectSkinMaterialTotal)} NOK | Totalsum linjer: ${fmtNO.format(projectTotal)} NOK`;
+    const summary = createInfoRow('Linjer', String(lineCount));
     const marginBadge = document.createElement('p');
     marginBadge.className = 'project-margin-badge';
     marginBadge.textContent = formatProjectMarginBadgeText(project);
@@ -6288,34 +8772,31 @@ function renderProjectDashboard(){
     setMarginBtn.className = 'btn alt project-margin-btn';
     setMarginBtn.dataset.projectSetMargin = project.id;
     setMarginBtn.textContent = 'Endre';
-    setMarginBtn.disabled = !projectLines.length;
+    setMarginBtn.disabled = archiveMode || !projectLines.length;
 
     const marginRow = document.createElement('div');
     marginRow.className = 'project-margin-row';
     marginRow.appendChild(marginBadge);
     marginRow.appendChild(setMarginBtn);
 
-    titleWrap.appendChild(title);
-    titleWrap.appendChild(responsible);
-    titleWrap.appendChild(customer);
-    titleWrap.appendChild(contact);
-    titleWrap.appendChild(created);
-    titleWrap.appendChild(summary);
+    titleWrap.appendChild(titleRow);
     titleWrap.appendChild(marginRow);
-    const projectAddonConfig = getProjectSelectedAddonConfig(project);
-    const projectAddonControl = buildAddonSelectorControl(projectAddonConfig, {
-      className: 'project-inline-selectors',
-      scope: 'project',
-      projectId: project.id
-    });
-    titleWrap.appendChild(projectAddonControl);
+    const infoStack = document.createElement('div');
+    infoStack.className = 'project-info-column';
+    infoStack.appendChild(responsible);
+    infoStack.appendChild(customer);
+    infoStack.appendChild(contact);
+    infoStack.appendChild(created);
+    infoStack.appendChild(summary);
 
     const actions = document.createElement('div');
     actions.className = 'project-row-actions';
+    const hasProjectFolder = projectHasConfirmedFolder(project);
+    const disableProjectActions = archiveMode;
 
     const detailBtn = document.createElement('button');
     detailBtn.type = 'button';
-    detailBtn.className = 'btn alt';
+    detailBtn.className = 'btn alt project-detail-toggle-btn';
     detailBtn.dataset.projectDetail = project.id;
     detailBtn.textContent = expanded ? 'Skjul linjer' : 'Vis linjer';
     detailBtn.setAttribute('aria-expanded', expanded ? 'true' : 'false');
@@ -6328,49 +8809,119 @@ function renderProjectDashboard(){
     newLineBtn.className = 'btn';
     newLineBtn.dataset.projectNewline = project.id;
     newLineBtn.textContent = 'Ny linje';
+    newLineBtn.disabled = disableProjectActions;
 
     const generateOfferBtn = document.createElement('button');
     generateOfferBtn.type = 'button';
     generateOfferBtn.className = 'btn';
     generateOfferBtn.dataset.projectGenerateOffer = project.id;
     generateOfferBtn.textContent = 'Generer tilbud';
-    generateOfferBtn.disabled = !projectLines.length;
+    generateOfferBtn.disabled = disableProjectActions || !projectLines.length || !hasProjectFolder;
+    if (!hasProjectFolder) generateOfferBtn.title = 'Prosjektmappe må opprettes før tilbud kan genereres.';
+
+    const openFolderBtn = document.createElement('button');
+    openFolderBtn.type = 'button';
+    openFolderBtn.className = 'btn alt';
+    openFolderBtn.dataset.projectOpenFolder = project.id;
+    openFolderBtn.textContent = 'Åpne prosjektmappe';
+    openFolderBtn.disabled = disableProjectActions || !authState.loggedIn || !hasProjectFolder;
+    if (!hasProjectFolder) openFolderBtn.title = 'Fant ingen prosjektmappe på SharePoint-stien.';
 
     const createFolderBtn = document.createElement('button');
     createFolderBtn.type = 'button';
     createFolderBtn.className = 'btn alt';
     createFolderBtn.dataset.projectCreateFolder = project.id;
     createFolderBtn.textContent = 'Opprett prosjektmappe';
+    createFolderBtn.disabled = disableProjectActions || !authState.loggedIn;
 
     const copyBtn = document.createElement('button');
     copyBtn.type = 'button';
     copyBtn.className = 'btn alt';
     copyBtn.dataset.projectCopy = project.id;
     copyBtn.textContent = 'Kopier';
+    copyBtn.disabled = disableProjectActions;
 
     const editBtn = document.createElement('button');
     editBtn.type = 'button';
     editBtn.className = 'btn alt';
     editBtn.dataset.projectCardEdit = project.id;
     editBtn.textContent = 'Endre';
+    editBtn.disabled = disableProjectActions;
 
     const deleteBtn = document.createElement('button');
     deleteBtn.type = 'button';
     deleteBtn.className = 'btn danger';
     deleteBtn.dataset.projectDelete = project.id;
     deleteBtn.textContent = 'Slett';
+    deleteBtn.disabled = disableProjectActions;
 
-    actions.appendChild(detailBtn);
-    actions.appendChild(newLineBtn);
-    actions.appendChild(generateOfferBtn);
-    actions.appendChild(createFolderBtn);
-    actions.appendChild(copyBtn);
-    actions.appendChild(editBtn);
-    actions.appendChild(deleteBtn);
+    const actionButtons = document.createElement('div');
+    actionButtons.className = 'project-action-buttons';
+    actionButtons.appendChild(detailBtn);
+    actionButtons.appendChild(newLineBtn);
+    actionButtons.appendChild(generateOfferBtn);
+    actionButtons.appendChild(openFolderBtn);
+    actionButtons.appendChild(createFolderBtn);
+    actionButtons.appendChild(copyBtn);
+    actionButtons.appendChild(editBtn);
+    actionButtons.appendChild(deleteBtn);
+
+    const metricsStack = document.createElement('div');
+    metricsStack.className = 'project-metrics-column';
+    const createMetricText = (item)=>{
+      if (!item.plain) return createFieldText(item.label, item.value);
+      const wrapper = document.createElement('span');
+      wrapper.className = 'project-field-text';
+      const labelEl = document.createElement('span');
+      labelEl.textContent = `${item.label}:`;
+      const valueEl = document.createElement('span');
+      valueEl.textContent = ` ${item.value || '-'}`;
+      wrapper.append(labelEl, valueEl);
+      return wrapper;
+    };
+    [
+      { label: 'Total strømskinne', value: `${fmtNO.format(projectBusbarTotal)} NOK` },
+      { label: 'Materiellkost', value: `${fmtNO.format(projectSkinMaterialTotal)} NOK`, className: 'is-muted-italic', plain: true },
+      { label: 'Total montasje', value: `${fmtNO.format(projectMontasjeTotal)} NOK` },
+      { label: 'Totalsum inkludert i tilbud', value: `${fmtNO.format(projectTotal)} NOK` }
+    ].forEach(item=>{
+      const metricRow = document.createElement('div');
+      metricRow.className = `project-metric-row${item.className ? ` ${item.className}` : ''}`;
+      metricRow.appendChild(createMetricText(item));
+      metricsStack.appendChild(metricRow);
+    });
+
+    const addonStack = document.createElement('div');
+    addonStack.className = 'project-action-addon-stack';
+    ['include', 'show', 'unit'].forEach(group=>{
+      const controlRow = document.createElement('div');
+      controlRow.className = 'project-action-addon-row';
+      controlRow.appendChild(buildAddonSelectorControl(projectAddonConfig, {
+        className: 'project-inline-selectors',
+        scope: 'project',
+        projectId: project.id,
+        groups: [group]
+      }));
+      if (archiveMode){
+        controlRow.querySelectorAll('input, button, select, textarea').forEach(control=>{
+          control.disabled = true;
+        });
+      }
+      addonStack.appendChild(controlRow);
+    });
+
+    actions.appendChild(actionButtons);
 
     head.appendChild(titleWrap);
     head.appendChild(actions);
     row.appendChild(head);
+
+    const bodyGrid = document.createElement('div');
+    bodyGrid.className = 'project-body-grid';
+    bodyGrid.appendChild(infoStack);
+    bodyGrid.appendChild(metricsStack);
+    bodyGrid.appendChild(addonStack);
+    row.appendChild(bodyGrid);
 
     const detail = document.createElement('div');
     detail.className = 'project-detail';
@@ -6398,6 +8949,7 @@ function renderProjectDashboard(){
         lineBtn.className = 'project-line-row';
         lineBtn.dataset.lineEdit = line.id;
         lineBtn.dataset.projectId = project.id;
+        lineBtn.disabled = archiveMode;
 
         const nameSpan = document.createElement('span');
         nameSpan.className = 'line-name';
@@ -6433,6 +8985,11 @@ function renderProjectDashboard(){
             lineId: line.id
           }
         );
+        if (archiveMode){
+          lineAddonControl.querySelectorAll('input, button, select, textarea').forEach(control=>{
+            control.disabled = true;
+          });
+        }
 
         const lineActionButtons = document.createElement('div');
         lineActionButtons.className = 'line-action-buttons';
@@ -6443,6 +9000,7 @@ function renderProjectDashboard(){
         lineEditBtn.dataset.lineEdit = line.id;
         lineEditBtn.dataset.projectId = project.id;
         lineEditBtn.textContent = 'Endre';
+        lineEditBtn.disabled = archiveMode;
 
         const lineDeleteBtn = document.createElement('button');
         lineDeleteBtn.type = 'button';
@@ -6450,6 +9008,7 @@ function renderProjectDashboard(){
         lineDeleteBtn.dataset.lineDelete = line.id;
         lineDeleteBtn.dataset.projectId = project.id;
         lineDeleteBtn.textContent = 'Slett';
+        lineDeleteBtn.disabled = archiveMode;
 
         lineMain.appendChild(lineBtn);
         lineMain.appendChild(lineAddonControl);
@@ -6467,9 +9026,12 @@ function renderProjectDashboard(){
   });
   listEl.appendChild(frag);
   renderOffersList();
+  renderProjectFlowView();
 }
 
 async function initProjectDashboard(){
+  loadProjectFlowState();
+  resetProjectFolderStatusState();
   projectState.projects = [];
   if (!getCurrentUserEmail()){
     projectState.projects = [];
@@ -6591,6 +9153,36 @@ function scrollProjectIntoView(projectId){
     .find(el=>el.getAttribute('data-project-row-id') === String(projectId));
   if (!row || typeof row.scrollIntoView !== 'function') return;
   row.scrollIntoView({ block: 'start', inline: 'nearest', behavior: 'auto' });
+}
+
+function updateProjectArchiveUi(){
+  const archiveMode = projectState.showArchive === true;
+  const toggleBtn = $('projectArchiveToggleBtn');
+  if (toggleBtn){
+    toggleBtn.textContent = archiveMode ? 'Prosjekter' : 'Prosjekt arkiv';
+    toggleBtn.setAttribute('aria-pressed', archiveMode ? 'true' : 'false');
+  }
+  const titleEl = document.querySelector('#dashboardView .dashboard-intro h2');
+  if (titleEl){
+    titleEl.textContent = archiveMode ? 'Prosjekt arkiv' : 'Prosjekter';
+  }
+  const introEl = document.querySelector('#dashboardView .dashboard-intro .muted-text');
+  if (introEl){
+    introEl.textContent = archiveMode
+      ? 'Arkiverte prosjekter er skrivebeskyttet. Du kan fortsatt vise og skjule linjer.'
+      : 'Velg et prosjekt, eller opprett nytt prosjekt. Prisverktøy åpnes på egen side.';
+  }
+  const newProjectBtn = $('newProjectBtn');
+  if (newProjectBtn){
+    newProjectBtn.disabled = !authState.loggedIn || archiveMode;
+  }
+}
+
+function toggleProjectArchiveView(){
+  projectState.showArchive = !projectState.showArchive;
+  projectState.expandedProjectId = null;
+  updateProjectArchiveUi();
+  renderProjectDashboard();
 }
 
 function ensureOption(selectEl, value, label){
@@ -7369,6 +9961,30 @@ if (projectMarginModal){
   });
 }
 
+const projectStatusModal = $('projectStatusModal');
+if (projectStatusModal){
+  projectStatusModal.addEventListener('click', evt=>{
+    if (evt.target === projectStatusModal){
+      closeProjectStatusModal();
+      return;
+    }
+  });
+  projectStatusModal.querySelectorAll('[data-project-status-option]').forEach(optionBtn=>{
+    optionBtn.addEventListener('click', evt=>{
+      evt.preventDefault();
+      evt.stopPropagation();
+      const projectId = projectStatusModalState.projectId || projectStatusModal.dataset.projectId;
+      if (!projectId) return;
+      setProjectStatus(projectId, optionBtn.getAttribute('data-project-status-option'));
+    });
+  });
+}
+
+const projectStatusCancel = $('projectStatusCancel');
+if (projectStatusCancel){
+  projectStatusCancel.addEventListener('click', closeProjectStatusModal);
+}
+
 const newProjectBtn = $('newProjectBtn');
 if (newProjectBtn){
   newProjectBtn.addEventListener('click', ()=>{
@@ -7392,6 +10008,11 @@ if (projectSearchInput){
   projectSearchInput.addEventListener('input', ()=>{
     setProjectSearchTerm(projectSearchInput.value);
   });
+}
+
+const projectArchiveToggleBtn = $('projectArchiveToggleBtn');
+if (projectArchiveToggleBtn){
+  projectArchiveToggleBtn.addEventListener('click', toggleProjectArchiveView);
 }
 
 const lineSortSelect = $('lineSortSelect');
@@ -7418,6 +10039,10 @@ if (projectListEl){
       openProjectModal({ mode: 'edit', projectId: target.dataset.projectCardEdit });
       return;
     }
+    if (target.dataset.projectStatusEdit){
+      openProjectStatusModal(target.dataset.projectStatusEdit);
+      return;
+    }
     if (target.dataset.projectDelete){
       deleteProject(target.dataset.projectDelete);
       return;
@@ -7436,6 +10061,10 @@ if (projectListEl){
     }
     if (target.dataset.projectCreateFolder){
       void createProjectFolderFromTemplate(target.dataset.projectCreateFolder, target);
+      return;
+    }
+    if (target.dataset.projectOpenFolder){
+      void openProjectSharePointFolder(target.dataset.projectOpenFolder, target);
       return;
     }
     if (target.dataset.projectCopy){
@@ -7470,6 +10099,243 @@ if (projectListEl){
       const field = target.dataset.addonField || '';
       if (!projectId || !field) return;
       updateProjectSelectedAddonConfig(projectId, { [field]: target.checked });
+    }
+  });
+}
+
+const projectFlowProjectSelect = $('projectFlowProjectSelect');
+if (projectFlowProjectSelect){
+  projectFlowProjectSelect.addEventListener('change', ()=>{
+    projectFlowState.selectedProjectId = projectFlowProjectSelect.value || '';
+    closeProjectFlowMilestoneForm();
+    renderProjectFlowView();
+  });
+}
+
+const projectFlowTaskProjectSelect = $('projectFlowTaskProjectSelect');
+if (projectFlowTaskProjectSelect){
+  projectFlowTaskProjectSelect.addEventListener('change', ()=>{
+    populateProjectFlowDependencyTaskSelect();
+  });
+}
+
+const addProjectFlowMilestoneBtn = $('addProjectFlowMilestoneBtn');
+if (addProjectFlowMilestoneBtn){
+  addProjectFlowMilestoneBtn.addEventListener('click', ()=>{
+    openProjectFlowMilestoneForm();
+  });
+}
+
+const refreshProjectFlowBtn = $('refreshProjectFlowBtn');
+if (refreshProjectFlowBtn){
+  refreshProjectFlowBtn.addEventListener('click', ()=>{
+    renderProjectFlowView();
+    setProjectFlowStatus('Oppdatert.', 'ok');
+  });
+}
+
+const projectFlowExpandAllBtn = $('projectFlowExpandAllBtn');
+if (projectFlowExpandAllBtn){
+  projectFlowExpandAllBtn.addEventListener('click', ()=>{
+    setProjectFlowAllExpanded(true);
+  });
+}
+
+const projectFlowCollapseAllBtn = $('projectFlowCollapseAllBtn');
+if (projectFlowCollapseAllBtn){
+  projectFlowCollapseAllBtn.addEventListener('click', ()=>{
+    setProjectFlowAllExpanded(false);
+  });
+}
+
+const projectFlowZoomInBtn = $('projectFlowZoomInBtn');
+if (projectFlowZoomInBtn){
+  projectFlowZoomInBtn.addEventListener('click', ()=>{
+    setProjectFlowZoomIndex(projectFlowState.zoomIndex + 1);
+  });
+}
+
+const projectFlowZoomOutBtn = $('projectFlowZoomOutBtn');
+if (projectFlowZoomOutBtn){
+  projectFlowZoomOutBtn.addEventListener('click', ()=>{
+    setProjectFlowZoomIndex(projectFlowState.zoomIndex - 1);
+  });
+}
+
+const projectFlowZoomFitBtn = $('projectFlowZoomFitBtn');
+if (projectFlowZoomFitBtn){
+  projectFlowZoomFitBtn.addEventListener('click', setProjectFlowZoomToFit);
+}
+
+const projectFlowMilestoneForm = $('projectFlowMilestoneForm');
+if (projectFlowMilestoneForm){
+  projectFlowMilestoneForm.addEventListener('submit', handleProjectFlowMilestoneSave);
+}
+
+const cancelProjectFlowMilestoneBtn = $('cancelProjectFlowMilestoneBtn');
+if (cancelProjectFlowMilestoneBtn){
+  cancelProjectFlowMilestoneBtn.addEventListener('click', closeProjectFlowMilestoneForm);
+}
+
+const deleteProjectFlowMilestoneBtn = $('deleteProjectFlowMilestoneBtn');
+if (deleteProjectFlowMilestoneBtn){
+  deleteProjectFlowMilestoneBtn.addEventListener('click', deleteProjectFlowMilestoneFromForm);
+}
+
+['projectFlowDateInput', 'projectFlowDurationValueInput', 'projectFlowDurationUnitSelect'].forEach(id=>{
+  const el = $(id);
+  if (el){
+    el.addEventListener('change', updateProjectFlowEndDateFromDuration);
+    el.addEventListener('input', updateProjectFlowEndDateFromDuration);
+  }
+});
+
+const projectFlowEndDateInput = $('projectFlowEndDateInput');
+if (projectFlowEndDateInput){
+  projectFlowEndDateInput.addEventListener('change', updateProjectFlowDurationFromEndDate);
+}
+
+const projectFlowDrivenBySelect = $('projectFlowDependencyRelationSelect');
+const projectFlowDrivesSelect = $('projectFlowDependencyTaskSelect');
+if (projectFlowDrivenBySelect && projectFlowDrivesSelect){
+  projectFlowDrivenBySelect.addEventListener('change', ()=>{
+    populateProjectFlowDependencyTaskSelect({
+      id: String($('projectFlowMilestoneId')?.value || '').trim(),
+      projectId: String($('projectFlowTaskProjectSelect')?.value || '').trim(),
+      drivenByTaskId: projectFlowDrivenBySelect.value,
+      drivesTaskId: projectFlowDrivesSelect.value
+    });
+  });
+  projectFlowDrivesSelect.addEventListener('change', ()=>{
+    populateProjectFlowDependencyTaskSelect({
+      id: String($('projectFlowMilestoneId')?.value || '').trim(),
+      projectId: String($('projectFlowTaskProjectSelect')?.value || '').trim(),
+      drivenByTaskId: projectFlowDrivenBySelect.value,
+      drivesTaskId: projectFlowDrivesSelect.value
+    });
+  });
+}
+
+const projectFlowStartDatePickerBtn = $('projectFlowStartDatePickerBtn');
+if (projectFlowStartDatePickerBtn){
+  projectFlowStartDatePickerBtn.addEventListener('click', evt=>{
+    evt.stopPropagation();
+    const popover = $('projectFlowDatePickerPopover');
+    if (popover && !popover.hidden && projectFlowState.datePickerTargetId === 'projectFlowDateInput'){
+      closeProjectFlowDatePickerPopover();
+    } else {
+      openProjectFlowDatePickerPopover('projectFlowDateInput');
+    }
+  });
+}
+
+const projectFlowEndDatePickerBtn = $('projectFlowEndDatePickerBtn');
+if (projectFlowEndDatePickerBtn){
+  projectFlowEndDatePickerBtn.addEventListener('click', evt=>{
+    evt.stopPropagation();
+    const popover = $('projectFlowDatePickerPopover');
+    if (popover && !popover.hidden && projectFlowState.datePickerTargetId === 'projectFlowEndDateInput'){
+      closeProjectFlowDatePickerPopover();
+    } else {
+      openProjectFlowDatePickerPopover('projectFlowEndDateInput');
+    }
+  });
+}
+
+const projectFlowDatePickerPopover = $('projectFlowDatePickerPopover');
+if (projectFlowDatePickerPopover){
+  projectFlowDatePickerPopover.addEventListener('click', evt=>evt.stopPropagation());
+}
+
+document.addEventListener('click', evt=>{
+  const target = evt.target instanceof Element ? evt.target : null;
+  if (target?.closest?.('#projectFlowMilestoneForm .calendar-date-input-row')) return;
+  closeProjectFlowDatePickerPopover();
+});
+
+const projectFlowTimelineEl = $('projectFlowTimeline');
+if (projectFlowTimelineEl){
+  projectFlowTimelineEl.addEventListener('pointerdown', evt=>{
+    const linkHandle = evt.target instanceof Element ? evt.target.closest('[data-project-flow-link]') : null;
+    if (linkHandle){
+      startProjectFlowLinkDrag(evt, linkHandle);
+      return;
+    }
+    const bar = evt.target instanceof Element ? evt.target.closest('[data-project-flow-drag]') : null;
+    if (bar) startProjectFlowTaskDrag(evt, bar);
+  });
+  projectFlowTimelineEl.addEventListener('pointermove', evt=>{
+    updateProjectFlowLinkDrag(evt);
+    updateProjectFlowTaskDrag(evt);
+  });
+  projectFlowTimelineEl.addEventListener('pointerup', evt=>{
+    finishProjectFlowLinkDrag(evt);
+    finishProjectFlowTaskDrag(evt);
+  });
+  projectFlowTimelineEl.addEventListener('pointercancel', evt=>{
+    finishProjectFlowLinkDrag(evt);
+    finishProjectFlowTaskDrag(evt);
+  });
+  projectFlowTimelineEl.addEventListener('change', evt=>{
+    const target = evt.target;
+    if (!(target instanceof HTMLInputElement)) return;
+    if (!target.dataset.projectFlowToggle) return;
+    toggleProjectFlowMilestone(target.dataset.projectId || '', target.dataset.projectFlowToggle, target.checked);
+  });
+  projectFlowTimelineEl.addEventListener('click', evt=>{
+    if (projectFlowState.drag) return;
+    if (Date.now() < Number(projectFlowState.suppressClickUntil || 0)){
+      evt.preventDefault();
+      evt.stopPropagation();
+      return;
+    }
+    const toggleTarget = evt.target instanceof Element ? evt.target.closest('[data-project-flow-toggle]') : null;
+    if (toggleTarget) return;
+    const phaseToggle = evt.target instanceof Element ? evt.target.closest('[data-project-flow-phase-toggle]') : null;
+    if (phaseToggle){
+      const phaseId = phaseToggle.getAttribute('data-project-flow-phase-toggle') || '';
+      if (projectFlowState.collapsedPhaseIds.has(phaseId)){
+        projectFlowState.collapsedPhaseIds.delete(phaseId);
+      } else {
+        projectFlowState.collapsedPhaseIds.add(phaseId);
+      }
+      renderProjectFlowView();
+      return;
+    }
+    const deleteTarget = evt.target instanceof Element ? evt.target.closest('[data-project-flow-delete]') : null;
+    if (deleteTarget){
+      deleteProjectFlowMilestone(
+        deleteTarget.getAttribute('data-project-id') || '',
+        deleteTarget.getAttribute('data-project-flow-delete') || ''
+      );
+      return;
+    }
+    const editTarget = evt.target instanceof Element ? evt.target.closest('[data-project-flow-edit]') : null;
+    if (editTarget){
+      const projectId = editTarget.getAttribute('data-project-id') || '';
+      const milestoneId = editTarget.getAttribute('data-project-flow-edit') || '';
+      const milestone = getProjectFlowMilestones(projectId).find(item=>item.id === milestoneId);
+      if (milestone) openProjectFlowMilestoneForm(milestone);
+      return;
+    }
+    const dateCell = evt.target instanceof Element ? evt.target.closest('[data-project-flow-date-cell]') : null;
+    if (dateCell){
+      const projectId = dateCell.getAttribute('data-project-id') || '';
+      const taskId = dateCell.getAttribute('data-project-flow-date-cell') || '';
+      const clickedDate = dateCell.getAttribute('data-date') || '';
+      const phaseId = dateCell.getAttribute('data-phase-id') || PROJECT_FLOW_PHASES[0].id;
+      const task = getProjectFlowMilestones(projectId).find(item=>item.id === taskId);
+      if (task){
+        openProjectFlowMilestoneForm({ ...task, projectId }, { projectId, clickedDate, phaseId: task.phaseId });
+      } else if (clickedDate){
+        const excludeProjectIds = projectId
+          ? []
+          : projectState.projects
+            .filter(project=>getProjectFlowMilestones(project.id).length)
+            .map(project=>project.id);
+        openProjectFlowMilestoneForm(null, { projectId, clickedDate, phaseId, excludeProjectIds });
+      }
+      return;
     }
   });
 }

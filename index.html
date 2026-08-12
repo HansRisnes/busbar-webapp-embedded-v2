@@ -35,6 +35,7 @@
     <symbol id="icon-calendar" viewBox="0 0 24 24"><path d="M7 2h2v3h6V2h2v3h2a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2V2Zm12 8H5v9h14v-9Z"/></symbol>
     <symbol id="icon-customers" viewBox="0 0 24 24"><path d="M8 12a4 4 0 1 1 0-8 4 4 0 0 1 0 8Zm8.5 1a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7ZM2 20a6 6 0 0 1 12 0H2Zm11.5 0a7.5 7.5 0 0 0-1.2-4.1A5 5 0 0 1 22 18.5V20h-8.5Z"/></symbol>
     <symbol id="icon-offers" viewBox="0 0 24 24"><path d="M6 2h9l5 5v15H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2Zm8 1.5V8h4.5L14 3.5ZM8 12h8v2H8v-2Zm0 4h8v2H8v-2Z"/></symbol>
+    <symbol id="icon-project-flow" viewBox="0 0 24 24"><path d="M5 4h14v2H5V4Zm2 4h2v3h6V8h2v3h2v6h-2v3h-2v-3H9v3H7v-3H5v-6h2V8Zm2 5v2h6v-2H9Z"/></symbol>
     <symbol id="icon-email" viewBox="0 0 24 24"><path d="M4 5h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Zm8 7.2L4.7 7H4v.7l8 5.7 8-5.7V7h-.7L12 12.2Z"/></symbol>
     <symbol id="icon-company-card" viewBox="0 0 24 24"><path d="M4 5h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Zm2 4v2h6V9H6Zm0 4v2h4v-2H6Zm9-3h3v2h-3v-2Zm-1 4h5v2h-5v-2Z"/></symbol>
     <symbol id="icon-project-folders" viewBox="0 0 24 24"><path d="M3 6.5A2.5 2.5 0 0 1 5.5 4H10l2 2h6.5A2.5 2.5 0 0 1 21 8.5V10H3V6.5Zm0 5.5h18v5.5a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17.5V12Zm5 2v2h8v-2H8Z"/></symbol>
@@ -81,7 +82,6 @@
         <span class="market-status" id="marketStatus">Henter...</span>
       </div>
     </div>
-    <p>Leser r&aring; CSV fra <code>data/busbar-webapp-embedded-v2.csv</code>, <code>data/busbar-webapp-embedded-v2.1.csv</code> og <code>data/XAP_busbar_prisliste_ekstrakt_5W_clean.csv</code>.</p>
   </header>
 
   <main class="app-shell" id="dashboardShell">
@@ -99,6 +99,7 @@
           <button type="button" class="sidebar-nav-item is-active" data-dashboard-nav="dashboard"><svg class="sidebar-nav-icon" aria-hidden="true"><use href="#icon-dashboard"></use></svg><span class="sidebar-nav-label">Dashbord</span></button>
           <a class="sidebar-nav-item" href="calculator.html" data-dashboard-link="calculator"><svg class="sidebar-nav-icon" aria-hidden="true"><use href="#icon-calculator"></use></svg><span class="sidebar-nav-label">Prisverkt&oslash;y</span></a>
           <button type="button" class="sidebar-nav-item" data-dashboard-nav="projects"><svg class="sidebar-nav-icon" aria-hidden="true"><use href="#icon-projects"></use></svg><span class="sidebar-nav-label">Prosjekter</span></button>
+          <button type="button" class="sidebar-nav-item" data-dashboard-nav="project-flow"><svg class="sidebar-nav-icon" aria-hidden="true"><use href="#icon-project-flow"></use></svg><span class="sidebar-nav-label">Prosjektflyt</span></button>
           <button type="button" class="sidebar-nav-item" data-dashboard-nav="offers"><svg class="sidebar-nav-icon" aria-hidden="true"><use href="#icon-offers"></use></svg><span class="sidebar-nav-label">Tilbud</span></button>
           <button type="button" class="sidebar-nav-item" data-dashboard-nav="email"><svg class="sidebar-nav-icon" aria-hidden="true"><use href="#icon-email"></use></svg><span class="sidebar-nav-label">E-post</span></button>
           <button type="button" class="sidebar-nav-item" data-dashboard-nav="calendar"><svg class="sidebar-nav-icon" aria-hidden="true"><use href="#icon-calendar"></use></svg><span class="sidebar-nav-label">Kalender</span></button>
@@ -165,6 +166,7 @@
                 <option value="alpha_desc">Alfabetisk (&Aring;-A)</option>
               </select>
             </div>
+            <button id="projectArchiveToggleBtn" type="button" class="btn alt project-archive-toggle-btn" aria-pressed="false">Prosjekt arkiv</button>
           </div>
           <div class="toolbar-right">
             <span id="projectsStatus" class="graph-status muted-text"></span>
@@ -179,6 +181,82 @@
         </div>
       </div>
     </section>
+      <section id="projectFlowView" class="dashboard-page placeholder-page" data-dashboard-page="project-flow" hidden>
+        <div class="placeholder-header">
+          <h2>Prosjektflyt</h2>
+          <p class="muted-text">Visualiserer prosjektoppgaver som en Gantt-plan med start, slutt og fullf&oslash;rt-status.</p>
+        </div>
+        <div class="project-flow-toolbar section-toolbar">
+          <div class="toolbar-left">
+            <div class="dashboard-sort-controls">
+              <label for="projectFlowProjectSelect">Prosjekt</label>
+              <select id="projectFlowProjectSelect"></select>
+            </div>
+            <button id="addProjectFlowMilestoneBtn" type="button" class="btn alt">Ny oppgave</button>
+            <button id="projectFlowExpandAllBtn" type="button" class="btn alt">Utvid alle</button>
+            <button id="projectFlowCollapseAllBtn" type="button" class="btn alt">Skjul alle</button>
+            <button id="projectFlowZoomOutBtn" type="button" class="btn alt">Zoom ut</button>
+            <button id="projectFlowZoomInBtn" type="button" class="btn alt">Zoom inn</button>
+            <button id="projectFlowZoomFitBtn" type="button" class="btn alt">Tilpass visning</button>
+          </div>
+          <div class="toolbar-right">
+            <span id="projectFlowStatus" class="graph-status muted-text"></span>
+            <button id="refreshProjectFlowBtn" type="button" class="btn alt">Oppdater</button>
+          </div>
+        </div>
+        <form id="projectFlowMilestoneForm" class="project-flow-form" hidden>
+          <input id="projectFlowMilestoneId" type="hidden">
+          <input id="projectFlowClickedDateInput" type="hidden">
+          <label for="projectFlowTaskProjectSelect">Prosjekt
+            <select id="projectFlowTaskProjectSelect" required></select>
+          </label>
+          <label for="projectFlowDateInput">Startdato
+            <span class="calendar-date-input-row">
+              <input id="projectFlowDateInput" type="text" inputmode="numeric" autocomplete="off" placeholder="DD/MM/ÅÅÅÅ" required>
+              <button id="projectFlowStartDatePickerBtn" type="button" class="calendar-date-picker-btn" aria-label="Velg startdato">
+                <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M7 2h2v3h6V2h2v3h2a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2V2Zm12 8H5v9h14v-9Z"/></svg>
+              </button>
+              <div id="projectFlowDatePickerPopover" class="calendar-date-picker-popover" hidden></div>
+            </span>
+          </label>
+          <label for="projectFlowEndDateInput">Sluttdato
+            <span class="calendar-date-input-row">
+              <input id="projectFlowEndDateInput" type="text" inputmode="numeric" autocomplete="off" placeholder="DD/MM/ÅÅÅÅ" required>
+              <button id="projectFlowEndDatePickerBtn" type="button" class="calendar-date-picker-btn" aria-label="Velg sluttdato">
+                <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M7 2h2v3h6V2h2v3h2a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2V2Zm12 8H5v9h14v-9Z"/></svg>
+              </button>
+            </span>
+          </label>
+          <label for="projectFlowPhaseSelect">Oppgave
+            <select id="projectFlowPhaseSelect" required></select>
+          </label>
+          <label for="projectFlowDurationValueInput">Varighet
+            <input id="projectFlowDurationValueInput" type="number" min="1" step="1" value="1">
+          </label>
+          <label for="projectFlowDurationUnitSelect">Enhet
+            <select id="projectFlowDurationUnitSelect">
+              <option value="days">Dager</option>
+              <option value="weeks">Uker</option>
+              <option value="months">Måneder</option>
+            </select>
+          </label>
+          <label for="projectFlowFileInput">Fil
+            <input id="projectFlowFileInput" type="file">
+          </label>
+          <label for="projectFlowDependencyRelationSelect">Styrt av
+            <select id="projectFlowDependencyRelationSelect"></select>
+          </label>
+          <label for="projectFlowDependencyTaskSelect">Styrer
+            <select id="projectFlowDependencyTaskSelect"></select>
+          </label>
+          <div class="graph-edit-actions">
+            <button type="submit" class="btn">Lagre</button>
+            <button id="deleteProjectFlowMilestoneBtn" type="button" class="btn danger" hidden>Slett</button>
+            <button id="cancelProjectFlowMilestoneBtn" type="button" class="btn alt">Avbryt</button>
+          </div>
+        </form>
+        <div id="projectFlowTimeline" class="project-flow-timeline" aria-live="polite"></div>
+      </section>
       <section id="calendarView" class="dashboard-page placeholder-page" data-dashboard-page="calendar" hidden>
         <div class="placeholder-header">
           <h2>Kalender</h2>
@@ -282,11 +360,19 @@
       <section id="emailView" class="dashboard-page placeholder-page" data-dashboard-page="email" hidden>
         <div class="placeholder-header">
           <h2>E-post</h2>
-          <p class="muted-text">Viser siste e-poster fra Microsoft-kontoen din.</p>
+          <p class="muted-text">Viser innboksen til prosjekt@busbar.no for Owners.</p>
         </div>
         <div class="graph-toolbar section-toolbar">
           <div class="toolbar-left">
             <button id="composeEmailBtn" type="button" class="btn alt">Ny e-post</button>
+            <div id="emailMessageActions" class="graph-inline-actions email-message-actions" hidden>
+              <span id="selectedEmailLabel" class="muted-text"></span>
+              <div class="email-message-action-buttons">
+                <button id="openSelectedEmailBtn" type="button" class="btn alt">Åpne</button>
+                <button id="markSelectedEmailReadBtn" type="button" class="btn alt">Marker lest</button>
+                <button id="deleteSelectedEmailBtn" type="button" class="btn danger">Slett</button>
+              </div>
+            </div>
           </div>
           <div class="toolbar-right">
             <span id="emailStatus" class="graph-status muted-text"></span>
@@ -311,14 +397,6 @@
             <button id="cancelEmailComposeBtn" type="button" class="btn alt">Avbryt</button>
           </div>
         </form>
-        <div id="emailMessageActions" class="graph-inline-actions email-message-actions" hidden>
-          <span id="selectedEmailLabel" class="muted-text"></span>
-          <div class="email-message-action-buttons">
-            <button id="openSelectedEmailBtn" type="button" class="btn alt">Åpne</button>
-            <button id="markSelectedEmailReadBtn" type="button" class="btn alt">Marker lest</button>
-            <button id="deleteSelectedEmailBtn" type="button" class="btn danger">Slett</button>
-          </div>
-        </div>
         <div id="emailMessagesList" class="graph-list email-messages-list" aria-live="polite"></div>
       </section>
 
@@ -659,9 +737,21 @@
     </div>
   </div>
 
-  <footer>
-    <small>Lengderegler: 3 m for rester &gt; 2,00 m. 1501-2000 (eller 1500-2999 for XCM) for rester &gt; 1,00 m. 500-1000 (600-1500 for XCM feeder) for rester &gt; 0,00 m.</small>
-  </footer>
+  <div id="projectStatusModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="projectStatusTitle">
+    <div class="modal">
+      <h3 id="projectStatusTitle">Endre prosjektstatus</h3>
+      <p id="projectStatusProjectName" class="muted-text"></p>
+      <div class="project-status-options">
+        <button type="button" class="btn alt" data-project-status-option="unresolved">Uavklart</button>
+        <button type="button" class="btn alt" data-project-status-option="won">Vunnet</button>
+        <button type="button" class="btn alt" data-project-status-option="lost">Tapt</button>
+        <button type="button" class="btn alt" data-project-status-option="finished">Ferdig</button>
+      </div>
+      <div class="actions">
+        <button id="projectStatusCancel" type="button" class="btn alt">Avbryt</button>
+      </div>
+    </div>
+  </div>
 
   <script type="module" src="app.js"></script>
 </body>

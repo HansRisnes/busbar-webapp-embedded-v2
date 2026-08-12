@@ -1067,6 +1067,19 @@ function normalizeLineRecord(raw) {
   };
 }
 
+function normalizeProjectStatusRecord(value) {
+  const raw = safeString(value).toLowerCase();
+  if (!raw) return 'unresolved';
+  if (['unresolved', 'won', 'lost', 'finished'].includes(raw)) return raw;
+  const mapped = {
+    uavklart: 'unresolved',
+    vunnet: 'won',
+    tapt: 'lost',
+    ferdig: 'finished'
+  };
+  return mapped[raw] || 'unresolved';
+}
+
 function normalizeProjectRecord(raw) {
   if (!raw || typeof raw !== 'object') return null;
   const now = new Date().toISOString();
@@ -1086,6 +1099,10 @@ function normalizeProjectRecord(raw) {
     contactPhone: safeString(raw.contactPhone || raw.phone),
     projectResponsible: safeString(raw.projectResponsible || raw.projectOwner || raw.ownerName),
     projectOwnerEmail: normalizeEmail(raw.projectOwnerEmail || raw.ownerEmail),
+    projectFolderName: safeString(raw.projectFolderName),
+    projectFolderCreated: raw.projectFolderCreated === true,
+    projectFolderWebUrl: safeString(raw.projectFolderWebUrl),
+    projectStatus: normalizeProjectStatusRecord(raw.projectStatus || raw.status),
     createdAt: toIsoTimestamp(raw.createdAt, now),
     updatedAt: toIsoTimestamp(raw.updatedAt || raw.createdAt, now),
     selectedAddonConfig,
@@ -4481,7 +4498,7 @@ app.post('/api/generate-offer', requireUserAuth, async (req, res) => {
       ...userRecord.profile
     });
     const projectName = sanitizeFileName(project.name || 'prosjekt');
-    const fileName = `Tilbud-${projectName}-${offerNumber}-rev${revision}.docx`;
+    const fileName = `Tilbud-${projectName}-${offerNumber}-${revision}.docx`;
     const encodedFileName = encodeURIComponent(fileName);
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
@@ -4538,7 +4555,7 @@ app.post('/api/generate-offer-latest', requireUserAuth, async (req, res) => {
       ...userRecord.profile
     });
     const projectName = sanitizeFileName(project.name || 'prosjekt');
-    const fileName = `Tilbud-${projectName}-${offerNumber}-rev${revision}.docx`;
+    const fileName = `Tilbud-${projectName}-${offerNumber}-${revision}.docx`;
     const encodedFileName = encodeURIComponent(fileName);
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
