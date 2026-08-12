@@ -2940,17 +2940,12 @@ tbody tr:hover{background:rgba(255,255,255,0.03)}
 footer{margin-top:20px;color:var(--muted)}
 
 .logo-mask{
-  width:200px; height:60px;           /* juster til logoens format */
-  background:var(--bg);               /* fargen inni logoen */
-  /* bruk alfa-kanalen fra PNG som maske */
-  -webkit-mask-image:url("assets/logo.png");
-  mask-image:url("assets/logo.png");
-  -webkit-mask-repeat:no-repeat;
-  mask-repeat:no-repeat;
-  -webkit-mask-size:contain;
-  mask-size:contain;
-  -webkit-mask-position:left center;
-  mask-position:left center;
+  width:200px;
+  height:60px;
+  background-image:url("assets/Busbar_original_hvit.png");
+  background-repeat:no-repeat;
+  background-size:contain;
+  background-position:left center;
 }
 
 :root{ --form-gap:16px; }
