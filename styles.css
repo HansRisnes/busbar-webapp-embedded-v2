@@ -1100,7 +1100,6 @@ body.is-auth-locked .dashboard-sidebar::before{
   background:rgba(8,23,46,0.45);
   backdrop-filter:blur(10px);
 }
-body.is-auth-locked .sidebar-top-row,
 body.is-auth-locked .sidebar-nav-section:not(.is-bottom),
 body.is-auth-locked #dashboardAdminNav,
 body.is-auth-locked .sidebar-auth-block .auth-user,
@@ -1109,6 +1108,13 @@ body.is-auth-locked #logoutBtn{
   opacity:.28;
   pointer-events:none;
   user-select:none;
+}
+body.is-auth-locked .sidebar-top-row{
+  position:relative;
+  z-index:6;
+  filter:none;
+  opacity:1;
+  pointer-events:auto;
 }
 body.is-auth-locked .sidebar-auth-block{
   position:relative;
@@ -1193,9 +1199,12 @@ body.is-auth-locked > header{
   transform:translateY(6px);
 }
 .sidebar-brand{
+  display:flex;
+  align-items:center;
   transition:opacity .16s ease;
   min-width:0;
   flex:1 1 auto;
+  text-decoration:none;
 }
 .app-shell.is-sidebar-collapsed .sidebar-brand{
   opacity:0;

@@ -522,6 +522,37 @@ function resolveUserIsAdmin(userRecord) {
   return isFallbackAdminEmail(userRecord?.email) || isStoredMicrosoftOwner(userRecord);
 }
 
+async function resolveUserIsAdminFresh(email) {
+  const normalizedEmail = normalizeEmail(email);
+  if (!isValidEmail(normalizedEmail)) return false;
+  if (isFallbackAdminEmail(normalizedEmail)) return true;
+
+  return withUserAuthLock(async () => {
+    const store = await readUserAuthStore();
+    const userRecord = store.users[normalizedEmail] || { email: normalizedEmail };
+    if (resolveUserIsAdmin(userRecord)) return true;
+
+    const microsoftOid = safeString(userRecord?.microsoft?.oid);
+    if (!microsoftOid) return false;
+
+    const isOwner = await isMicrosoftAppOwner(microsoftOid);
+    if (!isOwner) return false;
+
+    store.users[normalizedEmail] = {
+      ...userRecord,
+      email: normalizedEmail,
+      microsoft: {
+        ...userRecord.microsoft,
+        oid: microsoftOid,
+        isOwner: true
+      },
+      updatedAt: new Date().toISOString()
+    };
+    await writeUserAuthStore(store);
+    return true;
+  });
+}
+
 function createAuthToken(email, options = {}) {
   const now = Math.floor(Date.now() / 1000);
   const payload = {
@@ -757,8 +788,7 @@ async function requireUserAuth(req, res, next) {
   }
   if (auth.isAdmin !== true) {
     try {
-      const store = await readUserAuthStore();
-      auth.isAdmin = resolveUserIsAdmin(store.users[auth.email] || { email: auth.email });
+      auth.isAdmin = await resolveUserIsAdminFresh(auth.email);
     } catch (err) {
       console.warn('[auth] Kunne ikke oppdatere adminstatus fra brukerregister', err?.message || err);
       auth.isAdmin = isFallbackAdminEmail(auth.email);
