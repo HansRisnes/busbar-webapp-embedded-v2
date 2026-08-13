@@ -210,7 +210,7 @@ const MICROSOFT_AUTH_ALLOWED_ORIGINS = new Set([
 ]);
 const MICROSOFT_AUTH_SCOPES = parseCsvEnv(
   process.env.MICROSOFT_AUTH_SCOPES ||
-  'openid,profile,email,Calendars.Read,Mail.Read,Files.Read.All,Sites.Read.All'
+  'openid,profile,email,Calendars.ReadWrite,MailboxSettings.ReadWrite,Mail.ReadWrite,Mail.Send,Mail.ReadWrite.Shared,Mail.Send.Shared,Files.ReadWrite.All,Sites.Read.All'
 );
 const MICROSOFT_AUTH_CLIENT_SECRET = safeString(
   process.env.MICROSOFT_AUTH_CLIENT_SECRET ||

@@ -132,7 +132,47 @@
       <section id="mainDashboardView" class="dashboard-page placeholder-page is-active" data-dashboard-page="dashboard">
         <div class="placeholder-header">
           <h2>Dashbord</h2>
-          <p class="muted-text">Dashbordinnhold kommer her.</p>
+          <p class="muted-text">N&oslash;kkeltall og snarveier fra programmet samlet p&aring; ett sted.</p>
+        </div>
+        <div class="main-dashboard-grid">
+          <article class="main-dashboard-widget dashboard-total-widget is-large">
+            <div class="dashboard-widget-header">
+              <div>
+                <h3>Totaler</h3>
+                <p class="muted-text">Summer fra alle beregnede linjer.</p>
+              </div>
+              <div class="dashboard-widget-tabs" role="tablist" aria-label="Velg totalvisning">
+                <button id="dashboardBusbarTotalsTab" type="button" class="dashboard-widget-tab is-active" data-dashboard-total-tab="busbar" role="tab" aria-selected="true">Str&oslash;mskinner</button>
+                <button id="dashboardMontasjeTotalsTab" type="button" class="dashboard-widget-tab" data-dashboard-total-tab="montasje" role="tab" aria-selected="false">Montasje</button>
+              </div>
+            </div>
+            <div id="dashboardTotalsContent" class="dashboard-total-content"></div>
+          </article>
+          <article class="main-dashboard-widget dashboard-status-widget is-small">
+            <div class="dashboard-widget-header">
+              <div>
+                <h3>Prosjekter</h3>
+                <p class="muted-text">Antall prosjekter fordelt p&aring; status.</p>
+              </div>
+            </div>
+            <div id="dashboardProjectStatusSummary" class="dashboard-status-summary"></div>
+          </article>
+          <article class="main-dashboard-widget dashboard-flow-status-widget is-small">
+            <div class="dashboard-widget-header">
+              <div>
+                <h3>Prosjektflyt</h3>
+                <p class="muted-text">Antall prosjekter fordelt p&aring; flytstatus.</p>
+              </div>
+            </div>
+            <div id="dashboardFlowStatusSummary" class="dashboard-status-summary"></div>
+          </article>
+          <article class="main-dashboard-widget is-small"><span>Tomt vindu</span></article>
+          <article class="main-dashboard-widget is-tall"><span>Tomt vindu</span></article>
+          <article class="main-dashboard-widget is-small"><span>Tomt vindu</span></article>
+          <article class="main-dashboard-widget is-wide"><span>Tomt vindu</span></article>
+          <article class="main-dashboard-widget is-medium"><span>Tomt vindu</span></article>
+          <article class="main-dashboard-widget is-small"><span>Tomt vindu</span></article>
+          <article class="main-dashboard-widget is-small"><span>Tomt vindu</span></article>
         </div>
       </section>
 
@@ -195,7 +235,6 @@
             </div>
             <button id="addProjectFlowMilestoneBtn" type="button" class="btn alt">Ny oppgave</button>
             <button id="projectFlowExpandAllBtn" type="button" class="btn alt">Utvid alle</button>
-            <button id="projectFlowCollapseAllBtn" type="button" class="btn alt">Skjul alle</button>
             <button id="projectFlowZoomOutBtn" type="button" class="btn alt">Zoom ut</button>
             <button id="projectFlowZoomInBtn" type="button" class="btn alt">Zoom inn</button>
             <button id="projectFlowZoomFitBtn" type="button" class="btn alt">Tilpass visning</button>
@@ -242,7 +281,7 @@
             </select>
           </label>
           <label for="projectFlowFileInput">Fil
-            <input id="projectFlowFileInput" type="file">
+            <input id="projectFlowFileInput" type="file" disabled title="Filopplasting i prosjektflyt er ikke aktivert enda">
           </label>
           <label for="projectFlowDependencyRelationSelect">Styrt av
             <select id="projectFlowDependencyRelationSelect"></select>
@@ -298,6 +337,11 @@
           </div>
           <label for="calendarEventSubject">Emne
             <input id="calendarEventSubject" type="text" required>
+          </label>
+          <label class="calendar-project-field" for="calendarEventProject">Prosjekt
+            <select id="calendarEventProject">
+              <option value="">Ingen prosjektkobling</option>
+            </select>
           </label>
           <label class="calendar-date-field" for="calendarEventStartDate">Startdato
             <span class="calendar-date-input-row">
@@ -612,6 +656,17 @@
           <button id="loginSubmit" type="button" class="btn">Logg p&aring;</button>
         </div>
       </form>
+    </div>
+  </div>
+
+  <div id="dashboardProjectStatusModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="dashboardProjectStatusTitle">
+    <div class="modal dashboard-project-status-modal">
+      <h3 id="dashboardProjectStatusTitle">Prosjekter</h3>
+      <p id="dashboardProjectStatusSubtitle" class="muted-text"></p>
+      <div id="dashboardProjectStatusList" class="dashboard-status-project-list"></div>
+      <div class="actions">
+        <button id="dashboardProjectStatusClose" type="button" class="btn alt">Lukk</button>
+      </div>
     </div>
   </div>
 

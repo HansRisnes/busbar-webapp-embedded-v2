@@ -42,9 +42,14 @@ const PROJECT_SYNC_DEBOUNCE_MS = 800;
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MICROSOFT_AUTH_DEFAULT_SCOPES = Object.freeze(['openid', 'profile', 'email']);
 const MICROSOFT_GRAPH_CALENDAR_SCOPES = Object.freeze(['Calendars.ReadWrite']);
+const MICROSOFT_GRAPH_OUTLOOK_CATEGORY_SCOPES = Object.freeze(['MailboxSettings.ReadWrite']);
 const MICROSOFT_GRAPH_MAIL_SCOPES = Object.freeze(['Mail.ReadWrite', 'Mail.Send', 'Mail.ReadWrite.Shared', 'Mail.Send.Shared']);
 const MICROSOFT_GRAPH_SHAREPOINT_SCOPES = Object.freeze(['Files.ReadWrite.All', 'Sites.Read.All']);
 const MICROSOFT_GRAPH_BASE_URL = 'https://graph.microsoft.com/v1.0';
+const CALENDAR_PROJECT_EXTENDED_PROPERTY_ID = 'String {4f28b47f-5e6b-4f87-9fcb-4c1a9c0c9d9f} Name BusbarProjectId';
+const CALENDAR_PROJECT_FLOW_TASK_EXTENDED_PROPERTY_ID = 'String {4f28b47f-5e6b-4f87-9fcb-4c1a9c0c9d9f} Name BusbarProjectFlowTaskId';
+const OUTLOOK_PROJECT_CATEGORY_NAME = 'Busbar Prosjekt';
+const OUTLOOK_PROJECT_CATEGORY_COLOR = 'preset3';
 const PROJECT_MAILBOX_ADDRESS = 'prosjekt@busbar.no';
 const SHAREPOINT_FOLDER_CONFIG = Object.freeze({
   'project-folders': {
@@ -92,7 +97,7 @@ const PROJECT_FLOW_PHASES = Object.freeze([
   { id: 'delivery', label: 'Levering' },
   { id: 'finished', label: 'Ferdig' }
 ]);
-const PROJECT_FLOW_ZOOM_LEVELS = Object.freeze([42, 56, 72, 96, 124]);
+const PROJECT_FLOW_VISIBLE_WEEK_LEVELS = Object.freeze([6, 5, 4, 3, 2]);
 const PROJECT_FLOW_DEFAULT_ZOOM_INDEX = 2;
 const projectSyncState = {
   timerId: null,
@@ -113,7 +118,8 @@ function resetProjectFolderStatusState(){
 
 const dashboardState = {
   activePage: 'dashboard',
-  sidebarCollapsed: false
+  sidebarCollapsed: false,
+  totalsTab: 'busbar'
 };
 const projectState = {
   currentProjectId: null,
@@ -170,6 +176,7 @@ let specialElementItemCounter = 0;
 let microsoftAuthConfigPromise = null;
 let microsoftMsalClient = null;
 let microsoftLastAccount = null;
+const outlookCategoryReadyAccounts = new Set();
 const calendarViewState = {
   mode: 'month',
   cursor: new Date(),
@@ -177,6 +184,7 @@ const calendarViewState = {
   loadedStart: null,
   loadedEnd: null,
   formAttendees: [],
+  editingEventCategories: [],
   datePickerCursor: new Date()
 };
 const emailViewState = {
@@ -192,6 +200,7 @@ const projectFlowState = {
   collapsedPhaseIds: new Set(),
   zoomIndex: PROJECT_FLOW_DEFAULT_ZOOM_INDEX,
   fitDayWidth: null,
+  dashboardStatusFilter: '',
   datePickerCursor: new Date(),
   datePickerTargetId: '',
   drag: null,
@@ -334,7 +343,9 @@ function setDashboardPage(page){
 }
 
 function handleDashboardPageActivated(page){
-  if (page === 'calendar'){
+  if (page === 'dashboard'){
+    window.setTimeout(renderMainDashboard, 0);
+  } else if (page === 'calendar'){
     loadCalendarEvents({ silent: true });
   } else if (page === 'email'){
     loadEmailMessages({ silent: true });
@@ -2159,6 +2170,7 @@ function renderCalendarEvents(events){
   events.forEach(event=>{
     const item = document.createElement('article');
     item.className = 'graph-item calendar-event-item';
+    item.classList.toggle('is-linked-project', Boolean(getCalendarEventLinkedProjectId(event)));
 
     const time = document.createElement('div');
     time.className = 'graph-item-time';
@@ -2197,6 +2209,12 @@ function sameCalendarDay(left, right){
     && left.getDate() === right.getDate();
 }
 
+function getCalendarDayDiff(start, end){
+  const startUtc = Date.UTC(start.getFullYear(), start.getMonth(), start.getDate());
+  const endUtc = Date.UTC(end.getFullYear(), end.getMonth(), end.getDate());
+  return Math.round((endUtc - startUtc) / 86400000);
+}
+
 function renderCalendarGrid(events){
   const grid = $('calendarGridView');
   if (!grid) return;
@@ -2228,15 +2246,69 @@ function renderCalendarGrid(events){
   const body = document.createElement('div');
   body.className = `calendar-grid calendar-grid-${mode}`;
   const today = startOfDay(new Date());
+  const projectFlowSegments = [];
+  const projectFlowRowLanes = new Map();
+  const addProjectFlowSegment = (event, startIndex, endIndex, lane)=>{
+    const item = document.createElement('button');
+    item.className = 'calendar-grid-event is-linked-project is-project-flow-span';
+    item.type = 'button';
+    item.dataset.editCalendarEvent = event.id || '';
+    item.style.gridRow = String(Math.floor(startIndex / 7) + 1);
+    item.style.gridColumn = `${(startIndex % 7) + 2} / ${(endIndex % 7) + 3}`;
+    item.style.setProperty('--calendar-event-lane', String(lane));
+    item.textContent = event.subject || 'Uten tittel';
+    body.appendChild(item);
+  };
+
+  events
+    .filter(event=>getCalendarEventProjectFlowTaskId(event))
+    .sort((a, b)=>{
+      const left = getCalendarEventDisplayDates(a);
+      const right = getCalendarEventDisplayDates(b);
+      const leftDuration = left ? getCalendarDayDiff(left.startDay, left.endDay) : 0;
+      const rightDuration = right ? getCalendarDayDiff(right.startDay, right.endDay) : 0;
+      if (rightDuration !== leftDuration) return rightDuration - leftDuration;
+      return (left?.startDay?.getTime() || 0) - (right?.startDay?.getTime() || 0);
+    })
+    .forEach(event=>{
+      const dates = getCalendarEventDisplayDates(event);
+      if (!dates) return;
+      const visibleStart = days.findIndex(day=>sameCalendarDay(day, dates.startDay));
+      const visibleEnd = days.findIndex(day=>sameCalendarDay(day, dates.endDay));
+      const startIndex = visibleStart >= 0
+        ? visibleStart
+        : (dates.startDay < days[0] ? 0 : -1);
+      const endIndex = visibleEnd >= 0
+        ? visibleEnd
+        : (dates.endDay > days[days.length - 1] ? days.length - 1 : -1);
+      if (startIndex < 0 || endIndex < 0 || endIndex < startIndex) return;
+      for (let rowStart = startIndex; rowStart <= endIndex; rowStart = (Math.floor(rowStart / 7) + 1) * 7){
+        const rowEnd = Math.min(endIndex, (Math.floor(rowStart / 7) * 7) + 6);
+        const weekRow = Math.floor(rowStart / 7);
+        const lane = projectFlowSegments.filter(segment=>
+          segment.weekRow === weekRow
+          && rowStart <= segment.endIndex
+          && rowEnd >= segment.startIndex
+        ).length;
+        projectFlowSegments.push({ weekRow, startIndex: rowStart, endIndex: rowEnd, lane });
+        projectFlowRowLanes.set(weekRow, Math.max(projectFlowRowLanes.get(weekRow) || 0, lane + 1));
+        addProjectFlowSegment(event, rowStart, rowEnd, lane);
+      }
+    });
+
   days.forEach((day, index)=>{
     if ((mode === 'month' || mode === 'week') && index % 7 === 0){
       const week = document.createElement('div');
       week.className = 'calendar-week-number';
       week.textContent = `UKE ${getIsoWeekNumber(day)}`;
+      week.style.gridColumn = '1';
+      week.style.gridRow = String(Math.floor(index / 7) + 1);
       body.appendChild(week);
     }
     const cell = document.createElement('section');
     cell.className = 'calendar-day-cell';
+    cell.style.gridColumn = String((index % 7) + 2);
+    cell.style.gridRow = String(Math.floor(index / 7) + 1);
     cell.classList.toggle('is-outside-month', mode === 'month' && day.getMonth() !== calendarViewState.cursor.getMonth());
     cell.classList.toggle('is-today', sameCalendarDay(day, today));
     cell.classList.toggle('is-past-day', day < today);
@@ -2244,9 +2316,14 @@ function renderCalendarGrid(events){
     const heading = document.createElement('div');
     heading.className = 'calendar-day-heading';
     heading.textContent = new Intl.DateTimeFormat('no-NO', { day: '2-digit', month: mode === 'week' ? 'short' : undefined }).format(day);
+    const rowLaneCount = projectFlowRowLanes.get(Math.floor(index / 7)) || 0;
+    if (rowLaneCount){
+      heading.style.marginBottom = `${6 + (rowLaneCount * 31)}px`;
+    }
     cell.appendChild(heading);
 
     const dayEvents = events
+      .filter(event=>!getCalendarEventProjectFlowTaskId(event))
       .filter(event=>{
         const start = parseGraphDate(event.start);
         return start && sameCalendarDay(start, day);
@@ -2263,6 +2340,7 @@ function renderCalendarGrid(events){
     dayEvents.forEach(event=>{
       const item = document.createElement('button');
       item.className = 'calendar-grid-event';
+      item.classList.toggle('is-linked-project', Boolean(getCalendarEventLinkedProjectId(event)));
       item.type = 'button';
       item.dataset.editCalendarEvent = event.id || '';
       const time = parseGraphDate(event.start);
@@ -2369,6 +2447,118 @@ function renderCalendarAttendeesList(){
   });
 }
 
+function formatProjectOptionLabel(project){
+  if (!project) return '';
+  const title = project.projectNumber
+    ? `${project.projectNumber} - ${project.name || 'Uten navn'}`
+    : (project.name || 'Uten navn');
+  const customer = String(project.customer || '').trim();
+  return customer ? `${title} (${customer})` : title;
+}
+
+function populateCalendarProjectOptions(selectedProjectId = ''){
+  const select = $('calendarEventProject');
+  if (!select) return;
+  const selected = String(selectedProjectId || '').trim();
+  select.innerHTML = '';
+  const empty = document.createElement('option');
+  empty.value = '';
+  empty.textContent = 'Ingen prosjektkobling';
+  select.appendChild(empty);
+  const projects = [...(Array.isArray(projectState.projects) ? projectState.projects : [])]
+    .sort((a,b)=>compareProjectsForSort(a, b, 'date_newest'));
+  projects.forEach(project=>{
+    if (!project?.id) return;
+    const option = document.createElement('option');
+    option.value = project.id;
+    option.textContent = formatProjectOptionLabel(project);
+    select.appendChild(option);
+  });
+  select.value = projects.some(project=>project.id === selected) ? selected : '';
+}
+
+function getCalendarEventLinkedProjectId(event){
+  const properties = Array.isArray(event?.singleValueExtendedProperties)
+    ? event.singleValueExtendedProperties
+    : [];
+  const property = properties.find(item=>String(item?.id || '') === CALENDAR_PROJECT_EXTENDED_PROPERTY_ID);
+  return String(property?.value || '').trim();
+}
+
+function getCalendarEventProjectFlowTaskId(event){
+  const properties = Array.isArray(event?.singleValueExtendedProperties)
+    ? event.singleValueExtendedProperties
+    : [];
+  const property = properties.find(item=>String(item?.id || '') === CALENDAR_PROJECT_FLOW_TASK_EXTENDED_PROPERTY_ID);
+  return String(property?.value || '').trim();
+}
+
+function getCalendarEventDisplayDates(event){
+  const start = parseGraphDate(event?.start);
+  const end = parseGraphDate(event?.end);
+  if (!start) return null;
+  const startDay = startOfDay(start);
+  let endDay = end ? startOfDay(end) : startDay;
+  if (event?.isAllDay && end && end.getTime() > start.getTime()){
+    endDay = startOfDay(addDays(end, -1));
+  }
+  if (endDay < startDay) endDay = startDay;
+  return { startDay, endDay };
+}
+
+function isCalendarProjectFlowMultiDayEvent(event){
+  if (!getCalendarEventProjectFlowTaskId(event)) return false;
+  const dates = getCalendarEventDisplayDates(event);
+  return Boolean(dates && !sameCalendarDay(dates.startDay, dates.endDay));
+}
+
+function mergeOutlookProjectCategory(categories = [], includeProjectCategory = true){
+  const normalized = (Array.isArray(categories) ? categories : [])
+    .map(item=>String(item || '').trim())
+    .filter(Boolean)
+    .filter((item, index, array)=>array.findIndex(value=>value.toLowerCase() === item.toLowerCase()) === index)
+    .filter(item=>item.toLowerCase() !== OUTLOOK_PROJECT_CATEGORY_NAME.toLowerCase());
+  if (includeProjectCategory){
+    normalized.push(OUTLOOK_PROJECT_CATEGORY_NAME);
+  }
+  return normalized;
+}
+
+async function ensureOutlookProjectCategory(){
+  if (!authState.loggedIn) return false;
+  const accountKey = getCurrentUserEmail() || 'current';
+  if (outlookCategoryReadyAccounts.has(accountKey)) return true;
+  try{
+    const query = new URLSearchParams({
+      '$select': 'displayName,color'
+    });
+    const payload = await microsoftGraphRequest(`/me/outlook/masterCategories?${query.toString()}`, MICROSOFT_GRAPH_OUTLOOK_CATEGORY_SCOPES);
+    const categories = Array.isArray(payload?.value) ? payload.value : [];
+    const existing = categories.find(item=>String(item?.displayName || '').toLowerCase() === OUTLOOK_PROJECT_CATEGORY_NAME.toLowerCase());
+    if (!existing){
+      await microsoftGraphRequest('/me/outlook/masterCategories', MICROSOFT_GRAPH_OUTLOOK_CATEGORY_SCOPES, {
+        method: 'POST',
+        body: {
+          displayName: OUTLOOK_PROJECT_CATEGORY_NAME,
+          color: OUTLOOK_PROJECT_CATEGORY_COLOR
+        }
+      });
+    } else if (String(existing.color || '') !== OUTLOOK_PROJECT_CATEGORY_COLOR){
+      await microsoftGraphRequest(`/me/outlook/masterCategories/${encodeURIComponent(existing.id || OUTLOOK_PROJECT_CATEGORY_NAME)}`, MICROSOFT_GRAPH_OUTLOOK_CATEGORY_SCOPES, {
+        method: 'PATCH',
+        body: {
+          color: OUTLOOK_PROJECT_CATEGORY_COLOR
+        }
+      });
+    }
+    outlookCategoryReadyAccounts.add(accountKey);
+    return true;
+  }catch(err){
+    console.warn('Kunne ikke klargjøre Outlook-kategori', err);
+    return false;
+  }
+}
+
 function resetCalendarEventForm(){
   const form = $('calendarEventForm');
   if (!form) return;
@@ -2391,6 +2581,8 @@ function resetCalendarEventForm(){
   const nativeDatePicker = $('calendarEventDatePicker');
   if (nativeDatePicker) nativeDatePicker.value = formatIsoDateInputValue(start);
   setCalendarFormAttendees([]);
+  calendarViewState.editingEventCategories = [];
+  populateCalendarProjectOptions('');
 }
 
 function openCalendarEventForm(event = null){
@@ -2406,6 +2598,8 @@ function openCalendarEventForm(event = null){
   const startTimeEl = $('calendarEventStartTime');
   const durationEl = $('calendarEventDuration');
   const bodyEl = $('calendarEventBody');
+  calendarViewState.editingEventCategories = Array.isArray(event?.categories) ? event.categories : [];
+  populateCalendarProjectOptions(getCalendarEventLinkedProjectId(event));
   if (subjectEl) subjectEl.value = event?.subject || '';
   if (locationEl) locationEl.value = event?.location?.displayName || '';
   const start = event?.start ? parseGraphDate(event.start) : null;
@@ -2437,6 +2631,7 @@ function getCalendarEventPayloadFromForm(){
   const start = graphLocalDateTimeValue(combineLocalDateAndTimeValue($('calendarEventStartDate')?.value, $('calendarEventStartTime')?.value));
   const durationHours = Number($('calendarEventDuration')?.value || 0);
   const body = String($('calendarEventBody')?.value || '').trim();
+  const projectId = String($('calendarEventProject')?.value || '').trim();
   const attendeeInput = $('calendarAttendeeInput');
   const attendees = [
     ...calendarViewState.formAttendees,
@@ -2460,7 +2655,12 @@ function getCalendarEventPayloadFromForm(){
     attendees: attendees.map(address=>({
       emailAddress: { address },
       type: 'required'
-    }))
+    })),
+    categories: mergeOutlookProjectCategory(calendarViewState.editingEventCategories, Boolean(projectId)),
+    singleValueExtendedProperties: [{
+      id: CALENDAR_PROJECT_EXTENDED_PROPERTY_ID,
+      value: projectId
+    }]
   };
 }
 
@@ -2473,6 +2673,9 @@ async function saveCalendarEventFromForm(){
   setGraphStatus('calendarStatus', id ? 'Lagrer avtale...' : 'Oppretter avtale...');
   try{
     const body = getCalendarEventPayloadFromForm();
+    if (body.categories?.includes(OUTLOOK_PROJECT_CATEGORY_NAME)){
+      await ensureOutlookProjectCategory();
+    }
     if (id){
       await microsoftGraphRequest(`/me/events/${encodeURIComponent(id)}`, MICROSOFT_GRAPH_CALENDAR_SCOPES, {
         method: 'PATCH',
@@ -3343,7 +3546,8 @@ async function loadCalendarEvents(options = {}){
       endDateTime: range.end.toISOString(),
       '$top': '200',
       '$orderby': 'start/dateTime',
-      '$select': 'id,subject,start,end,location,organizer,isAllDay,showAs,webLink,bodyPreview'
+      '$select': 'id,subject,start,end,location,organizer,isAllDay,showAs,webLink,bodyPreview,categories',
+      '$expand': `singleValueExtendedProperties($filter=id eq '${CALENDAR_PROJECT_EXTENDED_PROPERTY_ID}' or id eq '${CALENDAR_PROJECT_FLOW_TASK_EXTENDED_PROPERTY_ID}')`
     });
     const payload = await microsoftGraphRequest(`/me/calendarView?${query.toString()}`, MICROSOFT_GRAPH_CALENDAR_SCOPES);
     const events = Array.isArray(payload?.value) ? payload.value : [];
@@ -6740,6 +6944,7 @@ function normalizeProjectFlowMilestones(items){
         drivesTaskId: String(item?.drivesTaskId || (item?.dependencyRelation === 'drives' ? item?.dependencyTaskId : '') || '').trim(),
         dependencyRelation: ['drives', 'drivenBy'].includes(item?.dependencyRelation) ? item.dependencyRelation : '',
         dependencyTaskId: String(item?.dependencyTaskId || '').trim(),
+        calendarEventId: String(item?.calendarEventId || '').trim(),
         createdAt: String(item?.createdAt || item?.updatedAt || '').trim(),
         updatedAt: String(item?.updatedAt || item?.createdAt || '').trim(),
         completed: Boolean(item?.completed)
@@ -6984,6 +7189,10 @@ function getProjectFlowVisibleProjects(){
   if (selectedId && selectedId !== PROJECT_FLOW_ALL_PROJECTS){
     const project = projectState.projects.find(item=>item.id === selectedId);
     return project ? [project] : [];
+  }
+  const filter = String(projectFlowState.dashboardStatusFilter || '').trim();
+  if (filter){
+    return projectState.projects.filter(project=>getProjectFlowStatusForProject(project).label === filter);
   }
   return [...projectState.projects];
 }
@@ -7527,10 +7736,32 @@ function setProjectFlowStatus(message, type = ''){
   el.classList.toggle('error', type === 'error');
 }
 
+function updateProjectFlowExpandToggleButton(){
+  const btn = $('projectFlowExpandAllBtn');
+  if (!btn) return;
+  const canExpand = projectFlowState.collapsedPhaseIds.size > 0;
+  btn.textContent = canExpand ? 'Utvid alle' : 'Skjul alle';
+  btn.dataset.projectFlowExpandNext = canExpand ? 'true' : 'false';
+}
+
 function getProjectFlowDayWidth(){
   const fit = Number(projectFlowState.fitDayWidth);
   if (Number.isFinite(fit) && fit > 0) return fit;
-  return PROJECT_FLOW_ZOOM_LEVELS[projectFlowState.zoomIndex] || PROJECT_FLOW_ZOOM_LEVELS[PROJECT_FLOW_DEFAULT_ZOOM_INDEX];
+  const visibleWeeks = getProjectFlowVisibleWeekCount();
+  const root = $('projectFlowTimeline');
+  const availableWidth = root?.clientWidth || root?.parentElement?.clientWidth || window.innerWidth || 1000;
+  const taskWidth = getProjectFlowTaskColumnWidth();
+  const timelineWidth = Math.max(280, availableWidth - taskWidth - 40);
+  return Math.max(24, Math.floor(timelineWidth / (visibleWeeks * 7)));
+}
+
+function getProjectFlowVisibleWeekCount(){
+  return PROJECT_FLOW_VISIBLE_WEEK_LEVELS[projectFlowState.zoomIndex] || PROJECT_FLOW_VISIBLE_WEEK_LEVELS[PROJECT_FLOW_DEFAULT_ZOOM_INDEX];
+}
+
+function getProjectFlowDateHeaderDensityClass(){
+  const visibleWeeks = getProjectFlowVisibleWeekCount();
+  return visibleWeeks >= 4 ? `is-density-${visibleWeeks}` : '';
 }
 
 function getProjectFlowTaskColumnWidth(){
@@ -7559,7 +7790,7 @@ function measureProjectFlowTaskColumnWidth(labels){
 }
 
 function setProjectFlowZoomIndex(nextIndex){
-  const clamped = Math.max(0, Math.min(PROJECT_FLOW_ZOOM_LEVELS.length - 1, Number(nextIndex)));
+  const clamped = Math.max(0, Math.min(PROJECT_FLOW_VISIBLE_WEEK_LEVELS.length - 1, Number(nextIndex)));
   projectFlowState.zoomIndex = Number.isFinite(clamped) ? clamped : PROJECT_FLOW_DEFAULT_ZOOM_INDEX;
   projectFlowState.fitDayWidth = null;
   renderProjectFlowView();
@@ -7606,6 +7837,282 @@ function getProjectFlowTaskActivityTime(task){
   if (end) return end.getTime();
   const start = parseProjectFlowDate(task?.startDate);
   return start ? start.getTime() : 0;
+}
+
+function getDashboardAllProjectLines(){
+  return (Array.isArray(projectState.projects) ? projectState.projects : [])
+    .flatMap(project=>Array.isArray(project.lines) ? project.lines : []);
+}
+
+function sumDashboardLineValue(lines, resolver){
+  return round2((Array.isArray(lines) ? lines : []).reduce((sum, line)=>{
+    const value = Number(resolver(line));
+    return Number.isFinite(value) ? sum + value : sum;
+  }, 0));
+}
+
+function getDashboardTotals(){
+  const lines = getDashboardAllProjectLines();
+  const busbarTotal = sumDashboardLineValue(lines, line=>line?.totals?.totalExMontasje);
+  const materialCost = sumDashboardLineValue(lines, line=>resolveLineSkinMaterialCost(line));
+  const montasjeTotal = sumDashboardLineValue(lines, line=>line?.totals?.totalInclMontasje);
+  const montasjeCost = sumDashboardLineValue(lines, line=>line?.totals?.montasje?.cost);
+  const lineTotal = sumDashboardLineValue(lines, line=>resolveLineDisplayTotal(line));
+  return {
+    lineCount: lines.length,
+    busbar: {
+      total: busbarTotal,
+      cost: materialCost,
+      margin: Math.max(0, round2(busbarTotal - materialCost))
+    },
+    montasje: {
+      total: montasjeTotal,
+      cost: montasjeCost,
+      margin: Math.max(0, round2(montasjeTotal - montasjeCost))
+    },
+    allTotal: lineTotal
+  };
+}
+
+function formatDashboardMoney(value){
+  const number = Number(value);
+  return Number.isFinite(number) ? `${fmtNO.format(round2(number))} NOK` : '0,00 NOK';
+}
+
+function formatDashboardPercent(value, total){
+  const amount = Number(value);
+  const base = Number(total);
+  if (!Number.isFinite(amount) || !Number.isFinite(base) || base <= 0) return '0,0 %';
+  return `${fmtNO.format(round2((amount / base) * 100))} %`;
+}
+
+function createDashboardMetric(label, value, percent){
+  const item = document.createElement('div');
+  item.className = 'dashboard-total-metric';
+  const labelEl = document.createElement('span');
+  labelEl.textContent = label;
+  const valueEl = document.createElement('strong');
+  valueEl.textContent = value;
+  const percentEl = document.createElement('small');
+  percentEl.textContent = percent;
+  item.append(labelEl, valueEl, percentEl);
+  return item;
+}
+
+function renderDashboardTotalsWidget(){
+  const root = $('dashboardTotalsContent');
+  if (!root) return;
+  const totals = getDashboardTotals();
+  const activeTab = dashboardState.totalsTab === 'montasje' ? 'montasje' : 'busbar';
+  const tabButtons = Array.from(document.querySelectorAll('[data-dashboard-total-tab]'));
+  tabButtons.forEach(btn=>{
+    const active = btn.dataset.dashboardTotalTab === activeTab;
+    btn.classList.toggle('is-active', active);
+    btn.setAttribute('aria-selected', active ? 'true' : 'false');
+  });
+  const data = activeTab === 'montasje'
+    ? {
+      title: 'Montasje',
+      totalLabel: 'Total montasje',
+      costLabel: 'Montasjekost',
+      marginLabel: 'Påslag montasje',
+      values: totals.montasje
+    }
+    : {
+      title: 'Strømskinner',
+      totalLabel: 'Total strømskinne',
+      costLabel: 'Materiellkost',
+      marginLabel: 'Påslag strømskinne',
+      values: totals.busbar
+    };
+  root.innerHTML = '';
+  const hero = document.createElement('div');
+  hero.className = 'dashboard-total-hero';
+  const heroLabel = document.createElement('span');
+  heroLabel.textContent = 'Totalsum inkludert i tilbud';
+  const heroValue = document.createElement('strong');
+  heroValue.textContent = formatDashboardMoney(totals.allTotal);
+  const heroMeta = document.createElement('small');
+  heroMeta.textContent = `${totals.lineCount} linjer beregnet`;
+  hero.append(heroLabel, heroValue, heroMeta);
+
+  const metrics = document.createElement('div');
+  metrics.className = 'dashboard-total-metrics';
+  metrics.append(
+    createDashboardMetric(data.totalLabel, formatDashboardMoney(data.values.total), '100 %'),
+    createDashboardMetric(data.costLabel, formatDashboardMoney(data.values.cost), formatDashboardPercent(data.values.cost, data.values.total)),
+    createDashboardMetric(data.marginLabel, formatDashboardMoney(data.values.margin), formatDashboardPercent(data.values.margin, data.values.total))
+  );
+  root.append(hero, metrics);
+}
+
+function getDashboardProjectStatusCounts(){
+  const counts = new Map(PROJECT_STATUS_OPTIONS.map(option=>[option.id, 0]));
+  (Array.isArray(projectState.projects) ? projectState.projects : []).forEach(project=>{
+    const status = getProjectStatusConfig(project).id;
+    counts.set(status, (counts.get(status) || 0) + 1);
+  });
+  return counts;
+}
+
+function renderDashboardProjectStatusWidget(){
+  const root = $('dashboardProjectStatusSummary');
+  if (!root) return;
+  const counts = getDashboardProjectStatusCounts();
+  root.innerHTML = '';
+  const list = document.createElement('div');
+  list.className = 'dashboard-status-buttons';
+  PROJECT_STATUS_OPTIONS.forEach(option=>{
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = `dashboard-status-button is-${option.tone}`;
+    btn.dataset.dashboardProjectStatus = option.id;
+    btn.innerHTML = `<span>${option.label}</span><strong>${fmtIntNO.format(counts.get(option.id) || 0)}</strong>`;
+    list.appendChild(btn);
+  });
+  root.appendChild(list);
+}
+
+function renderDashboardFlowStatusWidget(){
+  const root = $('dashboardFlowStatusSummary');
+  if (!root) return;
+  loadProjectFlowState();
+  const counts = new Map();
+  (Array.isArray(projectState.projects) ? projectState.projects : []).forEach(project=>{
+    const flowStatus = getProjectFlowStatusForProject(project);
+    const key = `${flowStatus.label}|${flowStatus.tone}`;
+    const item = counts.get(key) || { label: flowStatus.label, tone: flowStatus.tone, count: 0 };
+    item.count += 1;
+    counts.set(key, item);
+  });
+  const order = ['Ubehandlet', ...PROJECT_FLOW_PHASES.map(phase=>phase.label)];
+  const items = Array.from(counts.values()).sort((a, b)=>{
+    const aIndex = order.indexOf(a.label);
+    const bIndex = order.indexOf(b.label);
+    return (aIndex < 0 ? 999 : aIndex) - (bIndex < 0 ? 999 : bIndex);
+  });
+  root.innerHTML = '';
+  const list = document.createElement('div');
+  list.className = 'dashboard-status-buttons';
+  if (!items.length){
+    const empty = document.createElement('div');
+    empty.className = 'dashboard-status-project-empty';
+    empty.textContent = 'Ingen prosjekter.';
+    root.appendChild(empty);
+    return;
+  }
+  items.forEach(item=>{
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = `dashboard-status-button is-${item.tone}`;
+    btn.dataset.dashboardFlowStatus = item.label;
+    btn.innerHTML = `<span>${item.label}</span><strong>${fmtIntNO.format(item.count)}</strong>`;
+    list.appendChild(btn);
+  });
+  root.appendChild(list);
+}
+
+function openProjectFlowFromDashboardStatus(statusLabel){
+  const label = String(statusLabel || '').trim();
+  if (!label) return;
+  projectFlowState.selectedProjectId = PROJECT_FLOW_ALL_PROJECTS;
+  projectFlowState.dashboardStatusFilter = label;
+  const select = $('projectFlowProjectSelect');
+  if (select) select.value = PROJECT_FLOW_ALL_PROJECTS;
+  setDashboardPage('project-flow');
+  renderProjectFlowView();
+  window.setTimeout(()=>{
+    $('projectFlowView')?.scrollIntoView?.({ block: 'start', inline: 'nearest', behavior: 'auto' });
+  }, 0);
+}
+
+function getProjectsForDashboardStatus(statusId){
+  const normalized = String(statusId || '').trim();
+  const projects = Array.isArray(projectState.projects) ? projectState.projects : [];
+  if (normalized === 'all') return projects;
+  return projects.filter(project=>getProjectStatusConfig(project).id === normalizeProjectStatus(normalized));
+}
+
+function renderDashboardProjectStatusList(statusId){
+  const list = $('dashboardProjectStatusList');
+  if (!list) return;
+  const projects = getProjectsForDashboardStatus(statusId);
+  list.innerHTML = '';
+  if (!projects.length){
+    const empty = document.createElement('div');
+    empty.className = 'dashboard-status-project-empty';
+    empty.textContent = 'Ingen prosjekter med denne statusen.';
+    list.appendChild(empty);
+    return;
+  }
+  projects
+    .slice()
+    .sort((a,b)=>compareProjectsForSort(a, b, 'date_newest'))
+    .forEach(project=>{
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'dashboard-status-project-item';
+      btn.dataset.dashboardOpenProject = project.id || '';
+      const title = project.projectNumber
+        ? `${project.projectNumber} - ${project.name || 'Uten navn'}`
+        : (project.name || 'Uten navn');
+      const status = getProjectStatusConfig(project);
+      const lineCount = Array.isArray(project.lines) ? project.lines.length : 0;
+      const titleEl = document.createElement('span');
+      titleEl.className = 'dashboard-status-project-title';
+      titleEl.textContent = title;
+      const metaEl = document.createElement('span');
+      metaEl.className = 'dashboard-status-project-meta';
+      metaEl.textContent = `${project.customer || 'Uten kunde'} | ${fmtIntNO.format(lineCount)} linjer`;
+      const statusEl = document.createElement('span');
+      statusEl.className = `project-status-badge is-${status.tone}`;
+      statusEl.textContent = status.label;
+      btn.append(titleEl, metaEl, statusEl);
+      list.appendChild(btn);
+    });
+}
+
+function openDashboardProjectStatusModal(statusId){
+  const modal = $('dashboardProjectStatusModal');
+  if (!modal) return;
+  const normalized = String(statusId || 'all').trim() || 'all';
+  modal.dataset.statusId = normalized;
+  const title = $('dashboardProjectStatusTitle');
+  const subtitle = $('dashboardProjectStatusSubtitle');
+  const projects = getProjectsForDashboardStatus(normalized);
+  const statusConfig = normalized === 'all' ? null : getProjectStatusConfig(normalized);
+  if (title) title.textContent = statusConfig ? `Prosjekter: ${statusConfig.label}` : 'Alle prosjekter';
+  if (subtitle) subtitle.textContent = `${fmtIntNO.format(projects.length)} prosjekter`;
+  renderDashboardProjectStatusList(normalized);
+  modal.style.display = 'flex';
+}
+
+function closeDashboardProjectStatusModal(){
+  const modal = $('dashboardProjectStatusModal');
+  if (!modal) return;
+  modal.style.display = 'none';
+  delete modal.dataset.statusId;
+}
+
+function openDashboardProjectFromStatusList(projectId){
+  const project = getProjectById(projectId);
+  if (!project) return;
+  closeDashboardProjectStatusModal();
+  projectState.showArchive = projectIsArchived(project);
+  if (projectState.projectSearchTerm){
+    setProjectSearchTerm('', { render: false });
+  }
+  setActiveProject(project);
+  projectState.expandedProjectId = project.id;
+  setDashboardPage('projects');
+  renderProjectDashboard();
+  window.setTimeout(()=>scrollProjectIntoView(project.id), 0);
+}
+
+function renderMainDashboard(){
+  renderDashboardTotalsWidget();
+  renderDashboardProjectStatusWidget();
+  renderDashboardFlowStatusWidget();
 }
 
 function formatProjectFlowStatusHours(milliseconds){
@@ -7657,22 +8164,14 @@ function setProjectFlowAllExpanded(expanded){
   } else {
     projectFlowState.collapsedPhaseIds = new Set(PROJECT_FLOW_PHASES.map(phase=>phase.id));
   }
+  updateProjectFlowExpandToggleButton();
   renderProjectFlowView();
 }
 
 function setProjectFlowZoomToFit(){
-  const root = $('projectFlowTimeline');
-  const scroller = root?.querySelector?.('.project-flow-scroller');
-  const grid = root?.querySelector?.('.project-flow-grid');
-  const dayCount = Number(grid?.style?.getPropertyValue('--project-flow-days') || 0);
-  if (!scroller || !dayCount){
-    projectFlowState.fitDayWidth = null;
-    renderProjectFlowView();
-    return;
-  }
-  const taskWidth = getProjectFlowTaskColumnWidth();
-  const available = Math.max(240, scroller.clientWidth - taskWidth - 24);
-  projectFlowState.fitDayWidth = Math.max(26, Math.min(96, Math.floor(available / dayCount)));
+  const threeWeekIndex = PROJECT_FLOW_VISIBLE_WEEK_LEVELS.findIndex(weeks=>weeks === 3);
+  projectFlowState.zoomIndex = threeWeekIndex >= 0 ? threeWeekIndex : PROJECT_FLOW_DEFAULT_ZOOM_INDEX;
+  projectFlowState.fitDayWidth = null;
   renderProjectFlowView();
 }
 
@@ -7718,7 +8217,11 @@ function openProjectFlowMilestoneForm(milestone = null, options = {}){
   if (endDateInput) endDateInput.value = formatProjectFlowInputDate(fallbackEnd);
   if (durationValueInput) durationValueInput.value = String(milestone?.durationValue || duration.value || 1);
   if (durationUnitSelect) durationUnitSelect.value = milestone?.durationUnit || duration.unit || 'days';
-  if (fileInput) fileInput.value = '';
+  if (fileInput){
+    fileInput.value = '';
+    fileInput.disabled = true;
+    fileInput.title = 'Filopplasting i prosjektflyt er ikke aktivert enda';
+  }
   if (deleteBtn) deleteBtn.hidden = !milestone?.id;
   form.hidden = false;
   openFormModal('projectFlowMilestoneForm', milestone?.id ? 'Endre oppgave' : 'Ny oppgave');
@@ -7796,6 +8299,150 @@ function shiftProjectFlowTaskByDays(task, deltaDays){
   };
 }
 
+function resetCalendarLoadedRange(){
+  calendarViewState.loadedStart = null;
+  calendarViewState.loadedEnd = null;
+}
+
+function formatProjectFlowCalendarDateTime(date){
+  const value = date instanceof Date ? date : new Date(date);
+  if (Number.isNaN(value.getTime())) return '';
+  const startOfDay = new Date(value.getFullYear(), value.getMonth(), value.getDate(), 0, 0, 0, 0);
+  return formatDateTimeLocalInput(startOfDay);
+}
+
+function getProjectFlowCalendarProjectLabel(project){
+  if (!project) return 'Uten prosjekt';
+  return project.projectNumber
+    ? `${project.projectNumber} - ${project.name || 'Uten navn'}`
+    : (project.name || 'Uten navn');
+}
+
+function getProjectFlowCalendarSubject(project, task){
+  return `${getProjectFlowCalendarProjectLabel(project)} - ${getProjectFlowPhaseLabel(task?.phaseId)}`;
+}
+
+function getProjectFlowCalendarBody(project, task){
+  return [
+    `Prosjekt: ${getProjectFlowCalendarProjectLabel(project)}`,
+    `Oppgave: ${getProjectFlowPhaseLabel(task?.phaseId)}`,
+    `Periode: ${formatProjectFlowDisplayDate(task?.startDate)} - ${formatProjectFlowDisplayDate(task?.endDate)}`,
+    task?.fileName ? `Fil: ${task.fileName}` : ''
+  ].filter(Boolean).join('\n');
+}
+
+function buildProjectFlowCalendarPayload(project, task){
+  const start = parseProjectFlowDate(task?.startDate);
+  const end = parseProjectFlowDate(task?.endDate);
+  if (!project?.id || !task?.id || !start || !end || end < start) return null;
+  const exclusiveEnd = addProjectFlowDays(end, 1);
+  return {
+    subject: getProjectFlowCalendarSubject(project, task),
+    start: {
+      dateTime: formatProjectFlowCalendarDateTime(start),
+      timeZone: 'Europe/Oslo'
+    },
+    end: {
+      dateTime: formatProjectFlowCalendarDateTime(exclusiveEnd),
+      timeZone: 'Europe/Oslo'
+    },
+    isAllDay: true,
+    showAs: 'busy',
+    categories: mergeOutlookProjectCategory([], true),
+    body: {
+      contentType: 'text',
+      content: getProjectFlowCalendarBody(project, task)
+    },
+    singleValueExtendedProperties: [
+      {
+        id: CALENDAR_PROJECT_EXTENDED_PROPERTY_ID,
+        value: project.id
+      },
+      {
+        id: CALENDAR_PROJECT_FLOW_TASK_EXTENDED_PROPERTY_ID,
+        value: task.id
+      }
+    ]
+  };
+}
+
+async function deleteProjectFlowCalendarEvent(calendarEventId){
+  const eventId = String(calendarEventId || '').trim();
+  if (!eventId || !authState.loggedIn) return false;
+  try{
+    await microsoftGraphRequest(`/me/events/${encodeURIComponent(eventId)}`, MICROSOFT_GRAPH_CALENDAR_SCOPES, {
+      method: 'DELETE'
+    });
+    resetCalendarLoadedRange();
+    if (dashboardState.activePage === 'calendar'){
+      void loadCalendarEvents({ silent: true });
+    }
+    return true;
+  }catch(err){
+    console.warn('Kunne ikke slette prosjektflytoppgave fra kalender', err);
+    setProjectFlowStatus('Oppgaven ble oppdatert, men kalenderavtalen kunne ikke slettes.', 'error');
+    return false;
+  }
+}
+
+async function syncProjectFlowMilestoneCalendar(projectId, milestoneId){
+  const project = getProjectById(projectId);
+  const task = getProjectFlowMilestones(projectId).find(item=>item.id === milestoneId);
+  if (!project?.id || !task?.id || !authState.loggedIn) return;
+  if (task.completed){
+    const deleted = await deleteProjectFlowCalendarEvent(task.calendarEventId);
+    if (deleted && task.calendarEventId){
+      const latest = getProjectFlowMilestones(projectId);
+      setProjectFlowMilestones(projectId, latest.map(item=>item.id === task.id ? { ...item, calendarEventId: '' } : item));
+      renderProjectFlowView({ preserveScroll: true });
+    }
+    return;
+  }
+  const payload = buildProjectFlowCalendarPayload(project, task);
+  if (!payload) return;
+  try{
+    await ensureOutlookProjectCategory();
+    let savedEvent = null;
+    if (task.calendarEventId){
+      try{
+        savedEvent = await microsoftGraphRequest(`/me/events/${encodeURIComponent(task.calendarEventId)}`, MICROSOFT_GRAPH_CALENDAR_SCOPES, {
+          method: 'PATCH',
+          body: payload
+        });
+      }catch(err){
+        console.warn('Kunne ikke oppdatere eksisterende prosjektflytavtale, oppretter ny', err);
+        savedEvent = await microsoftGraphRequest('/me/events', MICROSOFT_GRAPH_CALENDAR_SCOPES, {
+          method: 'POST',
+          body: payload
+        });
+      }
+    } else {
+      savedEvent = await microsoftGraphRequest('/me/events', MICROSOFT_GRAPH_CALENDAR_SCOPES, {
+        method: 'POST',
+        body: payload
+      });
+    }
+    const eventId = String(savedEvent?.id || task.calendarEventId || '').trim();
+    if (eventId && eventId !== task.calendarEventId){
+      const latest = getProjectFlowMilestones(projectId);
+      setProjectFlowMilestones(projectId, latest.map(item=>item.id === task.id ? { ...item, calendarEventId: eventId } : item));
+      renderProjectFlowView({ preserveScroll: true });
+    }
+    resetCalendarLoadedRange();
+    if (dashboardState.activePage === 'calendar'){
+      void loadCalendarEvents({ silent: true });
+    }
+    setProjectFlowStatus('Oppgave synket til kalender.', 'ok');
+  }catch(err){
+    console.warn('Kunne ikke synke prosjektflytoppgave til kalender', err);
+    setProjectFlowStatus(err?.message || 'Oppgaven ble lagret, men kunne ikke synkes til kalender.', 'error');
+  }
+}
+
+function syncProjectFlowMilestoneCalendarSoon(projectId, milestoneId){
+  window.setTimeout(()=>void syncProjectFlowMilestoneCalendar(projectId, milestoneId), 0);
+}
+
 function propagateProjectFlowDrivenTaskOffsets(projectId, taskId, moveDeltaDays = 0, durationDeltaDays = 0, visited = new Set()){
   const sourceKey = String(taskId || '');
   if (!projectId || !sourceKey || visited.has(sourceKey)) return;
@@ -7811,6 +8458,7 @@ function propagateProjectFlowDrivenTaskOffsets(projectId, taskId, moveDeltaDays 
     if (shiftedTask === drivenTask) return;
     const latestMilestones = getProjectFlowMilestones(projectId);
     setProjectFlowMilestones(projectId, latestMilestones.map(item=>item.id === drivenTask.id ? shiftedTask : item));
+    syncProjectFlowMilestoneCalendarSoon(projectId, drivenTask.id);
     propagateProjectFlowDrivenTaskOffsets(projectId, drivenTask.id, totalDelta, 0, visited);
   });
 }
@@ -7897,6 +8545,7 @@ function updateProjectFlowTaskDates(projectId, taskId, startDate, endDate){
   setProjectFlowMilestones(projectId, updated);
   const deltas = getProjectFlowDateChangeDeltas(previousTask, updatedTask.startDate, updatedTask.endDate);
   propagateProjectFlowDrivenTaskOffsets(projectId, taskId, deltas.moveDelta, deltas.durationDelta);
+  syncProjectFlowMilestoneCalendarSoon(projectId, taskId);
   return true;
 }
 
@@ -8112,7 +8761,7 @@ function finishProjectFlowLinkDrag(evt){
   projectFlowState.linkDrag = null;
   clearProjectFlowLinkTargetHighlights();
   if (connectProjectFlowTasks(drag.source, target)){
-    renderProjectFlowView();
+    renderProjectFlowView({ preserveScroll: true });
     setProjectFlowStatus('Oppgavekobling lagret.', 'ok');
   } else {
     renderProjectFlowDependencyLines();
@@ -8187,7 +8836,7 @@ function finishProjectFlowTaskDrag(evt){
     ? moveProjectFlowTaskByDays(drag.projectId, drag.taskId, drag.deltaDays)
     : resizeProjectFlowTaskByDays(drag.projectId, drag.taskId, drag.mode, drag.deltaDays);
   if (changed){
-    renderProjectFlowView();
+    renderProjectFlowView({ preserveScroll: true });
     setProjectFlowStatus('Oppgave oppdatert.', 'ok');
   }
 }
@@ -8207,8 +8856,7 @@ function handleProjectFlowMilestoneSave(evt){
   const title = getProjectFlowPhaseLabel(phaseId);
   const drivenByTaskId = String($('projectFlowDependencyRelationSelect')?.value || '').trim();
   const drivesTaskId = String($('projectFlowDependencyTaskSelect')?.value || '').trim();
-  const fileInput = $('projectFlowFileInput');
-  const fileName = fileInput?.files?.[0]?.name ? String(fileInput.files[0].name).trim() : '';
+  const fileName = '';
   const id = String($('projectFlowMilestoneId')?.value || '').trim() || createProjectFlowId();
   const parsedStart = parseProjectFlowDate(startDateInputValue);
   const parsedEnd = parsedStart ? addProjectFlowDuration(parsedStart, durationValue, durationUnit) : null;
@@ -8247,6 +8895,7 @@ function handleProjectFlowMilestoneSave(evt){
     drivesTaskId,
     dependencyRelation: drivenByTaskId ? 'drivenBy' : (drivesTaskId ? 'drives' : ''),
     dependencyTaskId: drivenByTaskId || drivesTaskId,
+    calendarEventId: existing?.calendarEventId || '',
     createdAt: existing?.createdAt || now,
     updatedAt: now,
     completed: Boolean(existing?.completed)
@@ -8258,6 +8907,7 @@ function handleProjectFlowMilestoneSave(evt){
     const originalTask = originalTasks.find(item=>item.id === id);
     if (originalTask){
       setProjectFlowMilestones(originalProjectId, originalTasks.filter(item=>item.id !== id));
+      if (!next.calendarEventId) next.calendarEventId = originalTask.calendarEventId || '';
       clearProjectFlowReciprocalDependency(id, 'drivenBy', getProjectFlowRelationTaskId(originalTask, 'drivenBy'));
       clearProjectFlowReciprocalDependency(id, 'drives', getProjectFlowRelationTaskId(originalTask, 'drives'));
     }
@@ -8283,15 +8933,17 @@ function handleProjectFlowMilestoneSave(evt){
     propagateProjectFlowDrivenTaskOffsets(project.id, id, deltas.moveDelta, deltas.durationDelta);
   }
   closeProjectFlowMilestoneForm();
-  renderProjectFlowView();
+  renderProjectFlowView({ preserveScroll: true });
   setProjectFlowStatus('Oppgave lagret.', 'ok');
+  syncProjectFlowMilestoneCalendarSoon(project.id, id);
 }
 
 function toggleProjectFlowMilestone(projectId, milestoneId, completed){
   const milestones = getProjectFlowMilestones(projectId);
   const updated = milestones.map(item=>item.id === milestoneId ? { ...item, completed: Boolean(completed), updatedAt: new Date().toISOString() } : item);
   setProjectFlowMilestones(projectId, updated);
-  renderProjectFlowView();
+  renderProjectFlowView({ preserveScroll: true });
+  syncProjectFlowMilestoneCalendarSoon(projectId, milestoneId);
 }
 
 function deleteProjectFlowMilestone(projectId, milestoneId){
@@ -8301,8 +8953,9 @@ function deleteProjectFlowMilestone(projectId, milestoneId){
   if (!window.confirm(`Slette oppgaven "${getProjectFlowPhaseLabel(milestone.phaseId)}"?`)) return;
   clearProjectFlowReciprocalDependency(milestoneId, 'drivenBy', getProjectFlowRelationTaskId(milestone, 'drivenBy'));
   clearProjectFlowReciprocalDependency(milestoneId, 'drives', getProjectFlowRelationTaskId(milestone, 'drives'));
+  void deleteProjectFlowCalendarEvent(milestone.calendarEventId);
   setProjectFlowMilestones(projectId, milestones.filter(item=>item.id !== milestoneId));
-  renderProjectFlowView();
+  renderProjectFlowView({ preserveScroll: true });
   setProjectFlowStatus('Oppgave slettet.', 'ok');
 }
 
@@ -8314,9 +8967,20 @@ function deleteProjectFlowMilestoneFromForm(){
   deleteProjectFlowMilestone(projectId, milestoneId);
 }
 
-function renderProjectFlowView(){
+function renderProjectFlowView(options = {}){
   const root = $('projectFlowTimeline');
   if (!root) return;
+  const previousScroller = root.querySelector?.('.project-flow-scroller');
+  const previousTopScrollbar = root.querySelector?.('.project-flow-top-scrollbar');
+  const preserveScroll = Boolean(options.preserveScroll);
+  const previousScroll = preserveScroll
+    ? {
+      left: previousScroller?.scrollLeft || 0,
+      top: previousScroller?.scrollTop || 0,
+      topLeft: previousTopScrollbar?.scrollLeft || 0,
+      windowY: typeof window !== 'undefined' ? window.scrollY : 0
+    }
+    : null;
   loadProjectFlowState();
   updateProjectFlowProjectSelect();
   populateProjectFlowPhaseSelect();
@@ -8326,6 +8990,7 @@ function renderProjectFlowView(){
   const visibleProjects = getProjectFlowVisibleProjects();
   if (addBtn) addBtn.disabled = !projectState.projects.length;
   if (refreshBtn) refreshBtn.disabled = false;
+  updateProjectFlowExpandToggleButton();
   if (!visibleProjects.length){
     const empty = document.createElement('div');
     empty.className = 'graph-empty';
@@ -8372,7 +9037,10 @@ function renderProjectFlowView(){
   const meta = document.createElement('p');
   const completedCount = sortedMilestones.filter(item=>item.completed).length;
   meta.className = 'muted-text';
-  meta.textContent = `${completedCount} av ${sortedMilestones.length} oppgaver fullført`;
+  const flowFilter = String(projectFlowState.dashboardStatusFilter || '').trim();
+  meta.textContent = flowFilter
+    ? `Filtrert på ${flowFilter}: ${visibleProjects.length} prosjekter`
+    : `${completedCount} av ${sortedMilestones.length} oppgaver fullført`;
   title.append(heading, meta);
 
   const scroller = document.createElement('div');
@@ -8410,6 +9078,8 @@ function renderProjectFlowView(){
     const dateKey = getProjectFlowDateKey(date);
     if (dateKey === todayKey) day.classList.add('is-today');
     if (isProjectFlowWeekStart(date, index)) day.classList.add('is-week-start');
+    const densityClass = getProjectFlowDateHeaderDensityClass();
+    if (densityClass) day.classList.add(densityClass);
     const dateLine = document.createElement('span');
     dateLine.className = 'project-flow-date-line';
     const month = document.createElement('span');
@@ -8432,7 +9102,9 @@ function renderProjectFlowView(){
       tasks: sortedMilestones,
       showHeader: false,
       includeProjectInTask: false,
-      projectRows: visibleProjects.filter(project=>getProjectFlowMilestones(project.id).length)
+      projectRows: flowFilter
+        ? visibleProjects
+        : visibleProjects.filter(project=>getProjectFlowMilestones(project.id).length)
     }];
 
   renderGroups.forEach(group=>{
@@ -8642,7 +9314,18 @@ function renderProjectFlowView(){
   scroller.appendChild(linkOverlay);
   syncProjectFlowTopScrollbar(scroller, topScrollbar);
   root.append(title, topScrollbar, scroller);
-  scrollProjectFlowToCurrentWeek(scroller, start, topScrollbar);
+  if (previousScroll){
+    requestAnimationFrame(()=>{
+      scroller.scrollLeft = previousScroll.left;
+      scroller.scrollTop = previousScroll.top;
+      topScrollbar.scrollLeft = previousScroll.topLeft || previousScroll.left;
+      if (typeof window !== 'undefined' && typeof window.scrollTo === 'function'){
+        window.scrollTo({ top: previousScroll.windowY, left: window.scrollX || 0, behavior: 'auto' });
+      }
+    });
+  } else {
+    scrollProjectFlowToCurrentWeek(scroller, start, topScrollbar);
+  }
   requestAnimationFrame(renderProjectFlowDependencyLines);
   if (!milestones.length){
     const empty = document.createElement('div');
@@ -8653,6 +9336,7 @@ function renderProjectFlowView(){
 }
 
 function renderProjectDashboard(){
+  renderMainDashboard();
   const listEl = $('projectList');
   if (!listEl) return;
   loadProjectFlowState();
@@ -10122,6 +10806,7 @@ const projectFlowProjectSelect = $('projectFlowProjectSelect');
 if (projectFlowProjectSelect){
   projectFlowProjectSelect.addEventListener('change', ()=>{
     projectFlowState.selectedProjectId = projectFlowProjectSelect.value || '';
+    projectFlowState.dashboardStatusFilter = '';
     closeProjectFlowMilestoneForm();
     renderProjectFlowView();
   });
@@ -10144,22 +10829,60 @@ if (addProjectFlowMilestoneBtn){
 const refreshProjectFlowBtn = $('refreshProjectFlowBtn');
 if (refreshProjectFlowBtn){
   refreshProjectFlowBtn.addEventListener('click', ()=>{
+    projectFlowState.dashboardStatusFilter = '';
     renderProjectFlowView();
     setProjectFlowStatus('Oppdatert.', 'ok');
+  });
+}
+
+document.querySelectorAll('[data-dashboard-total-tab]').forEach(btn=>{
+  btn.addEventListener('click', ()=>{
+    dashboardState.totalsTab = btn.dataset.dashboardTotalTab === 'montasje' ? 'montasje' : 'busbar';
+    renderDashboardTotalsWidget();
+  });
+});
+
+const dashboardProjectStatusSummary = $('dashboardProjectStatusSummary');
+if (dashboardProjectStatusSummary){
+  dashboardProjectStatusSummary.addEventListener('click', evt=>{
+    const btn = evt.target?.closest?.('[data-dashboard-project-status]');
+    if (!btn) return;
+    openDashboardProjectStatusModal(btn.dataset.dashboardProjectStatus || 'all');
+  });
+}
+
+const dashboardProjectStatusModal = $('dashboardProjectStatusModal');
+if (dashboardProjectStatusModal){
+  dashboardProjectStatusModal.addEventListener('click', evt=>{
+    if (evt.target === dashboardProjectStatusModal){
+      closeDashboardProjectStatusModal();
+      return;
+    }
+    const projectBtn = evt.target?.closest?.('[data-dashboard-open-project]');
+    if (projectBtn){
+      openDashboardProjectFromStatusList(projectBtn.dataset.dashboardOpenProject);
+    }
+  });
+}
+
+const dashboardProjectStatusClose = $('dashboardProjectStatusClose');
+if (dashboardProjectStatusClose){
+  dashboardProjectStatusClose.addEventListener('click', closeDashboardProjectStatusModal);
+}
+
+const dashboardFlowStatusSummary = $('dashboardFlowStatusSummary');
+if (dashboardFlowStatusSummary){
+  dashboardFlowStatusSummary.addEventListener('click', evt=>{
+    const btn = evt.target?.closest?.('[data-dashboard-flow-status]');
+    if (!btn) return;
+    openProjectFlowFromDashboardStatus(btn.dataset.dashboardFlowStatus || '');
   });
 }
 
 const projectFlowExpandAllBtn = $('projectFlowExpandAllBtn');
 if (projectFlowExpandAllBtn){
   projectFlowExpandAllBtn.addEventListener('click', ()=>{
-    setProjectFlowAllExpanded(true);
-  });
-}
-
-const projectFlowCollapseAllBtn = $('projectFlowCollapseAllBtn');
-if (projectFlowCollapseAllBtn){
-  projectFlowCollapseAllBtn.addEventListener('click', ()=>{
-    setProjectFlowAllExpanded(false);
+    setProjectFlowAllExpanded(projectFlowState.collapsedPhaseIds.size > 0);
   });
 }
 
@@ -10314,7 +11037,7 @@ if (projectFlowTimelineEl){
       } else {
         projectFlowState.collapsedPhaseIds.add(phaseId);
       }
-      renderProjectFlowView();
+      renderProjectFlowView({ preserveScroll: true });
       return;
     }
     const deleteTarget = evt.target instanceof Element ? evt.target.closest('[data-project-flow-delete]') : null;
