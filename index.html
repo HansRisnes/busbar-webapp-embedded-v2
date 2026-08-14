@@ -107,6 +107,7 @@
           <button type="button" class="sidebar-nav-item" data-dashboard-nav="customers"><svg class="sidebar-nav-icon" aria-hidden="true"><use href="#icon-customers"></use></svg><span class="sidebar-nav-label">Kontaktpersoner</span></button>
           <button type="button" class="sidebar-nav-item" data-dashboard-nav="company-card"><svg class="sidebar-nav-icon" aria-hidden="true"><use href="#icon-company-card"></use></svg><span class="sidebar-nav-label">Kundekort</span></button>
           <div class="sidebar-separator" aria-hidden="true"></div>
+          <button type="button" class="sidebar-nav-item" data-dashboard-nav="busbar-folders"><svg class="sidebar-nav-icon" aria-hidden="true"><use href="#icon-project-folders"></use></svg><span class="sidebar-nav-label">Busbar</span></button>
           <button type="button" class="sidebar-nav-item" data-dashboard-nav="project-folders"><svg class="sidebar-nav-icon" aria-hidden="true"><use href="#icon-project-folders"></use></svg><span class="sidebar-nav-label">Prosjektmapper</span></button>
           <button type="button" class="sidebar-nav-item" data-dashboard-nav="supplier-folders"><svg class="sidebar-nav-icon" aria-hidden="true"><use href="#icon-supplier-folders"></use></svg><span class="sidebar-nav-label">Leverand&oslash;rmapper</span></button>
         </div>
@@ -564,6 +565,38 @@
         </form>
         <datalist id="globalCompanyOptions"></datalist>
         <div id="companiesList" class="global-data-list" aria-live="polite"></div>
+      </section>
+
+      <section id="busbarFoldersView" class="dashboard-page placeholder-page" data-dashboard-page="busbar-folders" hidden>
+        <div class="placeholder-header">
+          <h2>Busbar</h2>
+          <p class="muted-text">Viser innhold fra SharePoint-mappen Drift/BUSBAR.</p>
+        </div>
+        <div class="graph-toolbar section-toolbar">
+          <div class="toolbar-left">
+            <button id="newBusbarFolderBtn" type="button" class="btn alt">Ny mappe</button>
+            <label class="btn alt graph-file-upload-label" for="uploadBusbarFolderFile">Legg til fil</label>
+            <input id="uploadBusbarFolderFile" type="file" hidden>
+            <div class="dashboard-sort-controls dashboard-search-controls">
+              <label for="busbarFolderSearchInput">S&oslash;k mappe</label>
+              <input id="busbarFolderSearchInput" type="search" autocomplete="off" placeholder="Mappe eller filnavn">
+            </div>
+            <div class="dashboard-sort-controls">
+              <label for="busbarFolderSortSelect">Sorter mapper</label>
+              <select id="busbarFolderSortSelect">
+                <option value="alpha_asc">Alfabetisk (A-&Aring;)</option>
+                <option value="alpha_desc">Alfabetisk (&Aring;-A)</option>
+                <option value="date_newest">Nyest f&oslash;rst</option>
+                <option value="date_oldest">Eldst f&oslash;rst</option>
+              </select>
+            </div>
+          </div>
+          <div class="toolbar-right">
+            <span id="busbarFoldersStatus" class="graph-status muted-text"></span>
+            <button id="refreshBusbarFoldersBtn" type="button" class="btn alt">Oppdater</button>
+          </div>
+        </div>
+        <div id="busbarFoldersList" class="sharepoint-list" aria-live="polite"></div>
       </section>
 
       <section id="projectFoldersView" class="dashboard-page placeholder-page" data-dashboard-page="project-folders" hidden>

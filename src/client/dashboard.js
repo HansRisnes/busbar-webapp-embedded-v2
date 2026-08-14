@@ -169,24 +169,46 @@ export function getDashboardTotals(projects, resolvers = {}){
   const resolveLineDisplayTotal = typeof resolvers.resolveLineDisplayTotal === 'function'
     ? resolvers.resolveLineDisplayTotal
     : (line=>line?.totals?.totalInclMontasje);
+  const getProjectStatusConfig = typeof resolvers.getProjectStatusConfig === 'function'
+    ? resolvers.getProjectStatusConfig
+    : (project=>({ id: project?.projectStatus || '' }));
+  const finishedLines = (Array.isArray(projects) ? projects : [])
+    .filter(project=>getProjectStatusConfig(project).id === 'finished')
+    .flatMap(project=>Array.isArray(project.lines) ? project.lines : []);
   const busbarTotal = sumDashboardLineValue(lines, line=>line?.totals?.totalExMontasje);
   const materialCost = sumDashboardLineValue(lines, line=>resolveLineSkinMaterialCost(line));
   const montasjeTotal = sumDashboardLineValue(lines, line=>line?.totals?.totalInclMontasje);
   const montasjeCost = sumDashboardLineValue(lines, line=>line?.totals?.montasje?.cost);
   const lineTotal = sumDashboardLineValue(lines, line=>resolveLineDisplayTotal(line));
+  const finishedBusbarTotal = sumDashboardLineValue(finishedLines, line=>line?.totals?.totalExMontasje);
+  const finishedMaterialCost = sumDashboardLineValue(finishedLines, line=>resolveLineSkinMaterialCost(line));
+  const finishedMontasjeTotal = sumDashboardLineValue(finishedLines, line=>line?.totals?.totalInclMontasje);
+  const finishedMontasjeCost = sumDashboardLineValue(finishedLines, line=>line?.totals?.montasje?.cost);
+  const finishedLineTotal = sumDashboardLineValue(finishedLines, line=>resolveLineDisplayTotal(line));
+  const finishedAllProfit = round2(
+    Math.max(0, finishedBusbarTotal - finishedMaterialCost)
+      + Math.max(0, finishedMontasjeTotal - finishedMontasjeCost)
+  );
   return {
+    projectCount: (Array.isArray(projects) ? projects : []).length,
     lineCount: lines.length,
     busbar: {
       total: busbarTotal,
       cost: materialCost,
-      margin: Math.max(0, round2(busbarTotal - materialCost))
+      margin: Math.max(0, round2(busbarTotal - materialCost)),
+      realProfit: Math.max(0, round2(finishedBusbarTotal - finishedMaterialCost)),
+      realProfitTotal: finishedBusbarTotal
     },
     montasje: {
       total: montasjeTotal,
       cost: montasjeCost,
-      margin: Math.max(0, round2(montasjeTotal - montasjeCost))
+      margin: Math.max(0, round2(montasjeTotal - montasjeCost)),
+      realProfit: Math.max(0, round2(finishedMontasjeTotal - finishedMontasjeCost)),
+      realProfitTotal: finishedMontasjeTotal
     },
-    allTotal: lineTotal
+    allTotal: lineTotal,
+    finishedAllProfit,
+    finishedLineTotal
   };
 }
 
@@ -202,16 +224,20 @@ function formatDashboardPercent(value, total){
   return `${fmtNO.format(round2((amount / base) * 100))} %`;
 }
 
-function createDashboardMetric(label, value, percent){
+function createDashboardMetric(label, value, percent, options = {}){
   const item = document.createElement('div');
   item.className = 'dashboard-total-metric';
   const labelEl = document.createElement('span');
   labelEl.textContent = label;
   const valueEl = document.createElement('strong');
   valueEl.textContent = value;
-  const percentEl = document.createElement('small');
-  percentEl.textContent = percent;
-  item.append(labelEl, valueEl, percentEl);
+  item.append(labelEl, valueEl);
+  if (percent || options.reservePercentSpace){
+    const percentEl = document.createElement('small');
+    percentEl.textContent = percent || '\u00a0';
+    if (!percent) percentEl.setAttribute('aria-hidden', 'true');
+    item.appendChild(percentEl);
+  }
   return item;
 }
 
@@ -247,32 +273,50 @@ export function renderDashboardTotalsWidget(state, projects, resolvers = {}){
   const heroValue = document.createElement('strong');
   heroValue.textContent = formatDashboardMoney(totals.allTotal);
   const heroMeta = document.createElement('small');
-  heroMeta.textContent = `${totals.lineCount} linjer beregnet`;
+  heroMeta.textContent = `${fmtIntNO.format(totals.projectCount)} prosjekter | ${totals.lineCount} linjer beregnet`;
   hero.append(heroLabel, heroValue, heroMeta);
+
+  const profitHero = document.createElement('div');
+  profitHero.className = 'dashboard-total-hero';
+  const profitHeroLabel = document.createElement('span');
+  profitHeroLabel.textContent = 'Reell fortjeneste inkludert i tilbud';
+  const profitHeroValue = document.createElement('strong');
+  profitHeroValue.textContent = formatDashboardMoney(totals.finishedAllProfit);
+  const profitHeroMeta = document.createElement('small');
+  profitHeroMeta.textContent = formatDashboardPercent(totals.finishedAllProfit, totals.allTotal);
+  profitHero.append(profitHeroLabel, profitHeroValue, profitHeroMeta);
 
   const metrics = document.createElement('div');
   metrics.className = 'dashboard-total-metrics';
   metrics.append(
-    createDashboardMetric(data.totalLabel, formatDashboardMoney(data.values.total), '100 %'),
+    createDashboardMetric(data.totalLabel, formatDashboardMoney(data.values.total), '', { reservePercentSpace: true }),
     createDashboardMetric(data.costLabel, formatDashboardMoney(data.values.cost), formatDashboardPercent(data.values.cost, data.values.total)),
-    createDashboardMetric(data.marginLabel, formatDashboardMoney(data.values.margin), formatDashboardPercent(data.values.margin, data.values.total))
+    createDashboardMetric(data.marginLabel, formatDashboardMoney(data.values.margin), formatDashboardPercent(data.values.margin, data.values.total)),
+    createDashboardMetric('Reell fortjeneste', formatDashboardMoney(data.values.realProfit), formatDashboardPercent(data.values.realProfit, data.values.realProfitTotal))
   );
-  root.append(hero, metrics);
+  const heroStack = document.createElement('div');
+  heroStack.className = 'dashboard-total-hero-stack';
+  heroStack.append(hero, profitHero);
+  root.append(heroStack, metrics);
 }
 
 function getDashboardProjectStatusCounts(projects, getProjectStatusConfig){
   const counts = new Map(PROJECT_STATUS_OPTIONS.map(option=>[option.id, 0]));
+  const busbarTotals = new Map(PROJECT_STATUS_OPTIONS.map(option=>[option.id, 0]));
   (Array.isArray(projects) ? projects : []).forEach(project=>{
     const status = getProjectStatusConfig(project).id;
     counts.set(status, (counts.get(status) || 0) + 1);
+    const lines = Array.isArray(project?.lines) ? project.lines : [];
+    const total = sumDashboardLineValue(lines, line=>line?.totals?.totalExMontasje);
+    busbarTotals.set(status, round2((busbarTotals.get(status) || 0) + total));
   });
-  return counts;
+  return { counts, busbarTotals };
 }
 
 export function renderDashboardProjectStatusWidget(projects, getProjectStatusConfig){
   const root = $('dashboardProjectStatusSummary');
   if (!root || typeof getProjectStatusConfig !== 'function') return;
-  const counts = getDashboardProjectStatusCounts(projects, getProjectStatusConfig);
+  const { counts, busbarTotals } = getDashboardProjectStatusCounts(projects, getProjectStatusConfig);
   root.innerHTML = '';
   const list = document.createElement('div');
   list.className = 'dashboard-status-buttons';
@@ -281,7 +325,13 @@ export function renderDashboardProjectStatusWidget(projects, getProjectStatusCon
     btn.type = 'button';
     btn.className = `dashboard-status-button is-${option.tone}`;
     btn.dataset.dashboardProjectStatus = option.id;
-    btn.innerHTML = `<span>${option.label}</span><strong>${fmtIntNO.format(counts.get(option.id) || 0)}</strong>`;
+    btn.innerHTML = `
+      <span>${option.label}</span>
+      <div class="dashboard-status-value-row">
+        <strong>${fmtIntNO.format(counts.get(option.id) || 0)}</strong>
+        <small>${formatDashboardMoney(busbarTotals.get(option.id) || 0)}</small>
+      </div>
+    `;
     list.appendChild(btn);
   });
   root.appendChild(list);

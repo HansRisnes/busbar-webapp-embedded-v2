@@ -49,6 +49,15 @@ export const OUTLOOK_PROJECT_CATEGORY_COLOR = 'preset3';
 export const PROJECT_MAILBOX_ADDRESS = 'prosjekt@busbar.no';
 
 export const SHAREPOINT_FOLDER_CONFIG = Object.freeze({
+  'busbar-folders': {
+    title: 'Busbar',
+    statusId: 'busbarFoldersStatus',
+    listId: 'busbarFoldersList',
+    refreshBtnId: 'refreshBusbarFoldersBtn',
+    siteHost: 'mcselektrotavler.sharepoint.com',
+    sitePath: '/sites/BCDokumentarkiv',
+    folderPath: 'Drift/BUSBAR'
+  },
   'project-folders': {
     title: 'Prosjektmapper',
     statusId: 'projectFoldersStatus',

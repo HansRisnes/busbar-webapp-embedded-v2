@@ -352,7 +352,8 @@ export function createProjectRow(project, options = {}){
   createFolderBtn.className = 'btn alt';
   createFolderBtn.dataset.projectCreateFolder = project.id;
   createFolderBtn.textContent = 'Opprett prosjektmappe';
-  createFolderBtn.disabled = disableProjectActions || !isLoggedIn;
+  createFolderBtn.disabled = disableProjectActions || !isLoggedIn || hasProjectFolder;
+  if (hasProjectFolder) createFolderBtn.title = 'Prosjektmappe er allerede opprettet.';
 
   const copyBtn = document.createElement('button');
   copyBtn.type = 'button';

@@ -352,7 +352,7 @@ function handleDashboardPageActivated(page, options = {}){
     }
   } else if (page === 'customers' || page === 'company-card'){
     loadGlobalCustomerDatabase({ silent: !forceRefresh });
-  } else if (page === 'project-folders' || page === 'supplier-folders'){
+  } else if (page === 'busbar-folders' || page === 'project-folders' || page === 'supplier-folders'){
     loadSharePointFolder(page, { silent: !forceRefresh });
   }
 }
@@ -3459,6 +3459,35 @@ if (emailComposeForm){
 const cancelEmailComposeBtn = $('cancelEmailComposeBtn');
 if (cancelEmailComposeBtn){
   cancelEmailComposeBtn.addEventListener('click', closeEmailComposeForm);
+}
+const refreshBusbarFoldersBtn = $('refreshBusbarFoldersBtn');
+if (refreshBusbarFoldersBtn){
+  refreshBusbarFoldersBtn.addEventListener('click', ()=>loadSharePointFolder('busbar-folders'));
+}
+const busbarFolderSearchInput = $('busbarFolderSearchInput');
+if (busbarFolderSearchInput){
+  busbarFolderSearchInput.addEventListener('input', ()=>{
+    setSharePointSearchTerm('busbar-folders', busbarFolderSearchInput.value);
+  });
+}
+const busbarFolderSortSelect = $('busbarFolderSortSelect');
+if (busbarFolderSortSelect){
+  busbarFolderSortSelect.addEventListener('change', ()=>{
+    setSharePointSortMode('busbar-folders', busbarFolderSortSelect.value);
+  });
+}
+const newBusbarFolderBtn = $('newBusbarFolderBtn');
+if (newBusbarFolderBtn){
+  newBusbarFolderBtn.addEventListener('click', ()=>void createSharePointFolder('busbar-folders'));
+}
+const uploadBusbarFolderFile = $('uploadBusbarFolderFile');
+if (uploadBusbarFolderFile){
+  uploadBusbarFolderFile.addEventListener('change', evt=>{
+    const file = evt.target?.files?.[0] || null;
+    void uploadSharePointFile('busbar-folders', file).finally(()=>{
+      uploadBusbarFolderFile.value = '';
+    });
+  });
 }
 const refreshProjectFoldersBtn = $('refreshProjectFoldersBtn');
 if (refreshProjectFoldersBtn){
@@ -6752,7 +6781,8 @@ function getProjectFlowTaskLabel(item, includeProject = false){
 function renderDashboardTotalsWidget(){
   renderDashboardTotalsWidgetModule(dashboardState, projectState.projects, {
     resolveLineSkinMaterialCost,
-    resolveLineDisplayTotal
+    resolveLineDisplayTotal,
+    getProjectStatusConfig
   });
 }
 
