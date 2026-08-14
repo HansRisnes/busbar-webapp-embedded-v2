@@ -1,108 +1,188 @@
 ﻿// v2 + v2.1, XCP-S/XCM, distribusjon/feeder, avtappingsbokser, ekspansjon-modal >30 m
 
-const RAW_CSV_PATHS = [
-  'data/busbar-webapp-embedded-v2.csv',
-  'data/busbar-webapp-embedded-v2.1.csv',
-  'data/busbar-webapp-embedded-v2.2.csv',
-  'data/XAP_busbar_prisliste_ekstrakt_5W_clean.csv'
-];
-const XAP_SERIES = 'XAP-B';
-const EPOXY_IP68_SERIES = 'RCP-IP68';
-const COMPARISON_ELIGIBLE_SERIES = Object.freeze(['XCM','XCP-S']);
-const ENABLE_XAP_COMPARISON = false; // Pauset inntil videre
-const LOCKED_LEDERE_BY_SERIES = Object.freeze({
-  XCM: '3F+N+PE',
-  [XAP_SERIES]: '3F+N+PE',
-  [EPOXY_IP68_SERIES]: '3F+N'
-});
-const CRT_FEED_ALLOWED_SERIES = Object.freeze(['XCP-S', XAP_SERIES]);
-const seriesLockedLedereValue = series => LOCKED_LEDERE_BY_SERIES[series] || '';
-const seriesLocksLedere = series => Boolean(seriesLockedLedereValue(series));
-const seriesSupportsCrtFeed = series => CRT_FEED_ALLOWED_SERIES.includes(series);
-const shouldCompareXap = series => ENABLE_XAP_COMPARISON && COMPARISON_ELIGIBLE_SERIES.includes(series);
-const USD_TO_NOK_RATE = 10.95; // Dagens USD→NOK-kurs (2025-10-27)
+import {
+  ADMIN_NAV_ALLOWED_EMAILS,
+  AUTH_SESSION_KEY,
+  CALENDAR_PROJECT_EXTENDED_PROPERTY_ID,
+  CALENDAR_PROJECT_FLOW_TASK_EXTENDED_PROPERTY_ID,
+  DEFAULT_MARGIN_RATE,
+  DEFAULT_MATERIAL_MARGIN_RATE,
+  EMAIL_REGEX,
+  EPOXY_IP68_SERIES,
+  LINE_SORT_OPTIONS,
+  LINE_SORT_STORAGE_KEY,
+  MARKET_REFRESH_INTERVAL_MS,
+  MARKET_STATUS_DEFAULT,
+  MARKET_STATUS_MANUAL,
+  MAX_AUTO_MONTERING_MARGIN_RATE,
+  MAX_MARGIN_RATE,
+  MICROSOFT_AUTH_DEFAULT_SCOPES,
+  MICROSOFT_GRAPH_CALENDAR_SCOPES,
+  MICROSOFT_GRAPH_MAIL_SCOPES,
+  MICROSOFT_GRAPH_OUTLOOK_CATEGORY_SCOPES,
+  MICROSOFT_GRAPH_SHAREPOINT_SCOPES,
+  OFFER_SORT_STORAGE_KEY,
+  OUTLOOK_PROJECT_CATEGORY_COLOR,
+  OUTLOOK_PROJECT_CATEGORY_NAME,
+  PROJECT_FLOW_ALL_PROJECTS,
+  PROJECT_FLOW_DEFAULT_ZOOM_INDEX,
+  PROJECT_FLOW_PHASES,
+  PROJECT_FLOW_STORAGE_KEY,
+  PROJECT_FLOW_VISIBLE_WEEK_LEVELS,
+  PROJECT_FOLDER_TEMPLATE_NAME,
+  PROJECT_MAILBOX_ADDRESS,
+  PROJECT_SORT_OPTIONS,
+  PROJECT_SORT_STORAGE_KEY,
+  PROJECT_SYNC_DEBOUNCE_MS,
+  PROJECTS_STORAGE_KEY_PREFIX,
+  RAW_CSV_PATHS,
+  SHAREPOINT_FOLDER_CONFIG,
+  USD_TO_NOK_RATE,
+  XAP_SERIES,
+  seriesLockedLedereValue,
+  seriesLocksLedere,
+  seriesSupportsCrtFeed,
+  shouldCompareXap
+} from './src/client/config.js';
+import {
+  fmtFxNO,
+  fmtIntNO,
+  fmtMarketPercentNO,
+  fmtNO,
+  fmtPercentNO,
+  fmtTimestampNO,
+  round2
+} from './src/client/format.js';
+import {
+  $,
+  closeFormModal,
+  openFormModal
+} from './src/client/dom.js';
+import {
+  hasLocalItem,
+  listLocalKeys,
+  readLocalJson,
+  readSessionJson,
+  removeLocalItem,
+  removeSessionItem,
+  writeLocalJson,
+  writeSessionJson
+} from './src/client/storage.js';
+import {
+  appendApiBaseHint,
+  buildApiUrl,
+  isGithubPagesWithoutApiBase
+} from './src/client/api.js';
+import {
+  projectMailboxGraphPath,
+  requestMicrosoftGraph
+} from './src/client/graph.js';
+import {
+  addDays,
+  addMonths,
+  addProjectFlowDays,
+  addProjectFlowDuration,
+  combineLocalDateAndTimeValue,
+  dateFromCalendarInputValue,
+  endOfMonth,
+  formatDateInputValue,
+  formatDateTimeLocalInput,
+  formatGraphDateTime,
+  formatIsoDateInputValue,
+  formatProjectFlowDate,
+  formatProjectFlowDisplayDate,
+  formatProjectFlowInputDate,
+  formatTimeInputValue,
+  getCalendarDayDiff,
+  getIsoWeekNumber,
+  getProjectFlowDayDiff,
+  getProjectFlowWeekKey,
+  getProjectFlowWeekNumber,
+  parseCalendarDateInputValue,
+  parseGraphDate,
+  parseProjectFlowDate,
+  sameCalendarDay,
+  startOfDay,
+  startOfMonth,
+  startOfWeekMonday
+} from './src/client/date.js';
+import {
+  goToCalculator,
+  goToDashboard,
+  hasCalculatorUI,
+  hasDashboardUI,
+  initDashboardShell as initDashboardShellModule,
+  closeDashboardProjectStatusModal,
+  openDashboardFlowStatusModal as openDashboardFlowStatusModalModule,
+  openDashboardProjectStatusModal as openDashboardProjectStatusModalModule,
+  renderDashboardEmailProjectSuggestionsWidget as renderDashboardEmailProjectSuggestionsWidgetModule,
+  renderDashboardFlowStatusWidget as renderDashboardFlowStatusWidgetModule,
+  renderDashboardProjectStatusWidget as renderDashboardProjectStatusWidgetModule,
+  renderDashboardRecommendedActionsWidget as renderDashboardRecommendedActionsWidgetModule,
+  renderDashboardTotalsWidget as renderDashboardTotalsWidgetModule,
+  setDashboardPage as setDashboardPageModule,
+  updateMarketTickerVisibility as updateMarketTickerVisibilityModule
+} from './src/client/dashboard.js';
+import {
+  compareProjectsForSort as compareProjectsForSortModule,
+  getProjectStatusConfig,
+  loadSortMode,
+  normalizeProjectSearchText,
+  normalizeProjectStatus,
+  projectMatchesSearch as projectMatchesSearchModule,
+  saveSortMode,
+  projectIsArchived,
+  renderProjectsPage,
+  updateProjectArchiveUi as updateProjectArchiveUiModule
+} from './src/client/projects.js';
+import {
+  normalizeOfferSearchText,
+  renderOffersPage,
+  updateOfferControlValues as updateOfferControlValuesModule
+} from './src/client/offers.js';
+import {
+  normalizeListSearchText,
+  renderCompanyCardsList as renderCompanyCardsListModule,
+  renderContactPersonsList as renderContactPersonsListModule
+} from './src/client/global-lists.js';
+import {
+  renderSharePointFolderItems as renderSharePointFolderItemsModule
+} from './src/client/sharepoint.js';
+import {
+  getEmailPreviewText as getEmailPreviewTextModule,
+  getSelectedEmailMessage as getSelectedEmailMessageModule,
+  renderEmailMessages as renderEmailMessagesModule,
+  selectEmailMessage as selectEmailMessageModule,
+  updateEmailMessageActions as updateEmailMessageActionsModule
+} from './src/client/email.js';
+import {
+  renderCalendarEvents as renderCalendarEventsModule,
+  renderCalendarGrid as renderCalendarGridModule,
+  renderCalendarView as renderCalendarViewModule,
+  updateCalendarViewControls as updateCalendarViewControlsModule
+} from './src/client/calendar.js';
+import {
+  getProjectFlowStatusForProject as getProjectFlowStatusForProjectModule,
+  getProjectFlowTasksByPhase as getProjectFlowTasksByPhaseModule
+} from './src/client/project-flow.js';
+
 let usdToNokRate = USD_TO_NOK_RATE;
 const marketDataState = { snapshot: null };
-const MARKET_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
-const MARKET_STATUS_DEFAULT = 'Oppdateres daglig';
-const MARKET_STATUS_MANUAL = 'Oppdateres manuelt';
 const marketTickerState = { timerId: null };
-const DEFAULT_MARGIN_RATE = 0.20;
-const DEFAULT_MATERIAL_MARGIN_RATE = 0.25;
-const MAX_MARGIN_RATE = 0.95;
-const MAX_AUTO_MONTERING_MARGIN_RATE = 0.99;
 let lastCalc = null; // delsummer for live frakt-oppdatering
 let lastCalcInput = null;
-const AUTH_SESSION_KEY = 'busbar.auth.session.v1';
 let authState = { loggedIn: false, username: '', token: '', profile: null, isAdmin: false };
-const ADMIN_NAV_ALLOWED_EMAILS = Object.freeze(['hans.jakob.risnes@busbar.no']);
 const LEGACY_PROJECTS_STORAGE_KEY = 'busbar.projects.v1';
-const PROJECTS_STORAGE_KEY_PREFIX = 'busbar.projects.user.v2';
-const PROJECT_SYNC_DEBOUNCE_MS = 800;
-const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const MICROSOFT_AUTH_DEFAULT_SCOPES = Object.freeze(['openid', 'profile', 'email']);
-const MICROSOFT_GRAPH_CALENDAR_SCOPES = Object.freeze(['Calendars.ReadWrite']);
-const MICROSOFT_GRAPH_OUTLOOK_CATEGORY_SCOPES = Object.freeze(['MailboxSettings.ReadWrite']);
-const MICROSOFT_GRAPH_MAIL_SCOPES = Object.freeze(['Mail.ReadWrite', 'Mail.Send', 'Mail.ReadWrite.Shared', 'Mail.Send.Shared']);
-const MICROSOFT_GRAPH_SHAREPOINT_SCOPES = Object.freeze(['Files.ReadWrite.All', 'Sites.Read.All']);
-const MICROSOFT_GRAPH_BASE_URL = 'https://graph.microsoft.com/v1.0';
-const CALENDAR_PROJECT_EXTENDED_PROPERTY_ID = 'String {4f28b47f-5e6b-4f87-9fcb-4c1a9c0c9d9f} Name BusbarProjectId';
-const CALENDAR_PROJECT_FLOW_TASK_EXTENDED_PROPERTY_ID = 'String {4f28b47f-5e6b-4f87-9fcb-4c1a9c0c9d9f} Name BusbarProjectFlowTaskId';
-const OUTLOOK_PROJECT_CATEGORY_NAME = 'Busbar Prosjekt';
-const OUTLOOK_PROJECT_CATEGORY_COLOR = 'preset3';
-const PROJECT_MAILBOX_ADDRESS = 'prosjekt@busbar.no';
-const SHAREPOINT_FOLDER_CONFIG = Object.freeze({
-  'project-folders': {
-    title: 'Prosjektmapper',
-    statusId: 'projectFoldersStatus',
-    listId: 'projectFoldersList',
-    refreshBtnId: 'refreshProjectFoldersBtn',
-    siteHost: 'mcselektrotavler.sharepoint.com',
-    sitePath: '/sites/BCDokumentarkiv',
-    folderPath: 'Drift/BUSBAR/Prosjekter/2026'
-  },
-  'supplier-folders': {
-    title: 'Leverandørmapper',
-    statusId: 'supplierFoldersStatus',
-    listId: 'supplierFoldersList',
-    refreshBtnId: 'refreshSupplierFoldersBtn',
-    siteHost: 'mcselektrotavler.sharepoint.com',
-    sitePath: '/sites/BCDokumentarkiv',
-    folderPath: 'Drift/BUSBAR/Strømskinner'
-  }
-});
-const PROJECT_FOLDER_TEMPLATE_NAME = '0-MAL';
-const DASHBOARD_SIDEBAR_COLLAPSED_KEY = 'busbar.dashboard.sidebar.collapsed.v1';
-const PROJECT_SORT_STORAGE_KEY = 'busbar.project.sort.v1';
-const LINE_SORT_STORAGE_KEY = 'busbar.line.sort.v1';
-const OFFER_SORT_STORAGE_KEY = 'busbar.offer.sort.v1';
-const PROJECT_FLOW_STORAGE_KEY = 'busbar.project.flow.v1';
-const PROJECT_FLOW_ALL_PROJECTS = '__all__';
-const PROJECT_SORT_OPTIONS = Object.freeze(['date_newest', 'date_oldest', 'alpha_asc', 'alpha_desc']);
-const LINE_SORT_OPTIONS = Object.freeze(['date_newest', 'date_oldest', 'alpha_asc', 'alpha_desc']);
-const PROJECT_STATUS_OPTIONS = Object.freeze([
-  { id: 'unresolved', label: 'Uavklart', tone: 'idle' },
-  { id: 'won', label: 'Vunnet', tone: 'success' },
-  { id: 'lost', label: 'Tapt', tone: 'danger' },
-  { id: 'finished', label: 'Ferdig', tone: 'done' }
-]);
-const PROJECT_ARCHIVE_STATUS_IDS = Object.freeze(['lost', 'finished']);
-const PROJECT_FLOW_PHASES = Object.freeze([
-  { id: 'request', label: 'Forespørsel' },
-  { id: 'offer', label: 'Tilbud' },
-  { id: 'order', label: 'Ordre' },
-  { id: 'engineering', label: 'Prosjektering' },
-  { id: 'procurement', label: 'Innkjøp' },
-  { id: 'production', label: 'Produksjon' },
-  { id: 'delivery', label: 'Levering' },
-  { id: 'finished', label: 'Ferdig' }
-]);
-const PROJECT_FLOW_VISIBLE_WEEK_LEVELS = Object.freeze([6, 5, 4, 3, 2]);
-const PROJECT_FLOW_DEFAULT_ZOOM_INDEX = 2;
 const projectSyncState = {
   timerId: null,
   inFlight: false,
   pending: false
+};
+const EMAIL_PROJECT_SUGGESTION_DISMISSED_KEY_PREFIX = 'busbar.emailProjectSuggestions.dismissed';
+const emailProjectSuggestionState = {
+  dismissed: new Set(),
+  dismissedStorageKey: '',
+  suggestionsById: new Map()
 };
 const projectFolderStatusState = {
   loaded: false,
@@ -120,6 +200,9 @@ const dashboardState = {
   activePage: 'dashboard',
   sidebarCollapsed: false,
   totalsTab: 'busbar'
+};
+const dashboardRecommendedActionState = {
+  actionsById: new Map()
 };
 const projectState = {
   currentProjectId: null,
@@ -145,7 +228,8 @@ const projectModalState = {
   projectId: null,
   saveLineAfterCreate: false,
   pendingDetails: null,
-  copySourceProjectId: null
+  copySourceProjectId: null,
+  sourceEmail: null
 };
 const projectMarginModalState = {
   projectId: null
@@ -236,267 +320,48 @@ function parseCSVAuto(text){
 }
 
 // --- utils ---
-const $ = id=>document.getElementById(id);
-const hasDashboardUI = ()=>Boolean($('dashboardView') && $('projectList'));
-const hasCalculatorUI = ()=>Boolean($('calcBtn') && $('series'));
-
-function ensureFormModal(formId, titleText){
-  const form = $(formId);
-  if (!form) return null;
-  const modalId = `${formId}Modal`;
-  let modal = $(modalId);
-  if (!modal){
-    modal = document.createElement('div');
-    modal.id = modalId;
-    modal.className = 'form-modal-backdrop';
-    modal.hidden = true;
-    modal.innerHTML = `
-      <div class="form-modal-panel" role="dialog" aria-modal="true" aria-labelledby="${modalId}Title">
-        <div class="form-modal-header">
-          <h3 id="${modalId}Title"></h3>
-          <button type="button" class="form-modal-close" aria-label="Lukk">x</button>
-        </div>
-        <div class="form-modal-body"></div>
-      </div>
-    `;
-    document.body.appendChild(modal);
-    modal.addEventListener('click', evt=>{
-      if (evt.target === modal) closeFormModal(formId);
-    });
-    modal.querySelector('.form-modal-close')?.addEventListener('click', ()=>closeFormModal(formId));
-  }
-  const title = modal.querySelector('.form-modal-header h3');
-  if (title) title.textContent = titleText || '';
-  const body = modal.querySelector('.form-modal-body');
-  if (body && form.parentElement !== body){
-    body.appendChild(form);
-  }
-  return modal;
-}
-
-function openFormModal(formId, titleText){
-  const modal = ensureFormModal(formId, titleText);
-  if (!modal) return;
-  modal.hidden = false;
-  document.body.classList.add('has-form-modal-open');
-}
-
-function closeFormModal(formId){
-  const form = $(formId);
-  if (form) form.hidden = true;
-  const modal = $(`${formId}Modal`);
-  if (modal) modal.hidden = true;
-  if (!document.querySelector('.form-modal-backdrop:not([hidden])')){
-    document.body.classList.remove('has-form-modal-open');
-  }
-}
-
-function buildAppUrl(fileName, params = {}){
-  const url = new URL(fileName, window.location.href);
-  Object.entries(params).forEach(([key, value])=>{
-    if (value === undefined || value === null || value === ''){
-      return;
-    }
-    url.searchParams.set(key, String(value));
-  });
-  return url;
-}
-
-function goToDashboard(params = {}){
-  window.location.href = buildAppUrl('index.html', params).toString();
-}
-
-function goToCalculator(params = {}){
-  window.location.href = buildAppUrl('calculator.html', params).toString();
-}
-
 function updateMarketTickerVisibility(){
-  const ticker = $('marketTicker');
-  if (!ticker) return;
-  const shouldShow = hasCalculatorUI() || dashboardState.activePage === 'dashboard';
-  ticker.hidden = !shouldShow;
+  updateMarketTickerVisibilityModule(dashboardState);
 }
 
-function setDashboardPage(page){
-  const nextPage = String(page || 'projects');
-  const pages = Array.from(document.querySelectorAll('[data-dashboard-page]'));
-  if (pages.length){
-    const target = pages.find(el=>el.dataset.dashboardPage === nextPage) || pages[0];
-    dashboardState.activePage = target.dataset.dashboardPage || 'projects';
-    pages.forEach(el=>{
-      const active = el === target;
-      el.hidden = !active;
-      el.classList.toggle('is-active', active);
-    });
-  } else {
-    dashboardState.activePage = nextPage;
-  }
-  const navItems = Array.from(document.querySelectorAll('[data-dashboard-nav], [data-dashboard-link]'));
-  navItems.forEach(item=>{
-    const itemPage = item.dataset.dashboardNav || item.dataset.dashboardLink || '';
-    const active = itemPage === dashboardState.activePage;
-    item.classList.toggle('is-active', active);
-    item.setAttribute('aria-current', active ? 'page' : 'false');
+function setDashboardPage(page, options = {}){
+  setDashboardPageModule(dashboardState, page, handleDashboardPageActivated, {
+    fromNavigation: false,
+    ...options
   });
-  updateMarketTickerVisibility();
-  handleDashboardPageActivated(dashboardState.activePage);
 }
 
-function handleDashboardPageActivated(page){
+function handleDashboardPageActivated(page, options = {}){
+  const forceRefresh = options.fromNavigation === true;
   if (page === 'dashboard'){
     window.setTimeout(renderMainDashboard, 0);
+  } else if (page === 'projects'){
+    if (forceRefresh) void refreshProjectsFromToolbar();
   } else if (page === 'calendar'){
-    loadCalendarEvents({ silent: true });
+    loadCalendarEvents({ silent: !forceRefresh });
   } else if (page === 'email'){
-    loadEmailMessages({ silent: true });
+    loadEmailMessages({ silent: !forceRefresh });
   } else if (page === 'offers'){
-    loadOfferStatus({ silent: true });
+    loadOfferStatus({ silent: !forceRefresh });
   } else if (page === 'project-flow'){
-    renderProjectFlowView();
+    if (forceRefresh){
+      void refreshProjectFlowView();
+    } else {
+      loadProjectFlowState();
+      renderProjectFlowView();
+    }
   } else if (page === 'customers' || page === 'company-card'){
-    loadGlobalCustomerDatabase({ silent: true });
+    loadGlobalCustomerDatabase({ silent: !forceRefresh });
   } else if (page === 'project-folders' || page === 'supplier-folders'){
-    loadSharePointFolder(page, { silent: true });
-  }
-}
-
-function resolveInitialDashboardPage(){
-  const shell = $('dashboardShell');
-  const configured = String(shell?.dataset?.dashboardActivePage || '').trim();
-  if (configured) return configured;
-  const params = new URLSearchParams(window.location.search);
-  const view = String(params.get('view') || '').trim();
-  if (view) return view;
-  return hasCalculatorUI() ? 'calculator' : 'dashboard';
-}
-
-function readDashboardSidebarCollapsed(){
-  if (typeof localStorage === 'undefined') return false;
-  try{
-    return localStorage.getItem(DASHBOARD_SIDEBAR_COLLAPSED_KEY) === '1';
-  }catch(_err){
-    return false;
-  }
-}
-
-function persistDashboardSidebarCollapsed(collapsed){
-  if (typeof localStorage === 'undefined') return;
-  try{
-    localStorage.setItem(DASHBOARD_SIDEBAR_COLLAPSED_KEY, collapsed ? '1' : '0');
-  }catch(_err){}
-}
-
-function setDashboardSidebarCollapsed(collapsed, options = {}){
-  const shell = $('dashboardShell');
-  const toggle = $('dashboardSidebarToggle');
-  const next = Boolean(collapsed);
-  dashboardState.sidebarCollapsed = next;
-  if (shell) shell.classList.toggle('is-sidebar-collapsed', next);
-  if (toggle){
-    toggle.setAttribute('aria-expanded', next ? 'false' : 'true');
-    toggle.setAttribute('aria-label', next ? 'Utvid meny' : 'Minimer meny');
-    toggle.title = next ? 'Utvid meny' : 'Minimer meny';
-  }
-  if (!options.skipPersist){
-    persistDashboardSidebarCollapsed(next);
+    loadSharePointFolder(page, { silent: !forceRefresh });
   }
 }
 
 function initDashboardShell(){
-  const shell = $('dashboardShell');
-  if (!shell) return;
-  if (shell.dataset.dashboardShellBound === '1'){
-    setDashboardPage(dashboardState.activePage);
-    setDashboardSidebarCollapsed(dashboardState.sidebarCollapsed, { skipPersist: true });
-    return;
-  }
-  shell.dataset.dashboardShellBound = '1';
-  dashboardState.activePage = resolveInitialDashboardPage();
-  dashboardState.sidebarCollapsed = readDashboardSidebarCollapsed();
-  shell.addEventListener('click', evt=>{
-    const toggleBtn = evt.target?.closest?.('#dashboardSidebarToggle');
-    if (toggleBtn){
-      evt.preventDefault();
-      setDashboardSidebarCollapsed(!dashboardState.sidebarCollapsed);
-      return;
-    }
-    const navBtn = evt.target?.closest?.('[data-dashboard-nav]');
-    if (!navBtn) return;
-    evt.preventDefault();
-    setDashboardPage(navBtn.dataset.dashboardNav);
-  });
-  setDashboardSidebarCollapsed(dashboardState.sidebarCollapsed, { skipPersist: true });
-  setDashboardPage(dashboardState.activePage);
+  initDashboardShellModule(dashboardState, handleDashboardPageActivated);
 }
 
 initDashboardShell();
-
-function normalizeApiBaseUrl(value){
-  const raw = String(value || '').trim();
-  if (!raw) return '';
-  try{
-    const parsed = new URL(raw, window.location.origin);
-    if (!['http:', 'https:'].includes(parsed.protocol)) return '';
-    const pathname = parsed.pathname.replace(/\/+$/, '');
-    const suffix = pathname === '/' ? '' : pathname;
-    return `${parsed.origin}${suffix}`;
-  }catch(_err){
-    return '';
-  }
-}
-
-function isLocalDevelopmentHost(){
-  const host = String(window.location.hostname || '').toLowerCase();
-  return host === 'localhost' || host === '127.0.0.1' || host === '[::1]';
-}
-
-function resolveApiBaseUrl(){
-  let fromQuery = '';
-  try{
-    fromQuery = new URLSearchParams(window.location.search).get('apiBase') || '';
-  }catch(_err){}
-  const normalizedQuery = normalizeApiBaseUrl(fromQuery);
-  if (fromQuery && normalizedQuery){
-    try{
-      localStorage.setItem('busbar.api.base', normalizedQuery);
-    }catch(_err){}
-    return normalizedQuery;
-  }
-
-  if (isLocalDevelopmentHost()){
-    return window.location.origin;
-  }
-
-  let fromStorage = '';
-  try{
-    fromStorage = localStorage.getItem('busbar.api.base') || '';
-  }catch(_err){}
-
-  const fromMeta = document.querySelector('meta[name="busbar-api-base"]')?.getAttribute('content') || '';
-  const fromGlobal = typeof window.BUSBAR_API_BASE === 'string' ? window.BUSBAR_API_BASE : '';
-  const normalized = normalizeApiBaseUrl(fromMeta || fromGlobal || fromStorage);
-  if (normalized) return normalized;
-
-  return '';
-}
-
-const API_BASE_URL = resolveApiBaseUrl();
-
-function buildApiUrl(path){
-  const suffix = String(path || '').startsWith('/') ? String(path) : `/${String(path || '')}`;
-  return API_BASE_URL ? `${API_BASE_URL}${suffix}` : suffix;
-}
-
-function isGithubPagesWithoutApiBase(){
-  const host = String(window.location.hostname || '').toLowerCase();
-  return host.endsWith('github.io') && !API_BASE_URL;
-}
-
-function appendApiBaseHint(errorText, status){
-  if (!isGithubPagesWithoutApiBase()) return errorText;
-  if (status !== 404 && status !== 405) return errorText;
-  return `${errorText}. GitHub Pages kjører kun statisk frontend. Sett <meta name="busbar-api-base" ...> til backend-URL.`;
-}
 
 function buildStaticAssetUrl(relativePath){
   try{
@@ -506,13 +371,6 @@ function buildStaticAssetUrl(relativePath){
   }
 }
 
-const round2 = n=>Math.round(n*100)/100;
-const fmtNO = new Intl.NumberFormat('no-NO', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-const fmtIntNO = new Intl.NumberFormat('no-NO', { maximumFractionDigits: 0 });
-const fmtFxNO = new Intl.NumberFormat('no-NO', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-const fmtTimestampNO = new Intl.DateTimeFormat('no-NO', { dateStyle: 'short', timeStyle: 'short' });
-const fmtPercentNO = new Intl.NumberFormat('no-NO', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
-const fmtMarketPercentNO = new Intl.NumberFormat('no-NO', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const MIN_MONTERING_TOTAL = 30000;
 let currentMarginRate = DEFAULT_MATERIAL_MARGIN_RATE;
 let currentMontasjeMarginRate = DEFAULT_MARGIN_RATE;
@@ -1508,11 +1366,8 @@ function initMarketDataTicker(){
 }
 
 function loadAuthFromSession(){
-  if (typeof sessionStorage === 'undefined') return;
   try{
-    const stored = sessionStorage.getItem(AUTH_SESSION_KEY);
-    if (!stored) return;
-    const parsed = JSON.parse(stored);
+    const parsed = readSessionJson(AUTH_SESSION_KEY, null);
     if (!parsed || parsed.loggedIn !== true) return;
     const username = normalizeUserEmail(parsed.username);
     const token = typeof parsed.token === 'string' ? parsed.token : '';
@@ -1527,19 +1382,18 @@ function loadAuthFromSession(){
 }
 
 function persistAuthToSession(){
-  if (typeof sessionStorage === 'undefined') return;
   try{
     if (authState.loggedIn){
-      sessionStorage.setItem(AUTH_SESSION_KEY, JSON.stringify({
+      writeSessionJson(AUTH_SESSION_KEY, {
         loggedIn: true,
         username: authState.username || '',
         token: authState.token || '',
         profile: authState.profile || null,
         isAdmin: authState.isAdmin === true
-      }));
+      });
       return;
     }
-    sessionStorage.removeItem(AUTH_SESSION_KEY);
+    removeSessionItem(AUTH_SESSION_KEY);
   }catch(err){
     console.warn('Kunne ikke lagre innloggingsstatus', err);
   }
@@ -1552,11 +1406,6 @@ function canEditGlobalCustomerData(){
 
 function canAccessProjectMailbox(){
   return canEditGlobalCustomerData();
-}
-
-function projectMailboxGraphPath(path){
-  const suffix = String(path || '');
-  return `/users/${encodeURIComponent(PROJECT_MAILBOX_ADDRESS)}${suffix.startsWith('/') ? suffix : `/${suffix}`}`;
 }
 
 function updateEmailMailboxAccessUi(){
@@ -1794,36 +1643,7 @@ async function acquireMicrosoftGraphToken(scopes){
 }
 
 async function microsoftGraphRequest(path, scopes, options = {}){
-  const accessToken = await acquireMicrosoftGraphToken(scopes);
-  if (!accessToken){
-    throw new Error('Microsoft returnerte ikke access token.');
-  }
-  const headers = {
-      Authorization: `Bearer ${accessToken}`,
-      Prefer: 'outlook.timezone="Europe/Oslo"'
-  };
-  const request = {
-    method: options.method || 'GET',
-    headers
-  };
-  if (options.body !== undefined){
-    if (options.rawBody){
-      request.body = options.body;
-      if (options.contentType) headers['Content-Type'] = options.contentType;
-    } else {
-      headers['Content-Type'] = 'application/json';
-      request.body = JSON.stringify(options.body);
-    }
-  }
-  const res = await fetch(`${MICROSOFT_GRAPH_BASE_URL}${path}`, request);
-  let payload = null;
-  try{
-    payload = await res.json();
-  }catch(_err){}
-  if (!res.ok){
-    throw new Error(payload?.error?.message || `Microsoft Graph svarte ${res.status}.`);
-  }
-  return payload;
+  return requestMicrosoftGraph(acquireMicrosoftGraphToken, path, scopes, options);
 }
 
 function splitEmailAddresses(value){
@@ -1848,65 +1668,12 @@ function graphLocalDateTimeValue(value){
   return raw ? raw.replace('T', 'T') : '';
 }
 
-function formatDateTimeLocalInput(date){
-  const value = date instanceof Date ? date : new Date(date);
-  if (Number.isNaN(value.getTime())) return '';
-  const pad = number=>String(number).padStart(2, '0');
-  return `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())}T${pad(value.getHours())}:${pad(value.getMinutes())}`;
-}
-
-function formatDateInputValue(date){
-  const value = date instanceof Date ? date : new Date(date);
-  if (Number.isNaN(value.getTime())) return '';
-  const pad = number=>String(number).padStart(2, '0');
-  return `${pad(value.getDate())}/${pad(value.getMonth() + 1)}/${value.getFullYear()}`;
-}
-
-function formatIsoDateInputValue(date){
-  const value = date instanceof Date ? date : new Date(date);
-  if (Number.isNaN(value.getTime())) return '';
-  const pad = number=>String(number).padStart(2, '0');
-  return `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())}`;
-}
-
-function formatTimeInputValue(date){
-  const value = date instanceof Date ? date : new Date(date);
-  if (Number.isNaN(value.getTime())) return '';
-  const pad = number=>String(number).padStart(2, '0');
-  return `${pad(value.getHours())}:${pad(value.getMinutes())}`;
-}
-
-function combineLocalDateAndTimeValue(dateValue, timeValue){
-  const parsedDate = parseCalendarDateInputValue(dateValue);
-  const time = String(timeValue || '').trim();
-  return parsedDate && time ? `${parsedDate}T${time}` : '';
-}
-
-function parseCalendarDateInputValue(value){
-  const raw = String(value || '').trim();
-  const match = raw.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-  if (!match) return '';
-  const [, day, month, year] = match;
-  const date = new Date(Number(year), Number(month) - 1, Number(day));
-  if (
-    date.getFullYear() !== Number(year) ||
-    date.getMonth() !== Number(month) - 1 ||
-    date.getDate() !== Number(day)
-  ) return '';
-  return `${year}-${month}-${day}`;
-}
-
 function syncCalendarNativeDatePicker(){
   const textInput = $('calendarEventStartDate');
   const picker = $('calendarEventDatePicker');
   if (!textInput || !picker) return;
   const parsed = parseCalendarDateInputValue(textInput.value);
   picker.value = parsed || '';
-}
-
-function dateFromCalendarInputValue(value){
-  const parsed = parseCalendarDateInputValue(value);
-  return parsed ? new Date(`${parsed}T00:00`) : null;
 }
 
 function closeCalendarDatePickerPopover(){
@@ -2031,97 +1798,6 @@ function calendarDurationFromDates(start, end){
   return String(rounded);
 }
 
-function formatGraphDateTime(raw){
-  const value = String(raw?.dateTime || raw || '').trim();
-  if (!value) return '';
-  const date = parseGraphDate(raw);
-  if (!date || Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat('no-NO', {
-    weekday: 'short',
-    day: '2-digit',
-    month: 'short',
-    hour: '2-digit',
-    minute: '2-digit'
-  }).format(date);
-}
-
-function parseGraphDateTimeValue(value, timeZone){
-  const rawValue = String(value || '').trim();
-  if (!rawValue) return null;
-  const normalized = rawValue.replace(/(\.\d{3})\d+/, '$1');
-  if (/[zZ]$|[+-]\d{2}:?\d{2}$/.test(normalized)){
-    const date = new Date(normalized);
-    return Number.isNaN(date.getTime()) ? null : date;
-  }
-  const tz = String(timeZone || '').trim().toLowerCase();
-  if (tz === 'utc' || tz === 'etc/utc' || tz === 'gmt'){
-    const date = new Date(`${normalized}Z`);
-    return Number.isNaN(date.getTime()) ? null : date;
-  }
-  const match = normalized.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?/);
-  if (match){
-    const [, year, month, day, hour, minute, second = '0', ms = '0'] = match;
-    return new Date(
-      Number(year),
-      Number(month) - 1,
-      Number(day),
-      Number(hour),
-      Number(minute),
-      Number(second),
-      Number(ms.padEnd(3, '0'))
-    );
-  }
-  const date = new Date(normalized);
-  return Number.isNaN(date.getTime()) ? null : date;
-}
-
-function parseGraphDate(raw){
-  const value = String(raw?.dateTime || raw || '').trim();
-  if (!value) return null;
-  return parseGraphDateTimeValue(value, raw?.timeZone);
-}
-
-function startOfDay(date){
-  const copy = new Date(date);
-  copy.setHours(0, 0, 0, 0);
-  return copy;
-}
-
-function addDays(date, days){
-  const copy = new Date(date);
-  copy.setDate(copy.getDate() + days);
-  return copy;
-}
-
-function addMonths(date, months){
-  const copy = new Date(date);
-  copy.setMonth(copy.getMonth() + months);
-  return copy;
-}
-
-function startOfWeekMonday(date){
-  const copy = startOfDay(date);
-  const day = copy.getDay();
-  const diff = day === 0 ? -6 : 1 - day;
-  copy.setDate(copy.getDate() + diff);
-  return copy;
-}
-
-function startOfMonth(date){
-  return new Date(date.getFullYear(), date.getMonth(), 1);
-}
-
-function endOfMonth(date){
-  return new Date(date.getFullYear(), date.getMonth() + 1, 0, 23, 59, 59, 999);
-}
-
-function getIsoWeekNumber(date){
-  const copy = startOfDay(date);
-  copy.setDate(copy.getDate() + 3 - ((copy.getDay() + 6) % 7));
-  const weekOne = new Date(copy.getFullYear(), 0, 4);
-  return 1 + Math.round(((copy - weekOne) / 86400000 - 3 + ((weekOne.getDay() + 6) % 7)) / 7);
-}
-
 function calendarRangeForState(){
   if (calendarViewState.mode === 'month'){
     const start = startOfWeekMonday(startOfMonth(calendarViewState.cursor));
@@ -2157,201 +1833,25 @@ function setGraphStatus(id, message, state = ''){
 }
 
 function renderCalendarEvents(events){
-  const list = $('calendarEventsList');
-  if (!list) return;
-  list.innerHTML = '';
-  if (!events.length){
-    const empty = document.createElement('div');
-    empty.className = 'graph-empty';
-    empty.textContent = 'Ingen kommende kalenderhendelser funnet.';
-    list.appendChild(empty);
-    return;
-  }
-  events.forEach(event=>{
-    const item = document.createElement('article');
-    item.className = 'graph-item calendar-event-item';
-    item.classList.toggle('is-linked-project', Boolean(getCalendarEventLinkedProjectId(event)));
-
-    const time = document.createElement('div');
-    time.className = 'graph-item-time';
-    time.textContent = `${formatGraphDateTime(event.start)} - ${formatGraphDateTime(event.end)}`;
-
-    const body = document.createElement('div');
-    body.className = 'graph-item-body';
-    const title = document.createElement('h3');
-    title.textContent = event.subject || 'Uten tittel';
-    const meta = document.createElement('p');
-    meta.className = 'muted-text';
-    const organizer = event.organizer?.emailAddress?.name || event.organizer?.emailAddress?.address || '';
-    const location = event.location?.displayName || '';
-    meta.textContent = [organizer ? `Arrangør: ${organizer}` : '', location ? `Sted: ${location}` : ''].filter(Boolean).join(' | ');
-    body.appendChild(title);
-    body.appendChild(meta);
-    const actions = document.createElement('div');
-    actions.className = 'graph-card-actions';
-    const editBtn = document.createElement('button');
-    editBtn.type = 'button';
-    editBtn.className = 'btn alt btn-small';
-    editBtn.textContent = 'Rediger';
-    editBtn.dataset.editCalendarEvent = event.id || '';
-    actions.appendChild(editBtn);
-    body.appendChild(actions);
-
-    item.appendChild(time);
-    item.appendChild(body);
-    list.appendChild(item);
+  renderCalendarEventsModule(events, {
+    formatGraphDateTime,
+    getCalendarEventLinkedProjectId
   });
-}
-
-function sameCalendarDay(left, right){
-  return left.getFullYear() === right.getFullYear()
-    && left.getMonth() === right.getMonth()
-    && left.getDate() === right.getDate();
-}
-
-function getCalendarDayDiff(start, end){
-  const startUtc = Date.UTC(start.getFullYear(), start.getMonth(), start.getDate());
-  const endUtc = Date.UTC(end.getFullYear(), end.getMonth(), end.getDate());
-  return Math.round((endUtc - startUtc) / 86400000);
 }
 
 function renderCalendarGrid(events){
-  const grid = $('calendarGridView');
-  if (!grid) return;
-  grid.innerHTML = '';
-  const mode = calendarViewState.mode;
-  const range = calendarRangeForState();
-  const days = [];
-  const dayCount = mode === 'month' ? 42 : 7;
-  for (let index = 0; index < dayCount; index += 1){
-    days.push(addDays(range.start, index));
-  }
-
-  const weekdays = ['Mandag', 'Tirsdag', 'Onsdag', 'Torsdag', 'Fredag', 'Lørdag', 'Søndag'];
-  const header = document.createElement('div');
-  header.className = 'calendar-grid-header';
-  if (mode === 'month' || mode === 'week'){
-    const weekHeader = document.createElement('div');
-    weekHeader.className = 'calendar-week-header-spacer';
-    weekHeader.textContent = '';
-    header.appendChild(weekHeader);
-  }
-  weekdays.forEach(day=>{
-    const cell = document.createElement('div');
-    cell.textContent = day;
-    header.appendChild(cell);
+  renderCalendarGridModule(events, calendarViewState, {
+    addDays,
+    calendarRangeForState,
+    getCalendarDayDiff,
+    getCalendarEventDisplayDates,
+    getCalendarEventLinkedProjectId,
+    getCalendarEventProjectFlowTaskId,
+    getIsoWeekNumber,
+    parseGraphDate,
+    sameCalendarDay,
+    startOfDay
   });
-  grid.appendChild(header);
-
-  const body = document.createElement('div');
-  body.className = `calendar-grid calendar-grid-${mode}`;
-  const today = startOfDay(new Date());
-  const projectFlowSegments = [];
-  const projectFlowRowLanes = new Map();
-  const addProjectFlowSegment = (event, startIndex, endIndex, lane)=>{
-    const item = document.createElement('button');
-    item.className = 'calendar-grid-event is-linked-project is-project-flow-span';
-    item.type = 'button';
-    item.dataset.editCalendarEvent = event.id || '';
-    item.style.gridRow = String(Math.floor(startIndex / 7) + 1);
-    item.style.gridColumn = `${(startIndex % 7) + 2} / ${(endIndex % 7) + 3}`;
-    item.style.setProperty('--calendar-event-lane', String(lane));
-    item.textContent = event.subject || 'Uten tittel';
-    body.appendChild(item);
-  };
-
-  events
-    .filter(event=>getCalendarEventProjectFlowTaskId(event))
-    .sort((a, b)=>{
-      const left = getCalendarEventDisplayDates(a);
-      const right = getCalendarEventDisplayDates(b);
-      const leftDuration = left ? getCalendarDayDiff(left.startDay, left.endDay) : 0;
-      const rightDuration = right ? getCalendarDayDiff(right.startDay, right.endDay) : 0;
-      if (rightDuration !== leftDuration) return rightDuration - leftDuration;
-      return (left?.startDay?.getTime() || 0) - (right?.startDay?.getTime() || 0);
-    })
-    .forEach(event=>{
-      const dates = getCalendarEventDisplayDates(event);
-      if (!dates) return;
-      const visibleStart = days.findIndex(day=>sameCalendarDay(day, dates.startDay));
-      const visibleEnd = days.findIndex(day=>sameCalendarDay(day, dates.endDay));
-      const startIndex = visibleStart >= 0
-        ? visibleStart
-        : (dates.startDay < days[0] ? 0 : -1);
-      const endIndex = visibleEnd >= 0
-        ? visibleEnd
-        : (dates.endDay > days[days.length - 1] ? days.length - 1 : -1);
-      if (startIndex < 0 || endIndex < 0 || endIndex < startIndex) return;
-      for (let rowStart = startIndex; rowStart <= endIndex; rowStart = (Math.floor(rowStart / 7) + 1) * 7){
-        const rowEnd = Math.min(endIndex, (Math.floor(rowStart / 7) * 7) + 6);
-        const weekRow = Math.floor(rowStart / 7);
-        const lane = projectFlowSegments.filter(segment=>
-          segment.weekRow === weekRow
-          && rowStart <= segment.endIndex
-          && rowEnd >= segment.startIndex
-        ).length;
-        projectFlowSegments.push({ weekRow, startIndex: rowStart, endIndex: rowEnd, lane });
-        projectFlowRowLanes.set(weekRow, Math.max(projectFlowRowLanes.get(weekRow) || 0, lane + 1));
-        addProjectFlowSegment(event, rowStart, rowEnd, lane);
-      }
-    });
-
-  days.forEach((day, index)=>{
-    if ((mode === 'month' || mode === 'week') && index % 7 === 0){
-      const week = document.createElement('div');
-      week.className = 'calendar-week-number';
-      week.textContent = `UKE ${getIsoWeekNumber(day)}`;
-      week.style.gridColumn = '1';
-      week.style.gridRow = String(Math.floor(index / 7) + 1);
-      body.appendChild(week);
-    }
-    const cell = document.createElement('section');
-    cell.className = 'calendar-day-cell';
-    cell.style.gridColumn = String((index % 7) + 2);
-    cell.style.gridRow = String(Math.floor(index / 7) + 1);
-    cell.classList.toggle('is-outside-month', mode === 'month' && day.getMonth() !== calendarViewState.cursor.getMonth());
-    cell.classList.toggle('is-today', sameCalendarDay(day, today));
-    cell.classList.toggle('is-past-day', day < today);
-
-    const heading = document.createElement('div');
-    heading.className = 'calendar-day-heading';
-    heading.textContent = new Intl.DateTimeFormat('no-NO', { day: '2-digit', month: mode === 'week' ? 'short' : undefined }).format(day);
-    const rowLaneCount = projectFlowRowLanes.get(Math.floor(index / 7)) || 0;
-    if (rowLaneCount){
-      heading.style.marginBottom = `${6 + (rowLaneCount * 31)}px`;
-    }
-    cell.appendChild(heading);
-
-    const dayEvents = events
-      .filter(event=>!getCalendarEventProjectFlowTaskId(event))
-      .filter(event=>{
-        const start = parseGraphDate(event.start);
-        return start && sameCalendarDay(start, day);
-      })
-      .sort((a, b)=>(parseGraphDate(a.start)?.getTime() || 0) - (parseGraphDate(b.start)?.getTime() || 0));
-
-    if (!dayEvents.length){
-      const empty = document.createElement('div');
-      empty.className = 'calendar-day-empty';
-      empty.textContent = '';
-      cell.appendChild(empty);
-    }
-
-    dayEvents.forEach(event=>{
-      const item = document.createElement('button');
-      item.className = 'calendar-grid-event';
-      item.classList.toggle('is-linked-project', Boolean(getCalendarEventLinkedProjectId(event)));
-      item.type = 'button';
-      item.dataset.editCalendarEvent = event.id || '';
-      const time = parseGraphDate(event.start);
-      const timeLabel = time ? new Intl.DateTimeFormat('no-NO', { hour: '2-digit', minute: '2-digit' }).format(time) : '';
-      item.textContent = [timeLabel, event.subject || 'Uten tittel'].filter(Boolean).join(' ');
-      cell.appendChild(item);
-    });
-
-    body.appendChild(cell);
-  });
-  grid.appendChild(body);
 }
 
 function getCalendarContactEmailSuggestions(){
@@ -2438,7 +1938,7 @@ function renderCalendarAttendeesList(){
     const remove = document.createElement('button');
     remove.type = 'button';
     remove.setAttribute('aria-label', `Fjern ${address}`);
-    remove.textContent = '×';
+    remove.textContent = '✕';
     remove.addEventListener('click', ()=>{
       setCalendarFormAttendees(calendarViewState.formAttendees.filter(itemAddress=>itemAddress !== address));
     });
@@ -2723,98 +2223,43 @@ async function deleteCalendarEventFromForm(){
 }
 
 function updateCalendarViewControls(){
-  const label = $('calendarPeriodLabel');
-  if (label) label.textContent = formatCalendarPeriodLabel();
-  const select = $('calendarModeSelect');
-  if (select) select.value = calendarViewState.mode;
+  updateCalendarViewControlsModule(calendarViewState, formatCalendarPeriodLabel);
 }
 
 function renderCalendarView(){
-  const list = $('calendarEventsList');
-  const grid = $('calendarGridView');
-  const isList = calendarViewState.mode === 'list';
-  if (list) list.hidden = !isList;
-  if (grid) grid.hidden = isList;
-  updateCalendarViewControls();
-  if (isList){
-    renderCalendarEvents(calendarViewState.events);
-  } else {
-    renderCalendarGrid(calendarViewState.events);
-  }
+  renderCalendarViewModule(calendarViewState, {
+    addDays,
+    calendarRangeForState,
+    formatCalendarPeriodLabel,
+    formatGraphDateTime,
+    getCalendarDayDiff,
+    getCalendarEventDisplayDates,
+    getCalendarEventLinkedProjectId,
+    getCalendarEventProjectFlowTaskId,
+    getIsoWeekNumber,
+    parseGraphDate,
+    sameCalendarDay,
+    startOfDay
+  });
 }
 
 function renderEmailMessages(messages){
-  const list = $('emailMessagesList');
-  if (!list) return;
-  list.innerHTML = '';
-  emailViewState.messages = Array.isArray(messages) ? messages : [];
-  if (emailViewState.selectedMessageId && !emailViewState.messages.some(message=>message.id === emailViewState.selectedMessageId)){
-    emailViewState.selectedMessageId = '';
-  }
-  updateEmailMessageActions();
-  if (!messages.length){
-    const empty = document.createElement('div');
-    empty.className = 'graph-empty';
-    empty.textContent = 'Ingen e-poster funnet.';
-    list.appendChild(empty);
-    return;
-  }
-  messages.forEach(message=>{
-    const item = document.createElement('button');
-    item.type = 'button';
-    item.className = `graph-item email-message-item${message.isRead ? '' : ' is-unread'}${message.id === emailViewState.selectedMessageId ? ' is-selected' : ''}`;
-    item.dataset.emailMessageId = message.id || '';
-
-    const marker = document.createElement('div');
-    marker.className = 'email-read-marker';
-    marker.setAttribute('aria-hidden', 'true');
-
-    const body = document.createElement('div');
-    body.className = 'graph-item-body';
-    const title = document.createElement('h3');
-    title.textContent = message.subject || '(Uten emne)';
-    const meta = document.createElement('p');
-    meta.className = 'muted-text';
-    const from = message.from?.emailAddress?.name || message.from?.emailAddress?.address || 'Ukjent avsender';
-    meta.textContent = `${from} | ${formatGraphDateTime(message.receivedDateTime)}`;
-    const preview = document.createElement('p');
-    preview.className = 'email-preview';
-    preview.textContent = message.bodyPreview || '';
-    body.appendChild(title);
-    body.appendChild(meta);
-    body.appendChild(preview);
-
-    item.appendChild(marker);
-    item.appendChild(body);
-    list.appendChild(item);
+  renderEmailMessagesModule(messages, emailViewState, {
+    formatGraphDateTime,
+    formatEmailMessageMeta
   });
 }
 
 function getSelectedEmailMessage(){
-  const id = String(emailViewState.selectedMessageId || '').trim();
-  if (!id) return null;
-  return emailViewState.messages.find(message=>message.id === id) || null;
+  return getSelectedEmailMessageModule(emailViewState);
 }
 
 function updateEmailMessageActions(){
-  const actions = $('emailMessageActions');
-  if (!actions) return;
-  const message = getSelectedEmailMessage();
-  actions.hidden = !message;
-  const label = $('selectedEmailLabel');
-  if (label){
-    label.textContent = message ? `Valgt: ${message.subject || '(Uten emne)'}` : '';
-  }
-  const markBtn = $('markSelectedEmailReadBtn');
-  if (markBtn){
-    markBtn.textContent = message?.isRead ? 'Marker ulest' : 'Marker lest';
-  }
+  updateEmailMessageActionsModule(emailViewState);
 }
 
 function selectEmailMessage(id){
-  const nextId = String(id || '').trim();
-  emailViewState.selectedMessageId = emailViewState.selectedMessageId === nextId ? '' : nextId;
-  renderEmailMessages(emailViewState.messages);
+  selectEmailMessageModule(id, emailViewState, renderEmailMessages);
 }
 
 function openEmailComposeForm(){
@@ -2935,112 +2380,14 @@ function getSharePointListState(page){
   return sharePointFolderState[page];
 }
 
-function normalizeListSearchText(value){
-  return String(value || '').trim().toLowerCase();
-}
-
-function getSharePointSortMode(page){
-  const state = getSharePointListState(page);
-  return PROJECT_SORT_OPTIONS.includes(state.sort) ? state.sort : 'alpha_asc';
-}
-
-function sharePointItemMatchesSearch(item, page){
-  const term = normalizeListSearchText(getSharePointListState(page).searchTerm);
-  if (!term) return true;
-  const haystack = [
-    item?.name,
-    item?.folder ? 'mappe' : 'fil'
-  ].map(value=>String(value || '').toLowerCase()).join(' ');
-  return haystack.includes(term);
-}
-
-function compareSharePointItems(a, b, page){
-  const folderCmp = Number(Boolean(b?.folder)) - Number(Boolean(a?.folder));
-  if (folderCmp) return folderCmp;
-  const mode = getSharePointSortMode(page);
-  if (mode === 'alpha_desc'){
-    return compareNoText(b?.name, a?.name);
-  }
-  if (mode === 'date_newest' || mode === 'date_oldest'){
-    const aTime = new Date(a?.lastModifiedDateTime || 0).getTime() || 0;
-    const bTime = new Date(b?.lastModifiedDateTime || 0).getTime() || 0;
-    return mode === 'date_oldest' ? aTime - bTime : bTime - aTime;
-  }
-  return compareNoText(a?.name, b?.name);
-}
-
 function renderSharePointFolderItems(config, items, page){
-  const list = $(config.listId);
-  if (!list) return;
-  list.innerHTML = '';
-  const sortedItems = [...items]
-    .filter(item=>sharePointItemMatchesSearch(item, page))
-    .sort((a, b)=>compareSharePointItems(a, b, page));
-  if (!sortedItems.length){
-    const empty = document.createElement('div');
-    empty.className = 'graph-empty';
-    empty.textContent = normalizeListSearchText(getSharePointListState(page).searchTerm)
-      ? 'Ingen filer eller mapper matcher søket.'
-      : 'Ingen filer eller mapper funnet.';
-    list.appendChild(empty);
-    return;
-  }
-  sortedItems.forEach(item=>{
-    const row = document.createElement('article');
-    row.className = `sharepoint-item${item.folder ? ' is-folder' : ' is-file'}`;
-
-    const link = document.createElement('a');
-    link.className = 'sharepoint-item-link';
-    link.href = item.webUrl || '#';
-    link.target = '_blank';
-    link.rel = 'noopener noreferrer';
-
-    const icon = document.createElement('span');
-    icon.className = 'sharepoint-item-icon';
-    icon.textContent = item.folder ? 'Mappe' : 'Fil';
-
-    const body = document.createElement('span');
-    body.className = 'sharepoint-item-body';
-    const name = document.createElement('strong');
-    name.textContent = item.name || 'Uten navn';
-    const meta = document.createElement('span');
-    meta.className = 'muted-text';
-    const modified = formatTimestampForSharePoint(item.lastModifiedDateTime);
-    const size = item.file ? formatSharePointFileSize(item.size) : '';
-    meta.textContent = [item.folder ? `${Number(item.folder.childCount || 0)} elementer` : size, modified ? `Endret ${modified}` : ''].filter(Boolean).join(' | ');
-    body.append(name, meta);
-
-    link.append(icon, body);
-    row.appendChild(link);
-
-    const actions = document.createElement('div');
-    actions.className = 'sharepoint-item-actions';
-    const deleteBtn = document.createElement('button');
-    deleteBtn.type = 'button';
-    deleteBtn.className = 'btn danger btn-small';
-    deleteBtn.textContent = 'Slett';
-    deleteBtn.dataset.deleteSharepointItem = item.id || '';
-    deleteBtn.dataset.sharepointPage = page || '';
-    deleteBtn.dataset.sharepointName = item.name || '';
-    actions.appendChild(deleteBtn);
-    row.appendChild(actions);
-
-    list.appendChild(row);
+  renderSharePointFolderItemsModule({
+    config,
+    formatSharePointFileSize,
+    items,
+    page,
+    state: getSharePointListState(page)
   });
-}
-
-function formatTimestampForSharePoint(value){
-  const raw = String(value || '').trim();
-  if (!raw) return '';
-  const date = new Date(raw);
-  if (Number.isNaN(date.getTime())) return '';
-  return new Intl.DateTimeFormat('no-NO', {
-    day: '2-digit',
-    month: 'short',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit'
-  }).format(date);
 }
 
 async function resolveSharePointDrive(config){
@@ -3296,6 +2643,7 @@ async function refreshProjectFolderStatuses(options = {}){
     projectFolderStatusState.loaded = true;
     if (changedProjects) saveProjectsToStorage();
     if (options.render !== false) renderProjectDashboard();
+    if (dashboardState.activePage === 'dashboard') renderDashboardRecommendedActionsWidget();
   }catch(err){
     console.warn('Kunne ikke hente prosjektmappestatus', err);
     projectFolderStatusState.loaded = true;
@@ -3585,13 +2933,15 @@ async function loadEmailMessages(options = {}){
   setGraphStatus('emailStatus', `Henter e-post fra ${PROJECT_MAILBOX_ADDRESS}...`);
   try{
     const query = new URLSearchParams({
-      '$top': '25',
+      '$top': '100',
       '$orderby': 'receivedDateTime desc',
-      '$select': 'id,subject,from,receivedDateTime,bodyPreview,isRead,importance,webLink'
+      '$select': 'id,conversationId,subject,from,receivedDateTime,bodyPreview,uniqueBody,body,isRead,importance,webLink'
     });
     const payload = await microsoftGraphRequest(projectMailboxGraphPath(`/mailFolders/inbox/messages?${query.toString()}`), MICROSOFT_GRAPH_MAIL_SCOPES);
     const messages = Array.isArray(payload?.value) ? payload.value : [];
     renderEmailMessages(messages);
+    renderDashboardRecommendedActionsWidget();
+    renderDashboardEmailProjectSuggestionsWidget();
     list.dataset.loaded = '1';
     setGraphStatus('emailStatus', `Oppdatert ${new Date().toLocaleTimeString('no-NO', { hour: '2-digit', minute: '2-digit' })}`, 'ok');
   }catch(err){
@@ -3932,6 +3282,28 @@ const refreshProjectsBtn = $('refreshProjectsBtn');
 if (refreshProjectsBtn){
   refreshProjectsBtn.addEventListener('click', ()=>void refreshProjectsFromToolbar());
 }
+
+async function refreshProjectFlowView(options = {}){
+  const btn = $('refreshProjectFlowBtn');
+  if (btn) btn.disabled = true;
+  if (!options.silent) setProjectFlowStatus('Oppdaterer prosjektflyt...');
+  try{
+    if (authState.loggedIn){
+      await syncProjectsForCurrentUser();
+    }
+    loadProjectFlowState();
+    renderProjectFlowView();
+    if (!options.silent) setProjectFlowStatus('Oppdatert.', 'ok');
+  }catch(err){
+    console.warn('Prosjektflyt-oppdatering feilet', err);
+    setProjectFlowStatus(err?.message || 'Kunne ikke oppdatere prosjektflyt.', 'error');
+    loadProjectFlowState();
+    renderProjectFlowView();
+  }finally{
+    if (btn) btn.disabled = false;
+  }
+}
+
 const newCalendarEventBtn = $('newCalendarEventBtn');
 if (newCalendarEventBtn){
   newCalendarEventBtn.addEventListener('click', ()=>openCalendarEventForm());
@@ -4087,21 +3459,6 @@ if (emailComposeForm){
 const cancelEmailComposeBtn = $('cancelEmailComposeBtn');
 if (cancelEmailComposeBtn){
   cancelEmailComposeBtn.addEventListener('click', closeEmailComposeForm);
-}
-const openSelectedEmailBtn = $('openSelectedEmailBtn');
-if (openSelectedEmailBtn){
-  openSelectedEmailBtn.addEventListener('click', ()=>{
-    const message = getSelectedEmailMessage();
-    if (message?.webLink) window.open(message.webLink, '_blank', 'noopener,noreferrer');
-  });
-}
-const markSelectedEmailReadBtn = $('markSelectedEmailReadBtn');
-if (markSelectedEmailReadBtn){
-  markSelectedEmailReadBtn.addEventListener('click', ()=>void markSelectedEmailRead());
-}
-const deleteSelectedEmailBtn = $('deleteSelectedEmailBtn');
-if (deleteSelectedEmailBtn){
-  deleteSelectedEmailBtn.addEventListener('click', ()=>void deleteSelectedEmail());
 }
 const refreshProjectFoldersBtn = $('refreshProjectFoldersBtn');
 if (refreshProjectFoldersBtn){
@@ -4286,30 +3643,6 @@ function generateProjectId(){
   return `proj-${Date.now().toString(36)}-${Math.random().toString(16).slice(2, 10)}`;
 }
 
-function normalizeProjectStatus(value){
-  const raw = String(value || '').trim().toLowerCase();
-  if (!raw) return PROJECT_STATUS_OPTIONS[0].id;
-  if (PROJECT_STATUS_OPTIONS.some(option=>option.id === raw)) return raw;
-  const mapped = {
-    uavklart: 'unresolved',
-    vunnet: 'won',
-    tapt: 'lost',
-    ferdig: 'finished'
-  };
-  return mapped[raw] || PROJECT_STATUS_OPTIONS[0].id;
-}
-
-function getProjectStatusConfig(projectOrStatus){
-  const status = typeof projectOrStatus === 'string'
-    ? normalizeProjectStatus(projectOrStatus)
-    : normalizeProjectStatus(projectOrStatus?.projectStatus);
-  return PROJECT_STATUS_OPTIONS.find(option=>option.id === status) || PROJECT_STATUS_OPTIONS[0];
-}
-
-function projectIsArchived(project){
-  return PROJECT_ARCHIVE_STATUS_IDS.includes(getProjectStatusConfig(project).id);
-}
-
 function normalizeProject(raw){
   if (!raw) return null;
   const fallback = new Date().toISOString();
@@ -4329,6 +3662,10 @@ function normalizeProject(raw){
     projectFolderCreated: raw.projectFolderCreated === true,
     projectFolderWebUrl: String(raw.projectFolderWebUrl || '').trim(),
     projectStatus: normalizeProjectStatus(raw.projectStatus || raw.status),
+    sourceEmailConversationId: String(raw.sourceEmailConversationId || raw.emailConversationId || '').trim(),
+    sourceEmailMessageId: String(raw.sourceEmailMessageId || raw.emailMessageId || '').trim(),
+    sourceEmailSubject: String(raw.sourceEmailSubject || '').trim(),
+    sourceEmailFrom: String(raw.sourceEmailFrom || '').trim(),
     createdAt: raw.createdAt || fallback,
     updatedAt: raw.updatedAt || fallback,
     selectedAddonConfig,
@@ -4366,17 +3703,10 @@ function getProjectsStorageKeyForEmail(email){
 }
 
 function readProjectsFromStorageKey(storageKey){
-  if (!storageKey || typeof localStorage === 'undefined') return [];
-  try{
-    const stored = localStorage.getItem(storageKey);
-    if (!stored) return [];
-    const parsed = JSON.parse(stored);
-    if (!Array.isArray(parsed)) return [];
-    return parsed.map(normalizeProject).filter(Boolean);
-  }catch(err){
-    console.warn(`Kunne ikke lese prosjekter fra ${storageKey}`, err);
-    return [];
-  }
+  if (!storageKey) return [];
+  const parsed = readLocalJson(storageKey, []);
+  if (!Array.isArray(parsed)) return [];
+  return parsed.map(normalizeProject).filter(Boolean);
 }
 
 function getLocalProjectStorageKeysForMigration(email){
@@ -4385,17 +3715,7 @@ function getLocalProjectStorageKeysForMigration(email){
   if (storageKey) keys.add(storageKey);
   keys.add(LEGACY_PROJECTS_STORAGE_KEY);
 
-  if (typeof localStorage === 'undefined') return Array.from(keys);
-  try{
-    for (let i = 0; i < localStorage.length; i += 1){
-      const key = localStorage.key(i);
-      if (key && key.startsWith(`${PROJECTS_STORAGE_KEY_PREFIX}:`)){
-        keys.add(key);
-      }
-    }
-  }catch(err){
-    console.warn('Kunne ikke skanne lokale prosjektlister', err);
-  }
+  listLocalKeys(key=>key.startsWith(`${PROJECTS_STORAGE_KEY_PREFIX}:`)).forEach(key=>keys.add(key));
 
   return Array.from(keys);
 }
@@ -4409,20 +3729,15 @@ function loadLocalProjectsForMigration(email){
 }
 
 function cleanupMigratedProjectStorage(email){
-  if (typeof localStorage === 'undefined') return;
   const keepKey = getProjectsStorageKeyForEmail(email);
   try{
-    const keysToRemove = [];
-    for (let i = 0; i < localStorage.length; i += 1){
-      const key = localStorage.key(i);
-      if (!key) continue;
+    const keysToRemove = listLocalKeys(key=>{
       if (key === LEGACY_PROJECTS_STORAGE_KEY){
-        keysToRemove.push(key);
-      } else if (key.startsWith(`${PROJECTS_STORAGE_KEY_PREFIX}:`) && key !== keepKey){
-        keysToRemove.push(key);
+        return true;
       }
-    }
-    keysToRemove.forEach(key=>localStorage.removeItem(key));
+      return key.startsWith(`${PROJECTS_STORAGE_KEY_PREFIX}:`) && key !== keepKey;
+    });
+    keysToRemove.forEach(removeLocalItem);
   }catch(err){
     console.warn('Kunne ikke rydde migrerte lokale prosjektlister', err);
   }
@@ -4613,46 +3928,6 @@ function flattenGlobalContacts() {
   )).sort((a, b) => (a.name || '').localeCompare(b.name || '', 'no', { sensitivity: 'base', numeric: true }));
 }
 
-function compareGlobalListItems(a, b, mode, nameAccessor){
-  if (mode === 'alpha_desc') return compareNoText(nameAccessor(b), nameAccessor(a));
-  if (mode === 'date_newest' || mode === 'date_oldest'){
-    const aTime = new Date(a?.updatedAt || a?.createdAt || 0).getTime() || 0;
-    const bTime = new Date(b?.updatedAt || b?.createdAt || 0).getTime() || 0;
-    return mode === 'date_oldest' ? aTime - bTime : bTime - aTime;
-  }
-  return compareNoText(nameAccessor(a), nameAccessor(b));
-}
-
-function companyMatchesSearch(customer){
-  const term = normalizeListSearchText(globalListState.companySearchTerm);
-  if (!term) return true;
-  const haystack = [
-    customer?.name,
-    customer?.address,
-    customer?.postalPlace,
-    customer?.segment,
-    customer?.customerResponsible,
-    ...(Array.isArray(customer?.contacts) ? customer.contacts.flatMap(contact=>[contact?.name, contact?.phone, contact?.email]) : [])
-  ].map(value=>String(value || '').toLowerCase()).join(' ');
-  return haystack.includes(term);
-}
-
-function contactMatchesSearch(contact){
-  const term = normalizeListSearchText(globalListState.contactSearchTerm);
-  if (!term) return true;
-  const haystack = [
-    contact?.name,
-    contact?.phone,
-    contact?.email,
-    contact?.customerName,
-    contact?.customerAddress,
-    contact?.customerPostalPlace,
-    contact?.customerSegment,
-    contact?.customerResponsible
-  ].map(value=>String(value || '').toLowerCase()).join(' ');
-  return haystack.includes(term);
-}
-
 function getGlobalCustomerByName(name) {
   const key = normalizeLookupKey(name);
   return normalizeGlobalCustomerPayload(projectState.customerDatabase).find(customer => normalizeLookupKey(customer.name) === key) || null;
@@ -4724,142 +3999,27 @@ function renderGlobalCustomerViews() {
   renderContactPersonsList();
 }
 
-function appendGlobalDataDetails(parent, rows) {
-  const details = document.createElement('div');
-  details.className = 'global-data-details';
-  rows.forEach(([label, value]) => {
-    const row = document.createElement('p');
-    row.className = 'global-data-detail';
-    row.textContent = `${label}: ${String(value || '').trim() || '-'}`;
-    details.appendChild(row);
-  });
-  parent.appendChild(details);
-}
-
 function renderCompanyCardsList() {
-  const list = $('companiesList');
-  const companyOptions = $('globalCompanyOptions');
-  if (companyOptions) {
-    companyOptions.innerHTML = '';
-    normalizeGlobalCustomerPayload(projectState.customerDatabase).forEach(customer => {
-      const option = document.createElement('option');
-      option.value = customer.name;
-      companyOptions.appendChild(option);
-    });
-  }
-  if (!list) return;
-  const customers = normalizeGlobalCustomerPayload(projectState.customerDatabase)
-    .filter(companyMatchesSearch)
-    .sort((a, b)=>compareGlobalListItems(a, b, globalListState.companySort, item=>item?.name));
-  const canEdit = canEditGlobalCustomerData();
-  const form = $('companyEditForm');
-  if (form) form.hidden = !canEdit || form.dataset.editing !== '1';
-  const addBtn = $('addCompanyBtn');
-  if (addBtn) addBtn.hidden = !canEdit;
-  const ownerHint = $('companiesOwnerHint');
-  if (ownerHint) ownerHint.hidden = canEdit;
-  list.innerHTML = '';
-  if (!customers.length) {
-    const empty = document.createElement('div');
-    empty.className = 'global-data-empty';
-    empty.textContent = normalizeListSearchText(globalListState.companySearchTerm)
-      ? 'Ingen firma matcher søket.'
-      : 'Ingen firma funnet i prosjektarkivet.';
-    list.appendChild(empty);
-    return;
-  }
-  customers.forEach(customer => {
-    const item = document.createElement('article');
-    item.className = 'global-data-card';
-    const body = document.createElement('div');
-    body.className = 'global-data-card-body';
-    const title = document.createElement('h3');
-    title.textContent = customer.name;
-    const projectCount = Number.isFinite(Number(customer.projectCount)) ? Number(customer.projectCount) : 0;
-    body.appendChild(title);
-    appendGlobalDataDetails(body, [
-      ['Adresse', customer.address],
-      ['Postnummer og sted', customer.postalPlace],
-      ['Kundesegment', customer.segment],
-      ['Kundeansvarlig', customer.customerResponsible],
-      ['Kontaktpersoner', customer.contacts.length],
-      ['Prosjekter totalt', projectCount]
-    ]);
-    item.appendChild(body);
-    if (canEdit) {
-      const actions = document.createElement('div');
-      actions.className = 'global-data-actions';
-      const edit = document.createElement('button');
-      edit.type = 'button';
-      edit.className = 'btn alt btn-small';
-      edit.textContent = 'Endre';
-      edit.addEventListener('click', () => openCompanyEditForm(customer));
-      const remove = document.createElement('button');
-      remove.type = 'button';
-      remove.className = 'btn danger btn-small';
-      remove.textContent = 'Slett';
-      remove.addEventListener('click', () => handleDeleteCompany(customer));
-      actions.append(edit, remove);
-      item.appendChild(actions);
+  renderCompanyCardsListModule({
+    canEdit: canEditGlobalCustomerData(),
+    customers: normalizeGlobalCustomerPayload(projectState.customerDatabase),
+    globalListState,
+    callbacks: {
+      handleDeleteCompany,
+      openCompanyEditForm
     }
-    list.appendChild(item);
   });
 }
 
 function renderContactPersonsList() {
-  const list = $('contactsList');
-  if (!list) return;
-  const contacts = flattenGlobalContacts()
-    .filter(contactMatchesSearch)
-    .sort((a, b)=>compareGlobalListItems(a, b, globalListState.contactSort, item=>item?.name));
-  const canEdit = canEditGlobalCustomerData();
-  const form = $('contactEditForm');
-  if (form) form.hidden = !canEdit || form.dataset.editing !== '1';
-  const addBtn = $('addContactBtn');
-  if (addBtn) addBtn.hidden = !canEdit;
-  const ownerHint = $('contactsOwnerHint');
-  if (ownerHint) ownerHint.hidden = canEdit;
-  list.innerHTML = '';
-  if (!contacts.length) {
-    const empty = document.createElement('div');
-    empty.className = 'global-data-empty';
-    empty.textContent = normalizeListSearchText(globalListState.contactSearchTerm)
-      ? 'Ingen kontaktpersoner matcher søket.'
-      : 'Ingen kontaktpersoner funnet i prosjektarkivet.';
-    list.appendChild(empty);
-    return;
-  }
-  contacts.forEach(contact => {
-    const item = document.createElement('article');
-    item.className = 'global-data-card';
-    const body = document.createElement('div');
-    body.className = 'global-data-card-body';
-    const title = document.createElement('h3');
-    title.textContent = contact.name || 'Uten navn';
-    body.appendChild(title);
-    appendGlobalDataDetails(body, [
-      ['Firmanavn', contact.customerName],
-      ['Telefon', contact.phone],
-      ['E-post', contact.email]
-    ]);
-    item.appendChild(body);
-    if (canEdit) {
-      const actions = document.createElement('div');
-      actions.className = 'global-data-actions';
-      const edit = document.createElement('button');
-      edit.type = 'button';
-      edit.className = 'btn alt btn-small';
-      edit.textContent = 'Endre';
-      edit.addEventListener('click', () => openContactEditForm(contact));
-      const remove = document.createElement('button');
-      remove.type = 'button';
-      remove.className = 'btn danger btn-small';
-      remove.textContent = 'Slett';
-      remove.addEventListener('click', () => handleDeleteContact(contact));
-      actions.append(edit, remove);
-      item.appendChild(actions);
+  renderContactPersonsListModule({
+    canEdit: canEditGlobalCustomerData(),
+    contacts: flattenGlobalContacts(),
+    globalListState,
+    callbacks: {
+      handleDeleteContact,
+      openContactEditForm
     }
-    list.appendChild(item);
   });
 }
 
@@ -5103,11 +4263,10 @@ function saveProjectsToStorage(options = {}){
   const email = getCurrentUserEmail();
   const storageKey = getProjectsStorageKeyForEmail(email);
   if (!storageKey) return;
-  if (typeof localStorage === 'undefined') return;
   try{
-    localStorage.setItem(storageKey, JSON.stringify(projectState.projects));
-    if (localStorage.getItem(LEGACY_PROJECTS_STORAGE_KEY)){
-      localStorage.removeItem(LEGACY_PROJECTS_STORAGE_KEY);
+    writeLocalJson(storageKey, projectState.projects);
+    if (hasLocalItem(LEGACY_PROJECTS_STORAGE_KEY)){
+      removeLocalItem(LEGACY_PROJECTS_STORAGE_KEY);
     }
   }catch(err){
     console.warn('Kunne ikke lagre prosjekter', err);
@@ -5117,50 +4276,11 @@ function saveProjectsToStorage(options = {}){
   }
 }
 
-function loadSortMode(storageKey, validModes, fallback){
-  if (typeof localStorage === 'undefined') return fallback;
-  try{
-    const raw = String(localStorage.getItem(storageKey) || '').trim();
-    return validModes.includes(raw) ? raw : fallback;
-  }catch(_err){
-    return fallback;
-  }
-}
-
-function saveSortMode(storageKey, mode){
-  if (typeof localStorage === 'undefined') return;
-  try{
-    localStorage.setItem(storageKey, mode);
-  }catch(_err){}
-}
-
-function getSortableCreatedTimestamp(item){
-  const created = new Date(item?.createdAt || item?.updatedAt || 0).getTime();
-  return Number.isFinite(created) ? created : 0;
-}
-
-function compareNoText(left, right){
-  return String(left || '').localeCompare(String(right || ''), 'no', {
-    sensitivity: 'base',
-    numeric: true
-  });
-}
-
-function normalizeProjectSearchText(value){
-  return String(value || '').trim().toLowerCase();
-}
-
 function projectMatchesSearch(project, rawSearchTerm = projectState.projectSearchTerm){
-  const term = normalizeProjectSearchText(rawSearchTerm);
-  if (!term) return true;
-  const haystack = [
-    project?.name,
-    project?.customer,
-    project?.contactPerson,
-    getProjectResponsibleName(project),
-    getProjectStatusConfig(project).label
-  ].map(value=>String(value || '').toLowerCase()).join(' ');
-  return haystack.includes(term);
+  return projectMatchesSearchModule(project, rawSearchTerm, {
+    getProjectResponsibleName,
+    getProjectStatusConfig
+  });
 }
 
 function setProjectSearchTerm(value, options = {}){
@@ -5183,33 +4303,7 @@ if (registerModal){
 }
 
 function compareProjectsForSort(a, b, mode = projectState.projectSort){
-  if (mode === 'alpha_asc'){
-    return compareNoText(a?.name, b?.name);
-  }
-  if (mode === 'alpha_desc'){
-    return compareNoText(b?.name, a?.name);
-  }
-  const aTime = getSortableCreatedTimestamp(a);
-  const bTime = getSortableCreatedTimestamp(b);
-  if (mode === 'date_oldest'){
-    return aTime - bTime;
-  }
-  return bTime - aTime;
-}
-
-function compareLinesForSort(a, b, mode = projectState.lineSort){
-  if (mode === 'alpha_asc'){
-    return compareNoText(a?.lineNumber, b?.lineNumber);
-  }
-  if (mode === 'alpha_desc'){
-    return compareNoText(b?.lineNumber, a?.lineNumber);
-  }
-  const aTime = getSortableCreatedTimestamp(a);
-  const bTime = getSortableCreatedTimestamp(b);
-  if (mode === 'date_oldest'){
-    return aTime - bTime;
-  }
-  return bTime - aTime;
+  return compareProjectsForSortModule(a, b, mode);
 }
 
 function updateSortControlValues(){
@@ -5398,6 +4492,10 @@ function createProject(projectName, customerName, contactPerson, details = {}){
     contactPhone: String(details.contactPhone || '').trim(),
     projectResponsible: getCurrentProjectResponsibleName(),
     projectOwnerEmail: getCurrentUserEmail(),
+    sourceEmailConversationId: String(details.sourceEmailConversationId || '').trim(),
+    sourceEmailMessageId: String(details.sourceEmailMessageId || '').trim(),
+    sourceEmailSubject: String(details.sourceEmailSubject || '').trim(),
+    sourceEmailFrom: String(details.sourceEmailFrom || '').trim(),
     createdAt: now,
     updatedAt: now,
     selectedAddonConfig: normalizeSelectedAddonConfig(null, null),
@@ -5599,23 +4697,22 @@ function openProjectModal(options = {}){
   projectModalState.projectId = options.projectId || null;
   projectModalState.saveLineAfterCreate = Boolean(options.saveLineAfterCreate);
   projectModalState.copySourceProjectId = options.copySourceProjectId || null;
-  const modal = $('projectModal');
-  if (!modal) return;
-  modal.style.display = 'flex';
+  projectModalState.sourceEmail = options.sourceEmail || null;
+  const form = $('projectForm');
+  if (!form) return;
   const errorEl = $('projectError');
   if (errorEl) errorEl.textContent = '';
   const projectInput = $('projectNameInput');
   const customerInput = $('customerNameInput');
   const contactInput = $('contactPersonInput');
-  const titleEl = $('projectTitle');
   const sourceProject = projectModalState.mode === 'copy'
     ? getProjectById(projectModalState.copySourceProjectId)
     : null;
-  if (titleEl){
-    titleEl.textContent = projectModalState.mode === 'edit'
-      ? 'Oppdater prosjekt'
-      : (projectModalState.mode === 'copy' ? 'Kopier prosjekt' : 'Nytt prosjekt');
-  }
+  const titleText = projectModalState.mode === 'edit'
+    ? 'Oppdater prosjekt'
+    : (projectModalState.mode === 'copy' ? 'Kopier prosjekt' : 'Nytt prosjekt');
+  form.hidden = false;
+  openFormModal('projectForm', titleText);
   if (projectInput){
     projectInput.disabled = projectModalState.mode === 'copy';
     if (projectModalState.mode === 'copy'){
@@ -5623,6 +4720,8 @@ function openProjectModal(options = {}){
     } else if (projectModalState.mode === 'edit'){
       const existing = getProjectById(projectModalState.projectId);
       projectInput.value = existing?.name || '';
+    } else if (projectModalState.sourceEmail?.projectName){
+      projectInput.value = projectModalState.sourceEmail.projectName;
     } else {
       projectInput.value = '';
     }
@@ -5640,6 +4739,8 @@ function openProjectModal(options = {}){
     } else if (projectModalState.mode === 'edit'){
       const existing = getProjectById(projectModalState.projectId);
       customerInput.value = existing?.customer || '';
+    } else if (projectModalState.sourceEmail?.customer){
+      customerInput.value = projectModalState.sourceEmail.customer;
     } else {
       customerInput.value = '';
     }
@@ -5650,6 +4751,8 @@ function openProjectModal(options = {}){
     } else if (projectModalState.mode === 'edit'){
       const existing = getProjectById(projectModalState.projectId);
       contactInput.value = existing?.contactPerson || '';
+    } else if (projectModalState.sourceEmail?.contactPerson){
+      contactInput.value = projectModalState.sourceEmail.contactPerson;
     } else {
       contactInput.value = '';
     }
@@ -5660,9 +4763,7 @@ function openProjectModal(options = {}){
 }
 
 function closeProjectModal(){
-  const modal = $('projectModal');
-  if (!modal) return;
-  modal.style.display = 'none';
+  closeFormModal('projectForm');
   const errorEl = $('projectError');
   if (errorEl) errorEl.textContent = '';
   hideSuggestions($('projectSuggestions'));
@@ -5675,6 +4776,7 @@ function closeProjectModal(){
   projectModalState.saveLineAfterCreate = false;
   projectModalState.pendingDetails = null;
   projectModalState.copySourceProjectId = null;
+  projectModalState.sourceEmail = null;
 }
 
 function updateContactSuggestionsForCustomer(){
@@ -5699,6 +4801,7 @@ function persistProjectInfo(projectName, customerName, contactPerson, options = 
   const customerAddress = String(options.customerAddress ?? knownDetails.customerAddress ?? '').trim();
   const customerPostalPlace = String(options.customerPostalPlace ?? knownDetails.customerPostalPlace ?? '').trim();
   const contactPhone = String(options.contactPhone ?? knownDetails.contactPhone ?? '').trim();
+  const sourceEmail = options.sourceEmail || null;
   if (options.projectId){
     updateProject(options.projectId, {
       name: trimmedName,
@@ -5723,7 +4826,11 @@ function persistProjectInfo(projectName, customerName, contactPerson, options = 
   const created = createProject(trimmedName, trimmedCustomer, trimmedContact, {
     customerAddress,
     customerPostalPlace,
-    contactPhone
+    contactPhone,
+    sourceEmailConversationId: sourceEmail?.conversationId || '',
+    sourceEmailMessageId: sourceEmail?.messageId || '',
+    sourceEmailSubject: sourceEmail?.subject || '',
+    sourceEmailFrom: sourceEmail?.from || ''
   });
   setActiveProject(created);
 }
@@ -6188,7 +5295,7 @@ function setProjectStatus(projectId, status){
   project.updatedAt = new Date().toISOString();
   saveProjectsToStorage();
   sortProjects();
-  if (PROJECT_ARCHIVE_STATUS_IDS.includes(nextStatus)){
+  if (projectIsArchived(project)){
     projectState.expandedProjectId = null;
   }
   const statusEl = $('projectsStatus');
@@ -6568,113 +5675,20 @@ async function generateLatestProjectOffer(project){
   };
 }
 
-function normalizeOfferSearchText(value){
-  return String(value || '').trim().toLowerCase();
-}
-
-function getOfferStatusForProject(project){
-  const id = String(project?.id || '').trim();
-  return id ? offerListState.statusByProjectId[id] || null : null;
-}
-
-function buildOfferRows(){
-  return projectState.projects.map(project=>({
-    project,
-    status: getOfferStatusForProject(project)
-  }));
-}
-
-function offerRowMatchesSearch(row){
-  const term = normalizeOfferSearchText(offerListState.searchTerm);
-  if (!term) return true;
-  const status = row.status || {};
-  const project = row.project || {};
-  const haystack = [
-    project.name,
-    project.customer,
-    project.contactPerson,
-    getProjectResponsibleName(project),
-    project.projectNumber,
-    status.offerNumber,
-    status.revision !== null && status.revision !== undefined ? `-${status.revision}` : ''
-  ].map(value=>String(value || '').toLowerCase()).join(' ');
-  return haystack.includes(term);
-}
-
-function compareOfferRows(a, b){
-  if (offerListState.sort === 'alpha_asc'){
-    return compareNoText(a?.project?.name, b?.project?.name);
-  }
-  if (offerListState.sort === 'alpha_desc'){
-    return compareNoText(b?.project?.name, a?.project?.name);
-  }
-  const aTime = getSortableCreatedTimestamp(a?.project);
-  const bTime = getSortableCreatedTimestamp(b?.project);
-  if (offerListState.sort === 'date_oldest') return aTime - bTime;
-  return bTime - aTime;
-}
-
 function renderOffersList(){
-  const list = $('offersList');
-  if (!list) return;
-  list.innerHTML = '';
-  const rows = buildOfferRows()
-    .filter(offerRowMatchesSearch)
-    .sort(compareOfferRows);
-  if (!rows.length){
-    const empty = document.createElement('div');
-    empty.className = 'empty-state';
-    empty.innerHTML = '<p>Ingen tilbud matcher søket.</p>';
-    list.appendChild(empty);
-    return;
-  }
-  rows.forEach(row=>{
-    const project = row.project;
-    const status = row.status || {};
-    const item = document.createElement('article');
-    item.className = `offer-row${status.hasOffer ? '' : ' is-missing-offer'}`;
-
-    const body = document.createElement('div');
-    body.className = 'offer-row-body';
-    const title = document.createElement('h3');
-    title.textContent = project.projectNumber
-      ? `${project.projectNumber} - ${project.name || 'Uten navn'}`
-      : project.name || 'Uten navn';
-    body.appendChild(title);
-    appendGlobalDataDetails(body, [
-      ['Prosjektansvarlig', getProjectResponsibleName(project)],
-      ['Kunde', project.customer],
-      ['Kontaktperson', project.contactPerson],
-      ['Tilbud', status.hasOffer ? `${status.offerNumber || '-'}-${status.revision ?? '-'}` : 'Ingen genererte tilbud'],
-      ['Oppdatert', formatProjectTimestamp(project.updatedAt || project.createdAt)]
-    ]);
-
-    const actions = document.createElement('div');
-    actions.className = 'offer-row-actions';
-    const openWordBtn = document.createElement('button');
-    openWordBtn.type = 'button';
-    openWordBtn.className = 'btn';
-    openWordBtn.dataset.openOfferWord = project.id;
-    openWordBtn.textContent = 'Åpne Word';
-    openWordBtn.disabled = !authState.loggedIn;
-    const pdfBtn = document.createElement('button');
-    pdfBtn.type = 'button';
-    pdfBtn.className = 'btn alt';
-    pdfBtn.textContent = 'PDF';
-    pdfBtn.disabled = true;
-    pdfBtn.title = 'PDF er ikke tilgjengelig før serveren får dokumentkonvertering.';
-    actions.append(openWordBtn, pdfBtn);
-
-    item.append(body, actions);
-    list.appendChild(item);
+  renderOffersPage({
+    authState,
+    offerListState,
+    projects: projectState.projects,
+    helpers: {
+      formatProjectTimestamp,
+      getProjectResponsibleName
+    }
   });
 }
 
 function updateOfferControlValues(){
-  const input = $('offerSearchInput');
-  if (input && input.value !== offerListState.searchTerm) input.value = offerListState.searchTerm;
-  const select = $('offerSortSelect');
-  if (select && PROJECT_SORT_OPTIONS.includes(offerListState.sort)) select.value = offerListState.sort;
+  updateOfferControlValuesModule(offerListState);
 }
 
 function setOfferSearchTerm(value, options = {}){
@@ -6902,22 +5916,13 @@ async function requestGenerateProjectOffer(projectId, triggerBtn){
 }
 
 function readProjectFlowStore(){
-  if (typeof localStorage === 'undefined') return {};
-  try{
-    const raw = localStorage.getItem(getProjectFlowStorageKey());
-    const parsed = raw ? JSON.parse(raw) : {};
-    if (!parsed || typeof parsed !== 'object') return {};
-    return parsed;
-  }catch(_err){
-    return {};
-  }
+  const parsed = readLocalJson(getProjectFlowStorageKey(), {});
+  if (!parsed || typeof parsed !== 'object') return {};
+  return parsed;
 }
 
 function persistProjectFlowStore(){
-  if (typeof localStorage === 'undefined') return;
-  try{
-    localStorage.setItem(getProjectFlowStorageKey(), JSON.stringify(projectFlowState.milestonesByProjectId || {}));
-  }catch(_err){}
+  writeLocalJson(getProjectFlowStorageKey(), projectFlowState.milestonesByProjectId || {});
 }
 
 function getProjectFlowStorageKey(){
@@ -6984,42 +5989,6 @@ function setProjectFlowMilestones(projectId, milestones){
 function createProjectFlowId(){
   if (window.crypto?.randomUUID) return window.crypto.randomUUID();
   return `flow-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-}
-
-function parseProjectFlowDate(value){
-  const raw = String(value || '').trim();
-  const isoMatch = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  const displayMatch = raw.match(/^(\d{1,2})[/.](\d{1,2})[/.](\d{4})$/);
-  const match = isoMatch || displayMatch;
-  if (!match) return null;
-  const year = isoMatch ? Number(match[1]) : Number(match[3]);
-  const month = isoMatch ? Number(match[2]) : Number(match[2]);
-  const day = isoMatch ? Number(match[3]) : Number(match[1]);
-  const date = new Date(year, month - 1, day);
-  if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) return null;
-  return Number.isNaN(date.getTime()) ? null : date;
-}
-
-function formatProjectFlowDate(date){
-  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return '';
-  const yyyy = date.getFullYear();
-  const mm = String(date.getMonth() + 1).padStart(2, '0');
-  const dd = String(date.getDate()).padStart(2, '0');
-  return `${yyyy}-${mm}-${dd}`;
-}
-
-function formatProjectFlowDisplayDate(value){
-  const date = parseProjectFlowDate(value);
-  if (!date) return '-';
-  return date.toLocaleDateString('no-NO', { day: '2-digit', month: '2-digit', year: 'numeric' });
-}
-
-function formatProjectFlowInputDate(value){
-  const date = value instanceof Date ? value : parseProjectFlowDate(value);
-  if (!date) return '';
-  const dd = String(date.getDate()).padStart(2, '0');
-  const mm = String(date.getMonth() + 1).padStart(2, '0');
-  return `${dd}/${mm}/${date.getFullYear()}`;
 }
 
 function getProjectFlowDatePickerTarget(){
@@ -7118,51 +6087,11 @@ function openProjectFlowDatePickerPopover(targetId){
   popover.hidden = false;
 }
 
-function addProjectFlowDays(date, days){
-  const copy = new Date(date.getFullYear(), date.getMonth(), date.getDate());
-  copy.setDate(copy.getDate() + Number(days || 0));
-  return copy;
-}
-
-function addProjectFlowDuration(startDate, value, unit){
-  const amount = Math.max(1, Number.parseInt(value, 10) || 1);
-  const start = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate());
-  if (unit === 'weeks'){
-    return addProjectFlowDays(start, (amount * 7) - 1);
-  }
-  if (unit === 'months'){
-    const end = new Date(start.getFullYear(), start.getMonth() + amount, start.getDate());
-    return addProjectFlowDays(end, -1);
-  }
-  return addProjectFlowDays(start, amount - 1);
-}
-
 function getProjectFlowDurationFromDates(startDate, endDate){
   const days = Math.max(1, getProjectFlowDayDiff(startDate, endDate) + 1);
   if (days >= 28 && days % 30 === 0) return { value: days / 30, unit: 'months' };
   if (days >= 7 && days % 7 === 0) return { value: days / 7, unit: 'weeks' };
   return { value: days, unit: 'days' };
-}
-
-function getProjectFlowDayDiff(start, end){
-  const startUtc = Date.UTC(start.getFullYear(), start.getMonth(), start.getDate());
-  const endUtc = Date.UTC(end.getFullYear(), end.getMonth(), end.getDate());
-  return Math.round((endUtc - startUtc) / 86400000);
-}
-
-function getProjectFlowWeekNumber(date){
-  const utc = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
-  const day = utc.getUTCDay() || 7;
-  utc.setUTCDate(utc.getUTCDate() + 4 - day);
-  const yearStart = new Date(Date.UTC(utc.getUTCFullYear(), 0, 1));
-  return Math.ceil((((utc - yearStart) / 86400000) + 1) / 7);
-}
-
-function getProjectFlowWeekKey(date){
-  const utc = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
-  const day = utc.getUTCDay() || 7;
-  utc.setUTCDate(utc.getUTCDate() + 4 - day);
-  return `${utc.getUTCFullYear()}-${String(getProjectFlowWeekNumber(date)).padStart(2, '0')}`;
 }
 
 function getProjectFlowWeekSpans(dates){
@@ -7797,17 +6726,7 @@ function setProjectFlowZoomIndex(nextIndex){
 }
 
 function getProjectFlowTasksByPhase(tasks){
-  const grouped = new Map(PROJECT_FLOW_PHASES.map(phase=>[phase.id, []]));
-  (Array.isArray(tasks) ? tasks : []).forEach(task=>{
-    const phaseId = PROJECT_FLOW_PHASES.some(phase=>phase.id === task.phaseId) ? task.phaseId : PROJECT_FLOW_PHASES[0].id;
-    const list = grouped.get(phaseId) || [];
-    list.push(task);
-    grouped.set(phaseId, list);
-  });
-  grouped.forEach(list=>{
-    list.sort((a, b)=>String(a.startDate || '').localeCompare(String(b.startDate || ''), 'no'));
-  });
-  return grouped;
+  return getProjectFlowTasksByPhaseModule(tasks);
 }
 
 function getProjectFlowProjectLabel(project){
@@ -7830,268 +6749,348 @@ function getProjectFlowTaskLabel(item, includeProject = false){
   return getProjectFlowPhaseLabel(item.phaseId);
 }
 
-function getProjectFlowTaskActivityTime(task){
-  const explicit = new Date(task?.updatedAt || task?.createdAt || 0).getTime();
-  if (Number.isFinite(explicit) && explicit > 0) return explicit;
-  const end = parseProjectFlowDate(task?.endDate);
-  if (end) return end.getTime();
-  const start = parseProjectFlowDate(task?.startDate);
-  return start ? start.getTime() : 0;
-}
-
-function getDashboardAllProjectLines(){
-  return (Array.isArray(projectState.projects) ? projectState.projects : [])
-    .flatMap(project=>Array.isArray(project.lines) ? project.lines : []);
-}
-
-function sumDashboardLineValue(lines, resolver){
-  return round2((Array.isArray(lines) ? lines : []).reduce((sum, line)=>{
-    const value = Number(resolver(line));
-    return Number.isFinite(value) ? sum + value : sum;
-  }, 0));
-}
-
-function getDashboardTotals(){
-  const lines = getDashboardAllProjectLines();
-  const busbarTotal = sumDashboardLineValue(lines, line=>line?.totals?.totalExMontasje);
-  const materialCost = sumDashboardLineValue(lines, line=>resolveLineSkinMaterialCost(line));
-  const montasjeTotal = sumDashboardLineValue(lines, line=>line?.totals?.totalInclMontasje);
-  const montasjeCost = sumDashboardLineValue(lines, line=>line?.totals?.montasje?.cost);
-  const lineTotal = sumDashboardLineValue(lines, line=>resolveLineDisplayTotal(line));
-  return {
-    lineCount: lines.length,
-    busbar: {
-      total: busbarTotal,
-      cost: materialCost,
-      margin: Math.max(0, round2(busbarTotal - materialCost))
-    },
-    montasje: {
-      total: montasjeTotal,
-      cost: montasjeCost,
-      margin: Math.max(0, round2(montasjeTotal - montasjeCost))
-    },
-    allTotal: lineTotal
-  };
-}
-
-function formatDashboardMoney(value){
-  const number = Number(value);
-  return Number.isFinite(number) ? `${fmtNO.format(round2(number))} NOK` : '0,00 NOK';
-}
-
-function formatDashboardPercent(value, total){
-  const amount = Number(value);
-  const base = Number(total);
-  if (!Number.isFinite(amount) || !Number.isFinite(base) || base <= 0) return '0,0 %';
-  return `${fmtNO.format(round2((amount / base) * 100))} %`;
-}
-
-function createDashboardMetric(label, value, percent){
-  const item = document.createElement('div');
-  item.className = 'dashboard-total-metric';
-  const labelEl = document.createElement('span');
-  labelEl.textContent = label;
-  const valueEl = document.createElement('strong');
-  valueEl.textContent = value;
-  const percentEl = document.createElement('small');
-  percentEl.textContent = percent;
-  item.append(labelEl, valueEl, percentEl);
-  return item;
-}
-
 function renderDashboardTotalsWidget(){
-  const root = $('dashboardTotalsContent');
-  if (!root) return;
-  const totals = getDashboardTotals();
-  const activeTab = dashboardState.totalsTab === 'montasje' ? 'montasje' : 'busbar';
-  const tabButtons = Array.from(document.querySelectorAll('[data-dashboard-total-tab]'));
-  tabButtons.forEach(btn=>{
-    const active = btn.dataset.dashboardTotalTab === activeTab;
-    btn.classList.toggle('is-active', active);
-    btn.setAttribute('aria-selected', active ? 'true' : 'false');
+  renderDashboardTotalsWidgetModule(dashboardState, projectState.projects, {
+    resolveLineSkinMaterialCost,
+    resolveLineDisplayTotal
   });
-  const data = activeTab === 'montasje'
-    ? {
-      title: 'Montasje',
-      totalLabel: 'Total montasje',
-      costLabel: 'Montasjekost',
-      marginLabel: 'Påslag montasje',
-      values: totals.montasje
-    }
-    : {
-      title: 'Strømskinner',
-      totalLabel: 'Total strømskinne',
-      costLabel: 'Materiellkost',
-      marginLabel: 'Påslag strømskinne',
-      values: totals.busbar
-    };
-  root.innerHTML = '';
-  const hero = document.createElement('div');
-  hero.className = 'dashboard-total-hero';
-  const heroLabel = document.createElement('span');
-  heroLabel.textContent = 'Totalsum inkludert i tilbud';
-  const heroValue = document.createElement('strong');
-  heroValue.textContent = formatDashboardMoney(totals.allTotal);
-  const heroMeta = document.createElement('small');
-  heroMeta.textContent = `${totals.lineCount} linjer beregnet`;
-  hero.append(heroLabel, heroValue, heroMeta);
-
-  const metrics = document.createElement('div');
-  metrics.className = 'dashboard-total-metrics';
-  metrics.append(
-    createDashboardMetric(data.totalLabel, formatDashboardMoney(data.values.total), '100 %'),
-    createDashboardMetric(data.costLabel, formatDashboardMoney(data.values.cost), formatDashboardPercent(data.values.cost, data.values.total)),
-    createDashboardMetric(data.marginLabel, formatDashboardMoney(data.values.margin), formatDashboardPercent(data.values.margin, data.values.total))
-  );
-  root.append(hero, metrics);
-}
-
-function getDashboardProjectStatusCounts(){
-  const counts = new Map(PROJECT_STATUS_OPTIONS.map(option=>[option.id, 0]));
-  (Array.isArray(projectState.projects) ? projectState.projects : []).forEach(project=>{
-    const status = getProjectStatusConfig(project).id;
-    counts.set(status, (counts.get(status) || 0) + 1);
-  });
-  return counts;
 }
 
 function renderDashboardProjectStatusWidget(){
-  const root = $('dashboardProjectStatusSummary');
-  if (!root) return;
-  const counts = getDashboardProjectStatusCounts();
-  root.innerHTML = '';
-  const list = document.createElement('div');
-  list.className = 'dashboard-status-buttons';
-  PROJECT_STATUS_OPTIONS.forEach(option=>{
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = `dashboard-status-button is-${option.tone}`;
-    btn.dataset.dashboardProjectStatus = option.id;
-    btn.innerHTML = `<span>${option.label}</span><strong>${fmtIntNO.format(counts.get(option.id) || 0)}</strong>`;
-    list.appendChild(btn);
-  });
-  root.appendChild(list);
+  renderDashboardProjectStatusWidgetModule(projectState.projects, getProjectStatusConfig);
 }
 
 function renderDashboardFlowStatusWidget(){
-  const root = $('dashboardFlowStatusSummary');
-  if (!root) return;
   loadProjectFlowState();
-  const counts = new Map();
-  (Array.isArray(projectState.projects) ? projectState.projects : []).forEach(project=>{
+  renderDashboardFlowStatusWidgetModule(projectState.projects, getProjectFlowStatusForProject);
+}
+
+function getDashboardProjectTitle(project){
+  if (!project) return 'Ukjent prosjekt';
+  return project.projectNumber
+    ? `${project.projectNumber} - ${project.name || 'Uten navn'}`
+    : project.name || 'Uten navn';
+}
+
+function getDashboardActionTimestamp(value, fallback = Date.now()){
+  const time = new Date(value || 0).getTime();
+  return Number.isFinite(time) && time > 0 ? time : fallback;
+}
+
+function buildDashboardRecommendedActions(){
+  const actions = [];
+  const activeProjects = projectState.projects.filter(project=>!projectIsArchived(project));
+  activeProjects.forEach(project=>{
+    const title = getDashboardProjectTitle(project);
+    const projectActionTime = getDashboardActionTimestamp(project.createdAt || project.updatedAt);
+    const folderStatus = getProjectFolderStatus(project);
+    if (authState.loggedIn && folderStatus && !projectHasConfirmedFolder(project)){
+      actions.push({
+        id: `create-folder:${project.id}`,
+        type: 'create-folder',
+        projectId: project.id,
+        actionableAt: projectActionTime,
+        tone: 'warning',
+        title,
+        meta: 'Prosjektet mangler bekreftet SharePoint-mappe.',
+        buttonText: 'Opprett mappe'
+      });
+    }
+    if (!Array.isArray(project.lines) || project.lines.length === 0){
+      actions.push({
+        id: `add-line:${project.id}`,
+        type: 'add-line',
+        projectId: project.id,
+        actionableAt: projectActionTime,
+        tone: 'idle',
+        title,
+        meta: 'Prosjektet har ingen beregnede linjer.',
+        buttonText: 'Ny linje'
+      });
+    }
     const flowStatus = getProjectFlowStatusForProject(project);
-    const key = `${flowStatus.label}|${flowStatus.tone}`;
-    const item = counts.get(key) || { label: flowStatus.label, tone: flowStatus.tone, count: 0 };
-    item.count += 1;
-    counts.set(key, item);
+    if (flowStatus?.tone === 'danger' && flowStatus.label !== 'Ubehandlet'){
+      actions.push({
+        id: `follow-up:${project.id}`,
+        type: 'follow-up',
+        projectId: project.id,
+        flowStatus: flowStatus.label,
+        actionableAt: Number(flowStatus.actionableAt) || getDashboardActionTimestamp(project.updatedAt || project.createdAt),
+        tone: 'danger',
+        title,
+        meta: `${flowStatus.label} har stått ubehandlet i ${flowStatus.ageText || 'minst 1 uke'}.`,
+        buttonText: 'Åpne flyt'
+      });
+    }
   });
-  const order = ['Ubehandlet', ...PROJECT_FLOW_PHASES.map(phase=>phase.label)];
-  const items = Array.from(counts.values()).sort((a, b)=>{
-    const aIndex = order.indexOf(a.label);
-    const bIndex = order.indexOf(b.label);
-    return (aIndex < 0 ? 999 : aIndex) - (bIndex < 0 ? 999 : bIndex);
-  });
-  root.innerHTML = '';
-  const list = document.createElement('div');
-  list.className = 'dashboard-status-buttons';
-  if (!items.length){
-    const empty = document.createElement('div');
-    empty.className = 'dashboard-status-project-empty';
-    empty.textContent = 'Ingen prosjekter.';
-    root.appendChild(empty);
-    return;
-  }
-  items.forEach(item=>{
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = `dashboard-status-button is-${item.tone}`;
-    btn.dataset.dashboardFlowStatus = item.label;
-    btn.innerHTML = `<span>${item.label}</span><strong>${fmtIntNO.format(item.count)}</strong>`;
-    list.appendChild(btn);
-  });
-  root.appendChild(list);
+  (Array.isArray(emailViewState.messages) ? emailViewState.messages : [])
+    .filter(message=>message && message.id && message.isRead === false)
+    .slice(0, 5)
+    .forEach(message=>{
+      const subject = message.subject || '(Uten emne)';
+      const from = message.from?.emailAddress?.name || message.from?.emailAddress?.address || 'Ukjent avsender';
+      actions.push({
+        id: `email:${message.id}`,
+        type: 'email',
+        messageId: message.id,
+        actionableAt: getDashboardActionTimestamp(message.receivedDateTime),
+        tone: 'warning',
+        title: `Svar på e-post ${subject}`,
+        meta: from,
+        buttonText: 'Åpne e-post'
+      });
+    });
+  return actions
+    .sort((a, b)=>(Number(a.actionableAt) || 0) - (Number(b.actionableAt) || 0))
+    .slice(0, 12);
 }
 
-function openProjectFlowFromDashboardStatus(statusLabel){
-  const label = String(statusLabel || '').trim();
-  if (!label) return;
-  projectFlowState.selectedProjectId = PROJECT_FLOW_ALL_PROJECTS;
-  projectFlowState.dashboardStatusFilter = label;
-  const select = $('projectFlowProjectSelect');
-  if (select) select.value = PROJECT_FLOW_ALL_PROJECTS;
-  setDashboardPage('project-flow');
-  renderProjectFlowView();
-  window.setTimeout(()=>{
-    $('projectFlowView')?.scrollIntoView?.({ block: 'start', inline: 'nearest', behavior: 'auto' });
-  }, 0);
+function renderDashboardRecommendedActionsWidget(){
+  const actions = buildDashboardRecommendedActions();
+  dashboardRecommendedActionState.actionsById = new Map(actions.map(action=>[action.id, action]));
+  renderDashboardRecommendedActionsWidgetModule(actions);
 }
 
-function getProjectsForDashboardStatus(statusId){
-  const normalized = String(statusId || '').trim();
-  const projects = Array.isArray(projectState.projects) ? projectState.projects : [];
-  if (normalized === 'all') return projects;
-  return projects.filter(project=>getProjectStatusConfig(project).id === normalizeProjectStatus(normalized));
+function getEmailProjectSuggestionDismissedStorageKey(){
+  const email = getCurrentUserEmail() || 'local';
+  return `${EMAIL_PROJECT_SUGGESTION_DISMISSED_KEY_PREFIX}.${email}`;
 }
 
-function renderDashboardProjectStatusList(statusId){
-  const list = $('dashboardProjectStatusList');
-  if (!list) return;
-  const projects = getProjectsForDashboardStatus(statusId);
-  list.innerHTML = '';
-  if (!projects.length){
-    const empty = document.createElement('div');
-    empty.className = 'dashboard-status-project-empty';
-    empty.textContent = 'Ingen prosjekter med denne statusen.';
-    list.appendChild(empty);
-    return;
-  }
-  projects
-    .slice()
-    .sort((a,b)=>compareProjectsForSort(a, b, 'date_newest'))
-    .forEach(project=>{
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'dashboard-status-project-item';
-      btn.dataset.dashboardOpenProject = project.id || '';
-      const title = project.projectNumber
-        ? `${project.projectNumber} - ${project.name || 'Uten navn'}`
-        : (project.name || 'Uten navn');
-      const status = getProjectStatusConfig(project);
-      const lineCount = Array.isArray(project.lines) ? project.lines.length : 0;
-      const titleEl = document.createElement('span');
-      titleEl.className = 'dashboard-status-project-title';
-      titleEl.textContent = title;
-      const metaEl = document.createElement('span');
-      metaEl.className = 'dashboard-status-project-meta';
-      metaEl.textContent = `${project.customer || 'Uten kunde'} | ${fmtIntNO.format(lineCount)} linjer`;
-      const statusEl = document.createElement('span');
-      statusEl.className = `project-status-badge is-${status.tone}`;
-      statusEl.textContent = status.label;
-      btn.append(titleEl, metaEl, statusEl);
-      list.appendChild(btn);
+function loadDismissedEmailProjectSuggestions(){
+  const storageKey = getEmailProjectSuggestionDismissedStorageKey();
+  const values = readLocalJson(storageKey, []);
+  emailProjectSuggestionState.dismissed = new Set(
+    (Array.isArray(values) ? values : [])
+      .map(value=>String(value || '').trim())
+      .filter(Boolean)
+  );
+  emailProjectSuggestionState.dismissedStorageKey = storageKey;
+}
+
+function saveDismissedEmailProjectSuggestions(){
+  writeLocalJson(
+    getEmailProjectSuggestionDismissedStorageKey(),
+    Array.from(emailProjectSuggestionState.dismissed)
+  );
+}
+
+function getEmailAddressFromMessage(message){
+  return String(message?.from?.emailAddress?.address || '').trim();
+}
+
+function getEmailSenderName(message){
+  return String(message?.from?.emailAddress?.name || '').trim();
+}
+
+function getCustomerNameFromEmailAddress(address){
+  const domain = String(address || '').split('@')[1] || '';
+  const company = domain.split('.')[0] || '';
+  return company ? company.replace(/[-_]+/g, ' ').trim().toUpperCase() : '';
+}
+
+function getContactRecordByEmail(address){
+  const key = String(address || '').trim().toLowerCase();
+  if (!key) return null;
+  return flattenGlobalContacts().find(contact=>String(contact?.email || '').trim().toLowerCase() === key) || null;
+}
+
+function formatDashboardEmailReceived(value){
+  const date = new Date(value || 0);
+  if (Number.isNaN(date.getTime())) return '';
+  return new Intl.DateTimeFormat('no-NO', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  }).format(date);
+}
+
+function formatEmailMessageMeta(message){
+  const fromAddress = getEmailAddressFromMessage(message);
+  const contact = getContactRecordByEmail(fromAddress);
+  const senderName = getEmailSenderName(message);
+  const contactPerson = contact?.name || senderName || fromAddress || 'Ukjent kontakt';
+  const email = fromAddress ? ` (${fromAddress})` : '';
+  const customer = contact?.customerName || getCustomerNameFromEmailAddress(fromAddress) || '-';
+  const received = formatDashboardEmailReceived(message?.receivedDateTime) || '-';
+  return `${contactPerson}${email} | ${customer} | ${received}`;
+}
+
+function getProjectEmailConversationIds(){
+  const ids = new Set();
+  projectState.projects.forEach(project=>{
+    const id = String(project?.sourceEmailConversationId || '').trim();
+    if (id) ids.add(id);
+  });
+  return ids;
+}
+
+function getProjectEmailMessageIds(){
+  const ids = new Set();
+  projectState.projects.forEach(project=>{
+    const id = String(project?.sourceEmailMessageId || '').trim();
+    if (id) ids.add(id);
+  });
+  return ids;
+}
+
+function buildDashboardEmailProjectSuggestions(){
+  const dismissed = emailProjectSuggestionState.dismissed;
+  const projectConversationIds = getProjectEmailConversationIds();
+  const projectMessageIds = getProjectEmailMessageIds();
+  const byConversation = new Map();
+  (Array.isArray(emailViewState.messages) ? emailViewState.messages : []).forEach(message=>{
+    const conversationId = String(message?.conversationId || message?.id || '').trim();
+    const messageId = String(message?.id || '').trim();
+    if (!conversationId || dismissed.has(conversationId) || projectConversationIds.has(conversationId) || projectMessageIds.has(messageId)) return;
+    const current = byConversation.get(conversationId);
+    const messageTime = getDashboardActionTimestamp(message.receivedDateTime, Date.now());
+    const currentTime = current ? getDashboardActionTimestamp(current.receivedDateTime, Date.now()) : Infinity;
+    if (!current || messageTime < currentTime){
+      byConversation.set(conversationId, message);
+    }
+  });
+  return Array.from(byConversation.entries())
+    .sort((a, b)=>getDashboardActionTimestamp(b[1].receivedDateTime) - getDashboardActionTimestamp(a[1].receivedDateTime))
+    .slice(0, 20)
+    .map(([conversationId, message])=>{
+      const fromAddress = getEmailAddressFromMessage(message);
+      const contact = getContactRecordByEmail(fromAddress);
+      const senderName = getEmailSenderName(message);
+      const contactPerson = contact?.name || senderName || fromAddress;
+      const customer = contact?.customerName || getCustomerNameFromEmailAddress(fromAddress);
+      const subject = String(message?.subject || '').trim() || '(Uten emne)';
+      return {
+        id: conversationId,
+        conversationId,
+        messageId: String(message?.id || '').trim(),
+        subject,
+        projectName: subject,
+        customer,
+        contactPerson,
+        from: fromAddress,
+        receivedLabel: formatDashboardEmailReceived(message.receivedDateTime),
+        preview: getEmailPreviewTextModule(message)
+      };
     });
 }
 
-function openDashboardProjectStatusModal(statusId){
-  const modal = $('dashboardProjectStatusModal');
-  if (!modal) return;
-  const normalized = String(statusId || 'all').trim() || 'all';
-  modal.dataset.statusId = normalized;
-  const title = $('dashboardProjectStatusTitle');
-  const subtitle = $('dashboardProjectStatusSubtitle');
-  const projects = getProjectsForDashboardStatus(normalized);
-  const statusConfig = normalized === 'all' ? null : getProjectStatusConfig(normalized);
-  if (title) title.textContent = statusConfig ? `Prosjekter: ${statusConfig.label}` : 'Alle prosjekter';
-  if (subtitle) subtitle.textContent = `${fmtIntNO.format(projects.length)} prosjekter`;
-  renderDashboardProjectStatusList(normalized);
-  modal.style.display = 'flex';
+function renderDashboardEmailProjectSuggestionsWidget(){
+  if (emailProjectSuggestionState.dismissedStorageKey !== getEmailProjectSuggestionDismissedStorageKey()){
+    loadDismissedEmailProjectSuggestions();
+  }
+  const suggestions = buildDashboardEmailProjectSuggestions();
+  emailProjectSuggestionState.suggestionsById = new Map(suggestions.map(suggestion=>[suggestion.id, suggestion]));
+  renderDashboardEmailProjectSuggestionsWidgetModule(suggestions);
 }
 
-function closeDashboardProjectStatusModal(){
-  const modal = $('dashboardProjectStatusModal');
-  if (!modal) return;
-  modal.style.display = 'none';
-  delete modal.dataset.statusId;
+function handleDashboardRecommendedAction(actionId, triggerBtn = null){
+  const action = dashboardRecommendedActionState.actionsById.get(String(actionId || ''));
+  if (!action) return;
+  if (action.type === 'create-folder'){
+    void createProjectFolderFromTemplate(action.projectId, triggerBtn).finally(()=>renderMainDashboard());
+    return;
+  }
+  if (action.type === 'add-line'){
+    startNewLineForProject(action.projectId);
+    return;
+  }
+  if (action.type === 'follow-up'){
+    openProjectFlowProjectFromDashboardStatus(action.flowStatus || getProjectFlowStatusForProject(getProjectById(action.projectId)).label, action.projectId);
+    return;
+  }
+  if (action.type === 'email'){
+    setDashboardPage('email', { fromNavigation: true });
+    window.setTimeout(()=>selectEmailMessage(action.messageId), 0);
+  }
+}
+
+function openProjectModalFromEmailSuggestion(suggestionId){
+  const suggestion = emailProjectSuggestionState.suggestionsById.get(String(suggestionId || ''));
+  if (!suggestion) return;
+  openProjectModal({
+    mode: 'create',
+    sourceEmail: {
+      conversationId: suggestion.conversationId,
+      messageId: suggestion.messageId,
+      subject: suggestion.subject,
+      from: suggestion.from,
+      projectName: suggestion.projectName,
+      customer: suggestion.customer,
+      contactPerson: suggestion.contactPerson
+    }
+  });
+}
+
+function scrollEmailMessageIntoView(messageId){
+  const normalizedId = String(messageId || '').trim();
+  if (!normalizedId) return;
+  window.setTimeout(()=>{
+    const target = Array.from(document.querySelectorAll('[data-email-message-id]'))
+      .find(item=>item.getAttribute('data-email-message-id') === normalizedId);
+    if (target){
+      target.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'auto' });
+    }
+  }, 0);
+}
+
+function openEmailFromProjectSuggestion(suggestionId){
+  const suggestion = emailProjectSuggestionState.suggestionsById.get(String(suggestionId || ''));
+  if (!suggestion?.messageId) return;
+  setDashboardPage('email', { fromNavigation: false });
+  emailViewState.selectedMessageId = suggestion.messageId;
+  renderEmailMessages(emailViewState.messages);
+  scrollEmailMessageIntoView(suggestion.messageId);
+}
+
+function dismissEmailProjectSuggestion(suggestionId){
+  const id = String(suggestionId || '').trim();
+  if (!id) return;
+  emailProjectSuggestionState.dismissed.add(id);
+  saveDismissedEmailProjectSuggestions();
+  renderDashboardEmailProjectSuggestionsWidget();
+}
+
+function openProjectFlowProjectFromDashboardStatus(statusLabel, projectId = ''){
+  const label = String(statusLabel || '').trim();
+  const id = String(projectId || '').trim();
+  if (!label) return;
+  closeDashboardProjectStatusModal();
+  if (id){
+    projectFlowState.selectedProjectId = id;
+    projectFlowState.dashboardStatusFilter = '';
+  } else {
+    projectFlowState.selectedProjectId = PROJECT_FLOW_ALL_PROJECTS;
+    projectFlowState.dashboardStatusFilter = label;
+  }
+  const select = $('projectFlowProjectSelect');
+  if (select) select.value = projectFlowState.selectedProjectId;
+  setDashboardPage('project-flow', { fromNavigation: true });
+  renderProjectFlowView();
+  scrollPageToTop();
+  window.setTimeout(()=>{
+    scrollPageToTop();
+    const scroller = document.querySelector?.('.project-flow-scroller');
+    if (scroller) scroller.scrollTop = 0;
+  }, 0);
+}
+
+function openDashboardProjectStatusModal(statusId){
+  openDashboardProjectStatusModalModule(projectState.projects, statusId, {
+    compareProjectsForSort,
+    getProjectStatusConfig,
+    normalizeProjectStatus
+  });
+}
+
+function openDashboardFlowStatusModal(statusLabel){
+  loadProjectFlowState();
+  openDashboardFlowStatusModalModule(projectState.projects, statusLabel, {
+    compareProjectsForSort,
+    getProjectFlowStatusForProject,
+    getProjectFlowTaskCount: projectId=>getProjectFlowMilestones(projectId).length
+  });
 }
 
 function openDashboardProjectFromStatusList(projectId){
@@ -8104,58 +7103,29 @@ function openDashboardProjectFromStatusList(projectId){
   }
   setActiveProject(project);
   projectState.expandedProjectId = project.id;
-  setDashboardPage('projects');
+  setDashboardPage('projects', { replaceUrl: true });
   renderProjectDashboard();
   window.setTimeout(()=>scrollProjectIntoView(project.id), 0);
 }
 
 function renderMainDashboard(){
+  ensureProjectFolderStatusesLoaded();
   renderDashboardTotalsWidget();
   renderDashboardProjectStatusWidget();
   renderDashboardFlowStatusWidget();
-}
-
-function formatProjectFlowStatusHours(milliseconds){
-  return `${Math.max(1, Math.floor(milliseconds / 3600000))} t`;
-}
-
-function formatProjectFlowStatusDays(milliseconds){
-  return `${Math.max(1, Math.floor(milliseconds / 86400000))} d`;
+  renderDashboardRecommendedActionsWidget();
+  renderDashboardEmailProjectSuggestionsWidget();
+  if (canAccessProjectMailbox() && $('emailMessagesList')?.dataset.loaded !== '1'){
+    void loadEmailMessages({ silent: true });
+  }
 }
 
 function getProjectFlowStatusForProject(project){
   const projectId = typeof project === 'object' ? project?.id : project;
   const tasks = getProjectFlowMilestones(projectId);
-  const tasksByPhase = getProjectFlowTasksByPhase(tasks);
-  const firstPhaseTasks = tasksByPhase.get(PROJECT_FLOW_PHASES[0].id) || [];
-  if (!firstPhaseTasks.some(task=>task.completed)){
-    const projectTime = new Date(project?.createdAt || 0).getTime();
-    const untreatedAge = Number.isFinite(projectTime) && projectTime > 0 ? Date.now() - projectTime : 0;
-    const stale = untreatedAge >= 24 * 60 * 60 * 1000;
-    return {
-      label: 'Ubehandlet',
-      tone: stale ? 'danger' : 'idle',
-      ageText: stale ? formatProjectFlowStatusHours(untreatedAge) : ''
-    };
-  }
-  let lastCompletedPhase = PROJECT_FLOW_PHASES[0];
-  for (const phase of PROJECT_FLOW_PHASES.slice(1)){
-    const phaseTasks = tasksByPhase.get(phase.id) || [];
-    if (!phaseTasks.length) break;
-    const hasOpenTask = phaseTasks.some(task=>!task.completed);
-    if (hasOpenTask){
-      const latestActivity = Math.max(...phaseTasks.filter(task=>!task.completed).map(getProjectFlowTaskActivityTime));
-      const age = Number.isFinite(latestActivity) && latestActivity > 0 ? Date.now() - latestActivity : 0;
-      const stale = age >= 7 * 24 * 60 * 60 * 1000;
-      return {
-        label: phase.label,
-        tone: stale ? 'danger' : 'warning',
-        ageText: stale ? formatProjectFlowStatusDays(age) : ''
-      };
-    }
-    lastCompletedPhase = phase;
-  }
-  return { label: lastCompletedPhase.label, tone: 'success' };
+  return getProjectFlowStatusForProjectModule(project, tasks, {
+    parseProjectFlowDate
+  });
 }
 
 function setProjectFlowAllExpanded(expanded){
@@ -9272,7 +8242,7 @@ function renderProjectFlowView(options = {}){
             remove.className = 'project-flow-delete';
             remove.dataset.projectFlowDelete = item.id;
             remove.dataset.projectId = item.projectId;
-            remove.textContent = '×';
+            remove.textContent = '✕';
             remove.title = 'Slett oppgave';
             const resizeEnd = document.createElement('span');
             resizeEnd.className = 'project-flow-resize-handle is-end';
@@ -9336,396 +8306,37 @@ function renderProjectFlowView(options = {}){
 }
 
 function renderProjectDashboard(){
-  renderMainDashboard();
-  const listEl = $('projectList');
-  if (!listEl) return;
-  loadProjectFlowState();
-  updateProjectArchiveUi();
-  listEl.innerHTML = '';
-  if (!projectState.projects.length){
-    const empty = document.createElement('div');
-    empty.className = 'empty-state';
-    const text = document.createElement('p');
-    text.textContent = 'Ingen prosjekter er registrert ennå.';
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'btn alt';
-    btn.dataset.action = 'create-project';
-    btn.textContent = 'Nytt prosjekt';
-    btn.disabled = !authState.loggedIn || projectState.showArchive === true;
-    empty.appendChild(text);
-    empty.appendChild(btn);
-    listEl.appendChild(empty);
-    projectState.expandedProjectId = null;
-    renderOffersList();
-    renderProjectFlowView();
-    return;
-  }
-  const archiveMode = projectState.showArchive === true;
-  const projectsForView = projectState.projects.filter(project=>archiveMode ? projectIsArchived(project) : !projectIsArchived(project));
-  const visibleProjects = projectsForView.filter(project=>projectMatchesSearch(project));
-  ensureProjectFolderStatusesLoaded();
-  if (!visibleProjects.length){
-    const empty = document.createElement('div');
-    empty.className = 'empty-state';
-    const text = document.createElement('p');
-    if (!projectsForView.length){
-      text.textContent = archiveMode ? 'Ingen prosjekter i arkivet.' : 'Ingen aktive prosjekter.';
-    } else {
-      text.textContent = 'Ingen prosjekter matcher søket.';
+  renderProjectsPage({
+    authState,
+    projectState,
+    callbacks: {
+      ensureProjectFolderStatusesLoaded,
+      loadProjectFlowState,
+      projectMatchesSearch,
+      renderMainDashboard,
+      renderOffersList,
+      renderProjectFlowView,
+      updateProjectArchiveUi
+    },
+    rowHelpers: {
+      buildAddonSelectorControl,
+      formatLineSkinMaterialCost,
+      formatLineSummary,
+      formatLineTotal,
+      formatLineUpdatedText,
+      formatProjectMarginBadgeText,
+      formatProjectTimestamp,
+      getProjectFlowStatusForProject,
+      getProjectMaterialMarginStats,
+      getProjectResponsibleName,
+      getProjectSelectedAddonConfig,
+      getSelectedAddonConfig,
+      projectHasConfirmedFolder,
+      resolveLineDisplayTotal,
+      resolveLineSkinMaterialCost,
+      shouldUseWarningForProjectMargin
     }
-    empty.appendChild(text);
-    listEl.appendChild(empty);
-    renderOffersList();
-    renderProjectFlowView();
-    return;
-  }
-  const frag = document.createDocumentFragment();
-  visibleProjects.forEach(project=>{
-    const expanded = projectState.expandedProjectId === project.id;
-    const projectLines = Array.isArray(project.lines) ? project.lines : [];
-    const projectTotal = round2(projectLines.reduce((sum, line)=>{
-      const lineTotal = resolveLineDisplayTotal(line);
-      return Number.isFinite(lineTotal) ? sum + lineTotal : sum;
-    }, 0));
-    const projectBusbarTotal = round2(projectLines.reduce((sum, line)=>{
-      const busbarTotal = Number(line?.totals?.totalExMontasje);
-      return Number.isFinite(busbarTotal) ? sum + busbarTotal : sum;
-    }, 0));
-    const projectSkinMaterialTotal = round2(projectLines.reduce((sum, line)=>{
-      const material = resolveLineSkinMaterialCost(line);
-      return Number.isFinite(material) ? sum + material : sum;
-    }, 0));
-    const projectMontasjeTotal = round2(projectLines.reduce((sum, line)=>{
-      const montasjeTotal = Number(line?.totals?.totalInclMontasje);
-      return Number.isFinite(montasjeTotal) ? sum + montasjeTotal : sum;
-    }, 0));
-    const row = document.createElement('section');
-    row.className = 'project-row';
-    row.dataset.projectRowId = project.id || '';
-    if (expanded) row.classList.add('is-expanded');
-
-    const head = document.createElement('div');
-    head.className = 'project-row-head';
-    const titleWrap = document.createElement('div');
-    titleWrap.className = 'project-row-title';
-    const title = document.createElement('h3');
-    const projectTitle = project.name || 'Uten navn';
-    title.textContent = project.projectNumber
-      ? `${project.projectNumber} - ${projectTitle}`
-      : projectTitle;
-    const flowStatus = getProjectFlowStatusForProject(project);
-    const titleRow = document.createElement('div');
-    titleRow.className = 'project-title-row';
-    const statusBadge = document.createElement('span');
-    statusBadge.className = `project-flow-status-badge is-${flowStatus.tone}`;
-    statusBadge.textContent = flowStatus.ageText
-      ? `${flowStatus.label} - ${flowStatus.ageText}`
-      : flowStatus.label;
-    const projectStatus = getProjectStatusConfig(project);
-    const projectStatusBtn = document.createElement('button');
-    projectStatusBtn.type = 'button';
-    projectStatusBtn.className = `project-status-badge is-${projectStatus.tone}`;
-    projectStatusBtn.dataset.projectStatusEdit = project.id;
-    projectStatusBtn.textContent = projectStatus.label;
-    projectStatusBtn.title = archiveMode
-      ? 'Endre prosjektstatus for å flytte prosjektet tilbake til prosjektoversikten.'
-      : 'Endre prosjektstatus';
-    titleRow.append(title, statusBadge, projectStatusBtn);
-    const projectAddonConfig = getProjectSelectedAddonConfig(project);
-    const createFieldText = (label, value)=>{
-      const wrapper = document.createElement('span');
-      wrapper.className = 'project-field-text';
-      const labelEl = document.createElement('strong');
-      labelEl.textContent = `${label}:`;
-      const valueEl = document.createElement('span');
-      valueEl.textContent = ` ${value || '-'}`;
-      wrapper.append(labelEl, valueEl);
-      return wrapper;
-    };
-    const createInfoRow = (label, value)=>{
-      const infoRow = document.createElement('div');
-      infoRow.className = 'project-info-row project-row-meta';
-      infoRow.appendChild(createFieldText(label, value));
-      return infoRow;
-    };
-    const responsible = createInfoRow('Prosjektansvarlig', getProjectResponsibleName(project) || '-');
-    const customer = createInfoRow('Kunde', project.customer || '-');
-    const contact = createInfoRow('Kontaktperson', project.contactPerson || '-');
-    const created = createInfoRow('Opprettet', formatProjectTimestamp(project.createdAt));
-    const lineCount = projectLines.length;
-    const summary = createInfoRow('Linjer', String(lineCount));
-    const marginBadge = document.createElement('p');
-    marginBadge.className = 'project-margin-badge';
-    marginBadge.textContent = formatProjectMarginBadgeText(project);
-    const marginStats = getProjectMaterialMarginStats(project);
-    if (marginStats.uniqueCount > 1){
-      marginBadge.classList.add('is-mixed');
-    }
-    if (shouldUseWarningForProjectMargin(marginStats)){
-      marginBadge.classList.add('is-warning');
-    }
-
-    const setMarginBtn = document.createElement('button');
-    setMarginBtn.type = 'button';
-    setMarginBtn.className = 'btn alt project-margin-btn';
-    setMarginBtn.dataset.projectSetMargin = project.id;
-    setMarginBtn.textContent = 'Endre';
-    setMarginBtn.disabled = archiveMode || !projectLines.length;
-
-    const marginRow = document.createElement('div');
-    marginRow.className = 'project-margin-row';
-    marginRow.appendChild(marginBadge);
-    marginRow.appendChild(setMarginBtn);
-
-    titleWrap.appendChild(titleRow);
-    titleWrap.appendChild(marginRow);
-    const infoStack = document.createElement('div');
-    infoStack.className = 'project-info-column';
-    infoStack.appendChild(responsible);
-    infoStack.appendChild(customer);
-    infoStack.appendChild(contact);
-    infoStack.appendChild(created);
-    infoStack.appendChild(summary);
-
-    const actions = document.createElement('div');
-    actions.className = 'project-row-actions';
-    const hasProjectFolder = projectHasConfirmedFolder(project);
-    const disableProjectActions = archiveMode;
-
-    const detailBtn = document.createElement('button');
-    detailBtn.type = 'button';
-    detailBtn.className = 'btn alt project-detail-toggle-btn';
-    detailBtn.dataset.projectDetail = project.id;
-    detailBtn.textContent = expanded ? 'Skjul linjer' : 'Vis linjer';
-    detailBtn.setAttribute('aria-expanded', expanded ? 'true' : 'false');
-    const safeProjectId = String(project.id || '').replace(/[^A-Za-z0-9_-]/g,'');
-    const detailId = `project-detail-${safeProjectId || Math.random().toString(36).slice(2)}`;
-    detailBtn.setAttribute('aria-controls', detailId);
-
-    const newLineBtn = document.createElement('button');
-    newLineBtn.type = 'button';
-    newLineBtn.className = 'btn';
-    newLineBtn.dataset.projectNewline = project.id;
-    newLineBtn.textContent = 'Ny linje';
-    newLineBtn.disabled = disableProjectActions;
-
-    const generateOfferBtn = document.createElement('button');
-    generateOfferBtn.type = 'button';
-    generateOfferBtn.className = 'btn';
-    generateOfferBtn.dataset.projectGenerateOffer = project.id;
-    generateOfferBtn.textContent = 'Generer tilbud';
-    generateOfferBtn.disabled = disableProjectActions || !projectLines.length || !hasProjectFolder;
-    if (!hasProjectFolder) generateOfferBtn.title = 'Prosjektmappe må opprettes før tilbud kan genereres.';
-
-    const openFolderBtn = document.createElement('button');
-    openFolderBtn.type = 'button';
-    openFolderBtn.className = 'btn alt';
-    openFolderBtn.dataset.projectOpenFolder = project.id;
-    openFolderBtn.textContent = 'Åpne prosjektmappe';
-    openFolderBtn.disabled = disableProjectActions || !authState.loggedIn || !hasProjectFolder;
-    if (!hasProjectFolder) openFolderBtn.title = 'Fant ingen prosjektmappe på SharePoint-stien.';
-
-    const createFolderBtn = document.createElement('button');
-    createFolderBtn.type = 'button';
-    createFolderBtn.className = 'btn alt';
-    createFolderBtn.dataset.projectCreateFolder = project.id;
-    createFolderBtn.textContent = 'Opprett prosjektmappe';
-    createFolderBtn.disabled = disableProjectActions || !authState.loggedIn;
-
-    const copyBtn = document.createElement('button');
-    copyBtn.type = 'button';
-    copyBtn.className = 'btn alt';
-    copyBtn.dataset.projectCopy = project.id;
-    copyBtn.textContent = 'Kopier';
-    copyBtn.disabled = disableProjectActions;
-
-    const editBtn = document.createElement('button');
-    editBtn.type = 'button';
-    editBtn.className = 'btn alt';
-    editBtn.dataset.projectCardEdit = project.id;
-    editBtn.textContent = 'Endre';
-    editBtn.disabled = disableProjectActions;
-
-    const deleteBtn = document.createElement('button');
-    deleteBtn.type = 'button';
-    deleteBtn.className = 'btn danger';
-    deleteBtn.dataset.projectDelete = project.id;
-    deleteBtn.textContent = 'Slett';
-    deleteBtn.disabled = disableProjectActions;
-
-    const actionButtons = document.createElement('div');
-    actionButtons.className = 'project-action-buttons';
-    actionButtons.appendChild(detailBtn);
-    actionButtons.appendChild(newLineBtn);
-    actionButtons.appendChild(generateOfferBtn);
-    actionButtons.appendChild(openFolderBtn);
-    actionButtons.appendChild(createFolderBtn);
-    actionButtons.appendChild(copyBtn);
-    actionButtons.appendChild(editBtn);
-    actionButtons.appendChild(deleteBtn);
-
-    const metricsStack = document.createElement('div');
-    metricsStack.className = 'project-metrics-column';
-    const createMetricText = (item)=>{
-      if (!item.plain) return createFieldText(item.label, item.value);
-      const wrapper = document.createElement('span');
-      wrapper.className = 'project-field-text';
-      const labelEl = document.createElement('span');
-      labelEl.textContent = `${item.label}:`;
-      const valueEl = document.createElement('span');
-      valueEl.textContent = ` ${item.value || '-'}`;
-      wrapper.append(labelEl, valueEl);
-      return wrapper;
-    };
-    [
-      { label: 'Total strømskinne', value: `${fmtNO.format(projectBusbarTotal)} NOK` },
-      { label: 'Materiellkost', value: `${fmtNO.format(projectSkinMaterialTotal)} NOK`, className: 'is-muted-italic', plain: true },
-      { label: 'Total montasje', value: `${fmtNO.format(projectMontasjeTotal)} NOK` },
-      { label: 'Totalsum inkludert i tilbud', value: `${fmtNO.format(projectTotal)} NOK` }
-    ].forEach(item=>{
-      const metricRow = document.createElement('div');
-      metricRow.className = `project-metric-row${item.className ? ` ${item.className}` : ''}`;
-      metricRow.appendChild(createMetricText(item));
-      metricsStack.appendChild(metricRow);
-    });
-
-    const addonStack = document.createElement('div');
-    addonStack.className = 'project-action-addon-stack';
-    ['include', 'show', 'unit'].forEach(group=>{
-      const controlRow = document.createElement('div');
-      controlRow.className = 'project-action-addon-row';
-      controlRow.appendChild(buildAddonSelectorControl(projectAddonConfig, {
-        className: 'project-inline-selectors',
-        scope: 'project',
-        projectId: project.id,
-        groups: [group]
-      }));
-      if (archiveMode){
-        controlRow.querySelectorAll('input, button, select, textarea').forEach(control=>{
-          control.disabled = true;
-        });
-      }
-      addonStack.appendChild(controlRow);
-    });
-
-    actions.appendChild(actionButtons);
-
-    head.appendChild(titleWrap);
-    head.appendChild(actions);
-    row.appendChild(head);
-
-    const bodyGrid = document.createElement('div');
-    bodyGrid.className = 'project-body-grid';
-    bodyGrid.appendChild(infoStack);
-    bodyGrid.appendChild(metricsStack);
-    bodyGrid.appendChild(addonStack);
-    row.appendChild(bodyGrid);
-
-    const detail = document.createElement('div');
-    detail.className = 'project-detail';
-    detail.id = detailId;
-    detail.hidden = !expanded;
-
-    const linesWrapper = document.createElement('div');
-    linesWrapper.className = 'project-detail-lines';
-    const lines = [...projectLines];
-    lines.sort((a,b)=>compareLinesForSort(a, b, projectState.lineSort));
-    if (!lines.length){
-      const emptyLine = document.createElement('p');
-      emptyLine.className = 'project-line-empty';
-      emptyLine.textContent = 'Ingen lagrede linjer. Klikk «Ny linje» for å starte.';
-      linesWrapper.appendChild(emptyLine);
-    } else {
-      lines.forEach(line=>{
-        const lineWrap = document.createElement('div');
-        lineWrap.className = 'project-line-item';
-        const lineMain = document.createElement('div');
-        lineMain.className = 'project-line-main';
-
-        const lineBtn = document.createElement('button');
-        lineBtn.type = 'button';
-        lineBtn.className = 'project-line-row';
-        lineBtn.dataset.lineEdit = line.id;
-        lineBtn.dataset.projectId = project.id;
-        lineBtn.disabled = archiveMode;
-
-        const nameSpan = document.createElement('span');
-        nameSpan.className = 'line-name';
-        nameSpan.textContent = line.lineNumber || 'Uten linjenummer';
-
-        const infoSpan = document.createElement('span');
-        infoSpan.className = 'line-info';
-        infoSpan.textContent = formatLineSummary(line);
-
-        const totalSpan = document.createElement('span');
-        totalSpan.className = 'line-total';
-        totalSpan.textContent = formatLineTotal(line);
-
-        const materialSpan = document.createElement('span');
-        materialSpan.className = 'line-material';
-        materialSpan.textContent = formatLineSkinMaterialCost(line);
-
-        const updatedSpan = document.createElement('span');
-        updatedSpan.className = 'line-updated';
-        updatedSpan.textContent = formatLineUpdatedText(line);
-
-        lineBtn.appendChild(nameSpan);
-        lineBtn.appendChild(infoSpan);
-        lineBtn.appendChild(materialSpan);
-        lineBtn.appendChild(totalSpan);
-        lineBtn.appendChild(updatedSpan);
-        const lineAddonControl = buildAddonSelectorControl(
-          getSelectedAddonConfig(line, projectAddonConfig),
-          {
-            className: 'line-addon-selectors',
-            scope: 'line',
-            projectId: project.id,
-            lineId: line.id
-          }
-        );
-        if (archiveMode){
-          lineAddonControl.querySelectorAll('input, button, select, textarea').forEach(control=>{
-            control.disabled = true;
-          });
-        }
-
-        const lineActionButtons = document.createElement('div');
-        lineActionButtons.className = 'line-action-buttons';
-
-        const lineEditBtn = document.createElement('button');
-        lineEditBtn.type = 'button';
-        lineEditBtn.className = 'btn alt line-edit-btn';
-        lineEditBtn.dataset.lineEdit = line.id;
-        lineEditBtn.dataset.projectId = project.id;
-        lineEditBtn.textContent = 'Endre';
-        lineEditBtn.disabled = archiveMode;
-
-        const lineDeleteBtn = document.createElement('button');
-        lineDeleteBtn.type = 'button';
-        lineDeleteBtn.className = 'btn danger line-delete-btn';
-        lineDeleteBtn.dataset.lineDelete = line.id;
-        lineDeleteBtn.dataset.projectId = project.id;
-        lineDeleteBtn.textContent = 'Slett';
-        lineDeleteBtn.disabled = archiveMode;
-
-        lineMain.appendChild(lineBtn);
-        lineMain.appendChild(lineAddonControl);
-        lineWrap.appendChild(lineMain);
-        lineActionButtons.appendChild(lineEditBtn);
-        lineActionButtons.appendChild(lineDeleteBtn);
-        lineWrap.appendChild(lineActionButtons);
-        linesWrapper.appendChild(lineWrap);
-      });
-    }
-    detail.appendChild(linesWrapper);
-    row.appendChild(detail);
-
-    frag.appendChild(row);
   });
-  listEl.appendChild(frag);
-  renderOffersList();
-  renderProjectFlowView();
 }
 
 async function initProjectDashboard(){
@@ -9768,6 +8379,7 @@ function applyDashboardQueryContext(){
   if (typeof history !== 'undefined' && history.replaceState){
     const cleanUrl = new URL(window.location.href);
     cleanUrl.search = '';
+    cleanUrl.searchParams.set('view', 'projects');
     history.replaceState({}, '', cleanUrl.toString());
   }
 }
@@ -9855,26 +8467,7 @@ function scrollProjectIntoView(projectId){
 }
 
 function updateProjectArchiveUi(){
-  const archiveMode = projectState.showArchive === true;
-  const toggleBtn = $('projectArchiveToggleBtn');
-  if (toggleBtn){
-    toggleBtn.textContent = archiveMode ? 'Prosjekter' : 'Prosjekt arkiv';
-    toggleBtn.setAttribute('aria-pressed', archiveMode ? 'true' : 'false');
-  }
-  const titleEl = document.querySelector('#dashboardView .dashboard-intro h2');
-  if (titleEl){
-    titleEl.textContent = archiveMode ? 'Prosjekt arkiv' : 'Prosjekter';
-  }
-  const introEl = document.querySelector('#dashboardView .dashboard-intro .muted-text');
-  if (introEl){
-    introEl.textContent = archiveMode
-      ? 'Arkiverte prosjekter er skrivebeskyttet. Du kan fortsatt vise og skjule linjer.'
-      : 'Velg et prosjekt, eller opprett nytt prosjekt. Prisverktøy åpnes på egen side.';
-  }
-  const newProjectBtn = $('newProjectBtn');
-  if (newProjectBtn){
-    newProjectBtn.disabled = !authState.loggedIn || archiveMode;
-  }
+  updateProjectArchiveUiModule(projectState.showArchive, authState.loggedIn);
 }
 
 function toggleProjectArchiveView(){
@@ -10474,7 +9067,8 @@ function submitProjectModal(){
       customerPostalPlace: knownDetails.customerPostalPlace || '',
       contactPhone: knownDetails.contactPhone || '',
       shouldSaveLineAfterCreate,
-      copySourceProjectId: wasCopyMode ? projectModalState.copySourceProjectId : null
+      copySourceProjectId: wasCopyMode ? projectModalState.copySourceProjectId : null,
+      sourceEmail: projectModalState.sourceEmail
     };
     openProjectDetailsModal(projectModalState.pendingDetails);
     return;
@@ -10494,7 +9088,10 @@ function submitProjectModal(){
       contactPhone: knownDetails.contactPhone
     });
   } else {
-    persistProjectInfo(projectName, customerName, contactPerson, knownDetails);
+    persistProjectInfo(projectName, customerName, contactPerson, {
+      ...knownDetails,
+      sourceEmail: projectModalState.sourceEmail
+    });
   }
   closeProjectModal();
   if (shouldSaveLineAfterCreate){
@@ -10509,8 +9106,7 @@ function submitProjectModal(){
 function openProjectDetailsModal(details){
   const modal = $('projectDetailsModal');
   if (!modal) return;
-  const projectModalEl = $('projectModal');
-  if (projectModalEl) projectModalEl.style.display = 'none';
+  closeFormModal('projectForm');
   const customerEl = $('projectDetailsCustomer');
   const addressEl = $('projectDetailsAddress');
   const postalPlaceEl = $('projectDetailsPostalPlace');
@@ -10554,7 +9150,8 @@ function submitProjectDetailsModal(){
     copySourceProjectId: pending.copySourceProjectId || null,
     customerAddress: address,
     customerPostalPlace: postalPlace,
-    contactPhone: phone
+    contactPhone: phone,
+    sourceEmail: pending.sourceEmail || null
   });
   closeProjectDetailsModal();
   closeProjectModal();
@@ -10576,14 +9173,6 @@ if (projectSubmit){
 const projectCancel = $('projectCancel');
 if (projectCancel){
   projectCancel.addEventListener('click', cancelProjectModal);
-}
-const projectModal = $('projectModal');
-if (projectModal){
-  projectModal.addEventListener('click', evt=>{
-    if (evt.target === projectModal){
-      cancelProjectModal();
-    }
-  });
 }
 const projectDetailsCancel = $('projectDetailsCancel');
 if (projectDetailsCancel){
@@ -10830,8 +9419,7 @@ const refreshProjectFlowBtn = $('refreshProjectFlowBtn');
 if (refreshProjectFlowBtn){
   refreshProjectFlowBtn.addEventListener('click', ()=>{
     projectFlowState.dashboardStatusFilter = '';
-    renderProjectFlowView();
-    setProjectFlowStatus('Oppdatert.', 'ok');
+    void refreshProjectFlowView();
   });
 }
 
@@ -10861,6 +9449,19 @@ if (dashboardProjectStatusModal){
     const projectBtn = evt.target?.closest?.('[data-dashboard-open-project]');
     if (projectBtn){
       openDashboardProjectFromStatusList(projectBtn.dataset.dashboardOpenProject);
+      return;
+    }
+    const flowProjectBtn = evt.target?.closest?.('[data-dashboard-open-flow-project]');
+    if (flowProjectBtn){
+      openProjectFlowProjectFromDashboardStatus(
+        dashboardProjectStatusModal.dataset.flowStatusLabel || '',
+        flowProjectBtn.dataset.dashboardOpenFlowProject || ''
+      );
+      return;
+    }
+    const flowAllBtn = evt.target?.closest?.('[data-dashboard-open-flow-all]');
+    if (flowAllBtn){
+      openProjectFlowProjectFromDashboardStatus(flowAllBtn.dataset.dashboardOpenFlowAll || '');
     }
   });
 }
@@ -10875,7 +9476,36 @@ if (dashboardFlowStatusSummary){
   dashboardFlowStatusSummary.addEventListener('click', evt=>{
     const btn = evt.target?.closest?.('[data-dashboard-flow-status]');
     if (!btn) return;
-    openProjectFlowFromDashboardStatus(btn.dataset.dashboardFlowStatus || '');
+    openDashboardFlowStatusModal(btn.dataset.dashboardFlowStatus || '');
+  });
+}
+
+const dashboardRecommendedActions = $('dashboardRecommendedActions');
+if (dashboardRecommendedActions){
+  dashboardRecommendedActions.addEventListener('click', evt=>{
+    const btn = evt.target?.closest?.('[data-dashboard-recommended-action]');
+    if (!btn) return;
+    handleDashboardRecommendedAction(btn.dataset.dashboardRecommendedAction || '', btn);
+  });
+}
+
+const dashboardEmailProjectSuggestions = $('dashboardEmailProjectSuggestions');
+if (dashboardEmailProjectSuggestions){
+  dashboardEmailProjectSuggestions.addEventListener('click', evt=>{
+    const dismissBtn = evt.target?.closest?.('[data-dashboard-dismiss-email-project]');
+    if (dismissBtn){
+      dismissEmailProjectSuggestion(dismissBtn.dataset.dashboardDismissEmailProject || '');
+      return;
+    }
+    const createBtn = evt.target?.closest?.('[data-dashboard-create-project-from-email]');
+    if (createBtn){
+      openProjectModalFromEmailSuggestion(createBtn.dataset.dashboardCreateProjectFromEmail || '');
+      return;
+    }
+    const card = evt.target?.closest?.('[data-dashboard-open-suggestion-email]');
+    if (card){
+      openEmailFromProjectSuggestion(card.dataset.dashboardOpenSuggestionEmail || '');
+    }
   });
 }
 
@@ -11103,8 +9733,28 @@ if (calendarGridViewEl){
 const emailMessagesListEl = $('emailMessagesList');
 if (emailMessagesListEl){
   emailMessagesListEl.addEventListener('click', evt=>{
+    const actionBtn = evt.target instanceof Element ? evt.target.closest('[data-email-action]') : null;
+    if (actionBtn){
+      const action = actionBtn.getAttribute('data-email-action') || '';
+      if (action === 'open'){
+        const message = getSelectedEmailMessage();
+        if (message?.webLink) window.open(message.webLink, '_blank', 'noopener,noreferrer');
+      } else if (action === 'mark-read'){
+        void markSelectedEmailRead();
+      } else if (action === 'delete'){
+        void deleteSelectedEmail();
+      }
+      return;
+    }
     const target = evt.target instanceof Element ? evt.target.closest('[data-email-message-id]') : null;
     if (!target) return;
+    selectEmailMessage(target.getAttribute('data-email-message-id') || '');
+  });
+  emailMessagesListEl.addEventListener('keydown', evt=>{
+    if (evt.key !== 'Enter' && evt.key !== ' ') return;
+    const target = evt.target instanceof Element ? evt.target.closest('[data-email-message-id]') : null;
+    if (!target) return;
+    evt.preventDefault();
     selectEmailMessage(target.getAttribute('data-email-message-id') || '');
   });
 }
@@ -11382,6 +10032,22 @@ if (editProjectBtn){
 
 document.addEventListener('keydown', evt=>{
   if (evt.key === 'Escape'){
+    const openFormModals = Array.from(document.querySelectorAll('.form-modal-backdrop:not([hidden])'));
+    const topFormModal = openFormModals.at(-1);
+    if (topFormModal){
+      const formId = String(topFormModal.id || '').endsWith('Modal')
+        ? String(topFormModal.id).slice(0, -5)
+        : '';
+      if (formId === 'projectForm') cancelProjectModal();
+      else if (formId === 'calendarEventForm') closeCalendarEventForm();
+      else if (formId === 'emailComposeForm') closeEmailComposeForm();
+      else if (formId === 'companyEditForm') closeCompanyEditForm();
+      else if (formId === 'contactEditForm') closeContactEditForm();
+      else if (formId === 'projectFlowMilestoneForm') closeProjectFlowMilestoneForm();
+      else if (formId) closeFormModal(formId);
+      evt.preventDefault();
+      return;
+    }
     const loginModalEl = $('loginModal');
     if (loginModalEl && loginModalEl.style.display === 'flex'){
       hideLoginModal();
@@ -11407,9 +10073,19 @@ document.addEventListener('keydown', evt=>{
       closeOfferDetailsWarning(false);
       return;
     }
-    const projectModalEl = $('projectModal');
-    if (projectModalEl && projectModalEl.style.display === 'flex'){
-      cancelProjectModal();
+    const projectStatusModalEl = $('projectStatusModal');
+    if (projectStatusModalEl && projectStatusModalEl.style.display === 'flex'){
+      closeProjectStatusModal();
+      return;
+    }
+    const dashboardProjectStatusModalEl = $('dashboardProjectStatusModal');
+    if (dashboardProjectStatusModalEl && dashboardProjectStatusModalEl.style.display === 'flex'){
+      closeDashboardProjectStatusModal();
+      return;
+    }
+    const registerModalEl = $('registerModal');
+    if (registerModalEl && registerModalEl.style.display === 'flex'){
+      hideRegisterModal();
     }
   }
 });

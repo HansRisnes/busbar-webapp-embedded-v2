@@ -166,7 +166,31 @@
             </div>
             <div id="dashboardFlowStatusSummary" class="dashboard-status-summary"></div>
           </article>
-          <article class="main-dashboard-widget is-small"><span>Tomt vindu</span></article>
+          <article class="main-dashboard-widget dashboard-copilot-widget is-small">
+            <div class="dashboard-widget-header">
+              <div>
+                <h3>Copilot</h3>
+              </div>
+            </div>
+          </article>
+          <article class="main-dashboard-widget dashboard-actions-widget is-wide">
+            <div class="dashboard-widget-header">
+              <div>
+                <h3>Anbefalte handlinger</h3>
+                <p class="muted-text">Oppgaver som bør behandles fra prosjekter, prosjektflyt og e-post.</p>
+              </div>
+            </div>
+            <div id="dashboardRecommendedActions" class="dashboard-recommended-actions"></div>
+          </article>
+          <article class="main-dashboard-widget dashboard-email-project-widget is-wide">
+            <div class="dashboard-widget-header">
+              <div>
+                <h3>Prosjektforslag</h3>
+                <p class="muted-text">E-posttråder som kan opprettes som nye prosjekter.</p>
+              </div>
+            </div>
+            <div id="dashboardEmailProjectSuggestions" class="dashboard-email-project-suggestions"></div>
+          </article>
           <article class="main-dashboard-widget is-tall"><span>Tomt vindu</span></article>
           <article class="main-dashboard-widget is-small"><span>Tomt vindu</span></article>
           <article class="main-dashboard-widget is-wide"><span>Tomt vindu</span></article>
@@ -410,14 +434,6 @@
         <div class="graph-toolbar section-toolbar">
           <div class="toolbar-left">
             <button id="composeEmailBtn" type="button" class="btn alt">Ny e-post</button>
-            <div id="emailMessageActions" class="graph-inline-actions email-message-actions" hidden>
-              <span id="selectedEmailLabel" class="muted-text"></span>
-              <div class="email-message-action-buttons">
-                <button id="openSelectedEmailBtn" type="button" class="btn alt">Åpne</button>
-                <button id="markSelectedEmailReadBtn" type="button" class="btn alt">Marker lest</button>
-                <button id="deleteSelectedEmailBtn" type="button" class="btn danger">Slett</button>
-              </div>
-            </div>
           </div>
           <div class="toolbar-right">
             <span id="emailStatus" class="graph-status muted-text"></span>
@@ -639,21 +655,21 @@
       <h3 id="loginTitle">Logg p&aring;</h3>
       <form class="login-form" onsubmit="return false;" autocomplete="off">
         <button id="microsoftLoginBtn" type="button" class="btn microsoft-login-btn">Logg p&aring; med Microsoft</button>
-        <div class="login-divider" aria-hidden="true"><span>eller</span></div>
-        <label for="loginUsername">Brukernavn (e-post)
+        <div class="login-divider" aria-hidden="true" hidden><span>eller</span></div>
+        <label for="loginUsername" hidden>Brukernavn (e-post)
           <input id="loginUsername" type="text" inputmode="text" autocomplete="username">
         </label>
-        <label for="loginPassword">Passord
+        <label for="loginPassword" hidden>Passord
           <input id="loginPassword" type="password" autocomplete="current-password" required>
         </label>
-        <div class="register-inline">
+        <div class="register-inline" hidden>
           <span>Ved f&oslash;rste innlogging opprett ny bruker</span>
           <button id="registerSubmit" type="button" class="btn alt btn-small">Opprett bruker</button>
         </div>
         <p id="loginError" class="login-error" role="alert"></p>
         <div class="actions">
           <button id="loginCancel" type="button" class="btn alt">Avbryt</button>
-          <button id="loginSubmit" type="button" class="btn">Logg p&aring;</button>
+          <button id="loginSubmit" type="button" class="btn" hidden>Logg p&aring;</button>
         </div>
       </form>
     </div>
@@ -665,6 +681,7 @@
       <p id="dashboardProjectStatusSubtitle" class="muted-text"></p>
       <div id="dashboardProjectStatusList" class="dashboard-status-project-list"></div>
       <div class="actions">
+        <button id="dashboardProjectStatusOpenAllFlow" type="button" class="btn" hidden>Vis alle prosjekter</button>
         <button id="dashboardProjectStatusClose" type="button" class="btn alt">Lukk</button>
       </div>
     </div>
@@ -704,10 +721,7 @@
     </div>
   </div>
 
-  <div id="projectModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="projectTitle">
-    <div class="modal">
-      <h3 id="projectTitle">Prosjektinformasjon</h3>
-      <form class="project-form" onsubmit="return false;" autocomplete="off">
+  <form id="projectForm" class="project-form" onsubmit="return false;" autocomplete="off" hidden>
         <label>Prosjektnavn
           <div class="suggest-wrapper">
             <input id="projectNameInput" type="text" autocomplete="off" required>
@@ -728,12 +742,10 @@
         </label>
         <p id="projectError" class="login-error project-error" role="alert"></p>
         <div class="actions">
-          <button id="projectCancel" type="button" class="btn alt">Avbryt</button>
           <button id="projectSubmit" type="button" class="btn" disabled>Fortsett</button>
+          <button id="projectCancel" type="button" class="btn alt">Avbryt</button>
         </div>
-      </form>
-    </div>
-  </div>
+  </form>
 
   <div id="projectDetailsModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="projectDetailsTitle">
     <div class="modal">

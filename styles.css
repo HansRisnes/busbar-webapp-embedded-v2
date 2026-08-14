@@ -200,6 +200,10 @@ main.app-views{
   grid-row:span 2;
 }
 
+.dashboard-total-widget.is-large{
+  grid-row:span 1;
+}
+
 .main-dashboard-widget.is-medium{
   grid-column:span 2;
   grid-row:span 2;
@@ -369,8 +373,30 @@ main.app-views{
 }
 
 .dashboard-flow-status-widget .dashboard-status-buttons{
+  overflow-y:visible;
+  padding-right:0;
+}
+
+.dashboard-flow-status-widget .dashboard-status-buttons.is-scrollable{
   max-height:280px;
   overflow-y:auto;
+  padding-right:0;
+  scrollbar-gutter:stable;
+  scrollbar-color:rgba(67,90,127,0.86) rgba(8,23,46,0.42);
+}
+
+.dashboard-flow-status-widget .dashboard-status-buttons.is-scrollable::-webkit-scrollbar{
+  width:14px;
+}
+
+.dashboard-flow-status-widget .dashboard-status-buttons.is-scrollable::-webkit-scrollbar-track{
+  background:rgba(8,23,46,0.42);
+}
+
+.dashboard-flow-status-widget .dashboard-status-buttons.is-scrollable::-webkit-scrollbar-thumb{
+  border:3px solid rgba(8,23,46,0.42);
+  border-radius:999px;
+  background:rgba(67,90,127,0.86);
 }
 
 .dashboard-status-button{
@@ -385,6 +411,187 @@ main.app-views{
 
 .dashboard-status-button strong{
   font-size:1.35rem;
+}
+
+.dashboard-recommended-actions{
+  min-height:0;
+}
+
+.dashboard-recommended-action-list{
+  display:grid;
+  gap:8px;
+  max-height:360px;
+  overflow-y:auto;
+  padding-right:0;
+  scrollbar-gutter:stable;
+  scrollbar-color:rgba(67,90,127,0.86) rgba(8,23,46,0.42);
+}
+
+.dashboard-recommended-action-list::-webkit-scrollbar{
+  width:14px;
+}
+
+.dashboard-recommended-action-list::-webkit-scrollbar-track{
+  background:rgba(8,23,46,0.42);
+}
+
+.dashboard-recommended-action-list::-webkit-scrollbar-thumb{
+  border:3px solid rgba(8,23,46,0.42);
+  border-radius:999px;
+  background:rgba(67,90,127,0.86);
+}
+
+.dashboard-recommended-action{
+  display:grid;
+  grid-template-columns:minmax(0, 1fr) auto;
+  gap:10px;
+  align-items:center;
+  border:1px solid rgba(254,190,16,0.82);
+  border-radius:8px;
+  background:rgba(43,58,88,0.24);
+  padding:10px;
+}
+
+.dashboard-recommended-action.is-warning{
+  border-color:rgba(254,190,16,0.82);
+}
+
+.dashboard-recommended-action.is-danger{
+  border-color:rgba(254,190,16,0.82);
+}
+
+.dashboard-recommended-action-body{
+  min-width:0;
+  display:flex;
+  flex-direction:column;
+  gap:3px;
+}
+
+.dashboard-recommended-action-body strong{
+  color:var(--text);
+  font-size:0.94rem;
+  line-height:1.25;
+}
+
+.dashboard-recommended-action-body span{
+  color:var(--muted);
+  font-size:0.82rem;
+  line-height:1.25;
+}
+
+.dashboard-email-project-suggestions{
+  min-height:0;
+}
+
+.dashboard-email-project-suggestion-list{
+  display:grid;
+  gap:8px;
+  max-height:360px;
+  overflow-y:auto;
+  padding-right:0;
+  scrollbar-gutter:stable;
+  scrollbar-color:rgba(67,90,127,0.86) rgba(8,23,46,0.42);
+}
+
+.dashboard-email-project-suggestion-list::-webkit-scrollbar{
+  width:14px;
+}
+
+.dashboard-email-project-suggestion-list::-webkit-scrollbar-track{
+  background:rgba(8,23,46,0.42);
+}
+
+.dashboard-email-project-suggestion-list::-webkit-scrollbar-thumb{
+  border:3px solid rgba(8,23,46,0.42);
+  border-radius:999px;
+  background:rgba(67,90,127,0.86);
+}
+
+.dashboard-email-project-suggestion{
+  display:grid;
+  grid-template-columns:minmax(0, 1fr) auto;
+  gap:14px;
+  align-items:center;
+  border:1px solid rgba(254,190,16,0.82);
+  border-radius:8px;
+  background:rgba(43,58,88,0.24);
+  padding:12px;
+  cursor:pointer;
+}
+
+.dashboard-email-project-suggestion-actions{
+  cursor:default;
+}
+
+.dashboard-email-project-suggestion-actions button{
+  cursor:pointer;
+}
+
+.dashboard-email-project-dismiss{
+  position:relative;
+  width:var(--control-height);
+  height:var(--control-height);
+  min-height:var(--control-height);
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  border:1px solid var(--input-border);
+  border-radius:10px;
+  background:var(--input);
+  color:transparent;
+  cursor:pointer;
+  padding:0;
+  overflow:hidden;
+}
+
+.dashboard-email-project-dismiss:hover{
+  filter:brightness(1.05);
+}
+
+.dashboard-email-project-dismiss::before{
+  content:"✕";
+  position:absolute;
+  left:50%;
+  top:50%;
+  transform:translate(-50%, -50%);
+  color:#fff;
+  font:700 1rem/1 Arial, sans-serif;
+}
+
+.dashboard-email-project-suggestion-body{
+  min-width:0;
+  display:flex;
+  flex-direction:column;
+  gap:6px;
+}
+
+.dashboard-email-project-suggestion-body strong{
+  color:#fff;
+  font-size:1rem;
+  line-height:1.25;
+}
+
+.dashboard-email-project-suggestion-body span,
+.dashboard-email-project-suggestion-body p{
+  margin:0;
+  color:#fff;
+  font-size:0.82rem;
+  line-height:1.35;
+}
+
+.dashboard-email-project-suggestion-body p{
+  display:-webkit-box;
+  -webkit-line-clamp:2;
+  -webkit-box-orient:vertical;
+  overflow:hidden;
+}
+
+.dashboard-email-project-suggestion-actions{
+  display:flex;
+  align-items:center;
+  justify-content:flex-end;
+  gap:8px;
+  white-space:nowrap;
 }
 
 .dashboard-status-button.is-success strong{
@@ -435,10 +642,15 @@ main.app-views{
   font-size:0.84rem;
 }
 
-.dashboard-status-project-item .project-status-badge{
+.dashboard-status-project-item .project-status-badge,
+.dashboard-status-project-item .project-flow-status-badge{
   grid-column:2;
   grid-row:1 / span 2;
   cursor:pointer;
+}
+
+.dashboard-project-status-modal .actions{
+  margin-top:18px;
 }
 
 .dashboard-status-project-empty{
@@ -1761,7 +1973,8 @@ body.is-auth-locked > header{
   background:var(--input);
   color:var(--text);
   cursor:pointer;
-  font:inherit;
+  font:700 1rem/1 Arial, sans-serif;
+  padding:0;
 }
 .form-modal-body{
   min-height:0;
@@ -1774,6 +1987,22 @@ body.is-auth-locked > header{
 .form-modal-body > form{
   margin:0;
 }
+
+#projectForm{
+  display:grid;
+  grid-template-columns:repeat(3, minmax(0, 1fr));
+  gap:12px;
+}
+
+#projectForm .project-error,
+#projectForm .actions{
+  grid-column:1 / -1;
+}
+
+#projectForm .actions{
+  justify-content:flex-start;
+}
+
 body.has-form-modal-open{
   overflow:hidden;
 }
@@ -2049,19 +2278,13 @@ body.has-form-modal-open{
   border-bottom:1px solid var(--card-border);
 }
 .email-message-actions{
-  flex-direction:column;
-  align-items:flex-start;
-  justify-content:flex-start;
+  align-items:center;
+  justify-content:flex-end;
   margin:0;
   padding:0;
   border-bottom:0;
-  gap:4px;
-}
-.email-message-action-buttons{
-  display:flex;
-  align-items:center;
   gap:8px;
-  flex-wrap:wrap;
+  white-space:nowrap;
 }
 .graph-card-actions{
   margin-top:8px;
@@ -2196,6 +2419,12 @@ button.graph-item{
 }
 .email-message-item{
   grid-template-columns:10px minmax(0, 1fr);
+  color:var(--text);
+  cursor:pointer;
+}
+.email-message-item.is-selected{
+  grid-template-columns:10px minmax(0, 1fr) auto;
+  align-items:center;
 }
 .email-read-marker{
   width:8px;
@@ -3087,6 +3316,7 @@ button.graph-item{
   margin:0;
   color:var(--muted);
   line-height:1.4;
+  min-height:2.8em;
   display:-webkit-box;
   -webkit-line-clamp:2;
   -webkit-box-orient:vertical;
