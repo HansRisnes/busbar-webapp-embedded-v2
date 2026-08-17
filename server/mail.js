@@ -1160,6 +1160,7 @@ function normalizeProjectRecord(raw) {
     contactPhone: safeString(raw.contactPhone || raw.phone),
     projectResponsible: safeString(raw.projectResponsible || raw.projectOwner || raw.ownerName),
     projectOwnerEmail: normalizeEmail(raw.projectOwnerEmail || raw.ownerEmail),
+    projectOwnerName: safeString(raw.projectOwnerName || raw.ownerDisplayName),
     projectFolderName: safeString(raw.projectFolderName),
     projectFolderCreated: raw.projectFolderCreated === true,
     projectFolderWebUrl: safeString(raw.projectFolderWebUrl),
@@ -1171,7 +1172,24 @@ function normalizeProjectRecord(raw) {
   };
 }
 
-function buildVisibleProjectsForAuth(archive, auth) {
+function getUserProfileName(authStore, email) {
+  const normalizedEmail = normalizeEmail(email);
+  const profile = authStore?.users?.[normalizedEmail]?.profile;
+  return safeString(profile?.name) || normalizedEmail;
+}
+
+function enrichProjectOwner(project, ownerEmail, authStore) {
+  const normalizedOwnerEmail = normalizeEmail(ownerEmail || project?.projectOwnerEmail || project?.ownerEmail);
+  const ownerName = getUserProfileName(authStore, normalizedOwnerEmail);
+  return {
+    ...project,
+    projectOwnerEmail: normalizedOwnerEmail,
+    projectOwnerName: ownerName,
+    projectResponsible: safeString(project?.projectResponsible) || ownerName
+  };
+}
+
+function buildVisibleProjectsForAuth(archive, auth, authStore = { users: {} }) {
   const email = normalizeEmail(auth?.email);
   if (!auth?.isAdmin) {
     const user = archive.users[email] || { email, updatedAt: null, projects: [] };
@@ -1179,10 +1197,7 @@ function buildVisibleProjectsForAuth(archive, auth) {
       email,
       updatedAt: user.updatedAt,
       ownerEmails: [email],
-      projects: (Array.isArray(user.projects) ? user.projects : []).map(project => ({
-        ...project,
-        projectOwnerEmail: email
-      }))
+      projects: (Array.isArray(user.projects) ? user.projects : []).map(project => enrichProjectOwner(project, email, authStore))
     };
   }
   const projects = [];
@@ -1195,10 +1210,7 @@ function buildVisibleProjectsForAuth(archive, auth) {
       updatedAt = userUpdatedAt;
     }
     (Array.isArray(user?.projects) ? user.projects : []).forEach(project => {
-      projects.push({
-        ...project,
-        projectOwnerEmail: ownerEmail
-      });
+      projects.push(enrichProjectOwner(project, ownerEmail, authStore));
     });
   });
   return {
@@ -3883,11 +3895,12 @@ app.get('/api/user-projects', requireUserAuth, async (req, res) => {
         await writeProjectArchive(state);
         return state;
       });
+      const authStore = await readUserAuthStore();
       await Promise.all([
         writeJsonFile(OFFER_COUNTER_FILE, counterState),
         writeJsonFile(OFFER_PROJECT_NUMBERS_FILE, projectNumbers)
       ]);
-      return buildVisibleProjectsForAuth(archive, req.userAuth);
+      return buildVisibleProjectsForAuth(archive, req.userAuth, authStore);
     });
     return res.json({
       email: visibleRecord.email,
@@ -3975,7 +3988,8 @@ app.post('/api/user-projects/sync', requireUserAuth, async (req, res) => {
           };
         }
         await writeProjectArchive(archive);
-        return buildVisibleProjectsForAuth(archive, req.userAuth);
+        const authStore = await readUserAuthStore();
+        return buildVisibleProjectsForAuth(archive, req.userAuth, authStore);
       });
       await Promise.all([
         writeJsonFile(OFFER_COUNTER_FILE, counterState),
@@ -4584,7 +4598,8 @@ app.post('/api/generate-offer', requireUserAuth, async (req, res) => {
 app.get('/api/offer-status', requireUserAuth, async (req, res) => {
   try {
     const archive = await readProjectArchive();
-    const visible = buildVisibleProjectsForAuth(archive, req.userAuth);
+    const authStore = await readUserAuthStore();
+    const visible = buildVisibleProjectsForAuth(archive, req.userAuth, authStore);
     const offers = await getOfferStatusForProjects(visible.projects);
     res.json({ offers });
   } catch (err) {

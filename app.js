@@ -3687,6 +3687,7 @@ function normalizeProject(raw){
     contactPhone: String(raw.contactPhone || raw.phone || '').trim(),
     projectResponsible: String(raw.projectResponsible || raw.projectOwner || raw.ownerName || '').trim(),
     projectOwnerEmail: normalizeUserEmail(raw.projectOwnerEmail || raw.ownerEmail || ''),
+    projectOwnerName: String(raw.projectOwnerName || raw.ownerDisplayName || '').trim(),
     projectFolderName: String(raw.projectFolderName || '').trim(),
     projectFolderCreated: raw.projectFolderCreated === true,
     projectFolderWebUrl: String(raw.projectFolderWebUrl || '').trim(),
@@ -3707,7 +3708,7 @@ function getCurrentProjectResponsibleName(){
 }
 
 function getProjectResponsibleName(project){
-  return String(project?.projectResponsible || getCurrentProjectResponsibleName()).trim();
+  return String(project?.projectResponsible || project?.projectOwnerName || project?.projectOwnerEmail || '').trim();
 }
 
 function normalizeUserEmail(value){
@@ -4521,6 +4522,7 @@ function createProject(projectName, customerName, contactPerson, details = {}){
     contactPhone: String(details.contactPhone || '').trim(),
     projectResponsible: getCurrentProjectResponsibleName(),
     projectOwnerEmail: getCurrentUserEmail(),
+    projectOwnerName: getCurrentProjectResponsibleName(),
     sourceEmailConversationId: String(details.sourceEmailConversationId || '').trim(),
     sourceEmailMessageId: String(details.sourceEmailMessageId || '').trim(),
     sourceEmailSubject: String(details.sourceEmailSubject || '').trim(),
@@ -4555,6 +4557,7 @@ function copyProject(sourceProjectId, customerName, contactPerson, details = {})
     contactPhone: String(details.contactPhone || '').trim(),
     projectResponsible: getCurrentProjectResponsibleName(),
     projectOwnerEmail: getCurrentUserEmail(),
+    projectOwnerName: getCurrentProjectResponsibleName(),
     createdAt: now,
     updatedAt: now,
     selectedAddonConfig: normalizeSelectedAddonConfig(source.selectedAddonConfig || null, null),
