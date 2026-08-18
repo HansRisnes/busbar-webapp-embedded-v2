@@ -2,6 +2,44 @@ import {
   $
 } from './dom.js';
 
+function getFallbackCalendarVisualKind(event, helpers = {}){
+  const helperKind = String(helpers.getCalendarEventVisualKind?.(event) || '').trim();
+  if (helperKind) return helperKind;
+  const subject = String(event?.subject || '').trim().toLowerCase();
+  const categories = Array.isArray(event?.categories)
+    ? event.categories.map(item=>String(item || '').trim().toLowerCase())
+    : [];
+  if (categories.includes('to-do fullført')) return 'todo-completed';
+  if (categories.includes('to-do') || subject.startsWith('to-do:') || subject.startsWith('todo:')) return 'todo';
+  if (categories.includes('busbar prosjekt')) return 'project';
+  return '';
+}
+
+function applyCalendarVisualKind(item, visualKind){
+  const kind = String(visualKind || '').trim();
+  if (!kind) return;
+  item.dataset.calendarKind = kind;
+  const colors = {
+    project: {
+      border: 'rgba(254,190,16,0.86)',
+      background: 'rgba(254,190,16,0.72)'
+    },
+    todo: {
+      border: 'rgba(248,113,113,0.86)',
+      background: 'rgba(220,38,38,0.72)'
+    },
+    'todo-completed': {
+      border: 'rgba(74,222,128,0.86)',
+      background: 'rgba(34,197,94,0.72)'
+    }
+  };
+  const color = colors[kind];
+  if (!color) return;
+  item.style.setProperty('border', `1px solid ${color.border}`, 'important');
+  item.style.setProperty('background', color.background, 'important');
+  item.style.setProperty('color', '#fff', 'important');
+}
+
 export function renderCalendarEvents(events, helpers = {}){
   const list = $('calendarEventsList');
   if (!list) return;
@@ -14,11 +52,18 @@ export function renderCalendarEvents(events, helpers = {}){
     return;
   }
   const formatGraphDateTime = helpers.formatGraphDateTime || (value=>value || '');
-  const getCalendarEventLinkedProjectId = helpers.getCalendarEventLinkedProjectId || (()=>'');
+  const getCalendarEventVisualKind = helpers.getCalendarEventVisualKind || (()=>'');
+  const isCalendarTodoEvent = helpers.isCalendarTodoEvent || (()=>false);
+  const isCalendarTodoCompletedEvent = helpers.isCalendarTodoCompletedEvent || (()=>false);
   events.forEach(event=>{
+    const visualKind = getFallbackCalendarVisualKind(event, helpers);
+    const isTodo = visualKind === 'todo' || visualKind === 'todo-completed' || isCalendarTodoEvent(event);
     const item = document.createElement('article');
     item.className = 'graph-item calendar-event-item';
-    item.classList.toggle('is-linked-project', Boolean(getCalendarEventLinkedProjectId(event)));
+    item.classList.toggle('is-todo', isTodo);
+    item.classList.toggle('is-todo-completed', visualKind === 'todo-completed' || isCalendarTodoCompletedEvent(event));
+    applyCalendarVisualKind(item, visualKind);
+    item.dataset.calendarSubject = event.subject || '';
 
     const time = document.createElement('div');
     time.className = 'graph-item-time';
@@ -86,7 +131,8 @@ export function renderCalendarGrid(events, calendarViewState, helpers = {}){
   const projectFlowRowLanes = new Map();
   const addProjectFlowSegment = (event, startIndex, endIndex, lane)=>{
     const item = document.createElement('button');
-    item.className = 'calendar-grid-event is-linked-project is-project-flow-span';
+    item.className = 'calendar-grid-event is-project-flow-span';
+    applyCalendarVisualKind(item, 'project');
     item.type = 'button';
     item.dataset.editCalendarEvent = event.id || '';
     item.style.gridRow = String(Math.floor(startIndex / 7) + 1);
@@ -174,9 +220,14 @@ export function renderCalendarGrid(events, calendarViewState, helpers = {}){
     }
 
     dayEvents.forEach(event=>{
+      const visualKind = getFallbackCalendarVisualKind(event, helpers);
+      const isTodo = visualKind === 'todo' || visualKind === 'todo-completed' || Boolean(helpers.isCalendarTodoEvent?.(event));
       const item = document.createElement('button');
       item.className = 'calendar-grid-event';
-      item.classList.toggle('is-linked-project', Boolean(helpers.getCalendarEventLinkedProjectId(event)));
+      item.classList.toggle('is-todo', isTodo);
+      item.classList.toggle('is-todo-completed', visualKind === 'todo-completed' || Boolean(helpers.isCalendarTodoCompletedEvent?.(event)));
+      applyCalendarVisualKind(item, visualKind);
+      item.dataset.calendarSubject = event.subject || '';
       item.type = 'button';
       item.dataset.editCalendarEvent = event.id || '';
       const time = helpers.parseGraphDate(event.start);

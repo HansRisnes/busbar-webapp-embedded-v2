@@ -44,8 +44,14 @@ export const MICROSOFT_GRAPH_SHAREPOINT_SCOPES = Object.freeze(['Files.ReadWrite
 export const MICROSOFT_GRAPH_BASE_URL = 'https://graph.microsoft.com/v1.0';
 export const CALENDAR_PROJECT_EXTENDED_PROPERTY_ID = 'String {4f28b47f-5e6b-4f87-9fcb-4c1a9c0c9d9f} Name BusbarProjectId';
 export const CALENDAR_PROJECT_FLOW_TASK_EXTENDED_PROPERTY_ID = 'String {4f28b47f-5e6b-4f87-9fcb-4c1a9c0c9d9f} Name BusbarProjectFlowTaskId';
+export const CALENDAR_TODO_EXTENDED_PROPERTY_ID = 'String {4f28b47f-5e6b-4f87-9fcb-4c1a9c0c9d9f} Name BusbarTodoId';
+export const CALENDAR_EVENT_TYPE_EXTENDED_PROPERTY_ID = 'String {4f28b47f-5e6b-4f87-9fcb-4c1a9c0c9d9f} Name BusbarCalendarEventType';
 export const OUTLOOK_PROJECT_CATEGORY_NAME = 'Busbar Prosjekt';
 export const OUTLOOK_PROJECT_CATEGORY_COLOR = 'preset3';
+export const OUTLOOK_TODO_CATEGORY_NAME = 'To-Do';
+export const OUTLOOK_TODO_CATEGORY_COLOR = 'preset0';
+export const OUTLOOK_TODO_COMPLETED_CATEGORY_NAME = 'To-Do fullført';
+export const OUTLOOK_TODO_COMPLETED_CATEGORY_COLOR = 'preset4';
 export const PROJECT_MAILBOX_ADDRESS = 'prosjekt@busbar.no';
 
 export const SHAREPOINT_FOLDER_CONFIG = Object.freeze({

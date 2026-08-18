@@ -41,6 +41,7 @@ const OFFER_REVISIONS_FILE = path.resolve(RUNTIME_DATA_DIR, 'offer-revisions.jso
 const PROJECT_ARCHIVE_FILE = path.resolve(RUNTIME_DATA_DIR, 'project-archive.json');
 const USER_AUTH_FILE = path.resolve(RUNTIME_DATA_DIR, 'user-auth.json');
 const CUSTOMER_DATABASE_FILE = path.resolve(RUNTIME_DATA_DIR, 'customer-database.json');
+const EMAIL_PROJECT_SUGGESTIONS_FILE = path.resolve(RUNTIME_DATA_DIR, 'email-project-suggestions.json');
 const OFFER_LINE_BLOCK_START_TOKEN = '__BUSBAR_LINE_BLOCK_START__';
 const OFFER_LINE_BLOCK_END_TOKEN = '__BUSBAR_LINE_BLOCK_END__';
 const OFFER_FIRE_BLOCK_START_TOKEN = '__BUSBAR_FIRE_BLOCK_START__';
@@ -921,6 +922,32 @@ async function writeCustomerDatabase(state) {
   await writeJsonFile(CUSTOMER_DATABASE_FILE, { customers });
 }
 
+function normalizeEmailProjectSuggestionState(raw) {
+  const dismissedConversationIds = Array.isArray(raw?.dismissedConversationIds)
+    ? raw.dismissedConversationIds
+    : [];
+  return {
+    dismissedConversationIds: Array.from(new Set(
+      dismissedConversationIds
+        .map(value => safeString(value))
+        .filter(Boolean)
+    )),
+    updatedAt: toIsoTimestamp(raw?.updatedAt, null)
+  };
+}
+
+async function readEmailProjectSuggestionState() {
+  const stored = await readJsonFile(EMAIL_PROJECT_SUGGESTIONS_FILE, {
+    dismissedConversationIds: [],
+    updatedAt: null
+  });
+  return normalizeEmailProjectSuggestionState(stored);
+}
+
+async function writeEmailProjectSuggestionState(state) {
+  await writeJsonFile(EMAIL_PROJECT_SUGGESTIONS_FILE, normalizeEmailProjectSuggestionState(state));
+}
+
 function mergeCustomerIntoMap(map, customerInput) {
   const customer = normalizeCustomerRecord(customerInput);
   if (!customer) return;
@@ -1141,11 +1168,34 @@ function normalizeProjectStatusRecord(value) {
   return mapped[raw] || 'unresolved';
 }
 
+function normalizeProjectTodoRecord(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const now = new Date().toISOString();
+  const title = safeString(raw.title || raw.text || raw.name);
+  if (!title) return null;
+  const dueAt = toIsoTimestamp(raw.dueAt || raw.due || raw.dateTime || raw.datetime, '');
+  const durationHours = Math.min(24, Math.max(0.5, Number(raw.durationHours || raw.duration || 1) || 1));
+  return {
+    id: safeString(raw.id) || generateRecordId('todo'),
+    title,
+    dueAt,
+    durationHours,
+    completed: raw.completed === true,
+    createdAt: toIsoTimestamp(raw.createdAt, now),
+    updatedAt: toIsoTimestamp(raw.updatedAt || raw.createdAt, now),
+    completedAt: raw.completedAt ? toIsoTimestamp(raw.completedAt, '') : '',
+    calendarEventId: safeString(raw.calendarEventId),
+    remindedAt: raw.remindedAt ? toIsoTimestamp(raw.remindedAt, '') : ''
+  };
+}
+
 function normalizeProjectRecord(raw) {
   if (!raw || typeof raw !== 'object') return null;
   const now = new Date().toISOString();
   const linesRaw = Array.isArray(raw.lines) ? raw.lines : [];
   const lines = linesRaw.map(normalizeLineRecord).filter(Boolean);
+  const todosRaw = Array.isArray(raw.todos) ? raw.todos : [];
+  const todos = todosRaw.map(normalizeProjectTodoRecord).filter(Boolean);
   const selectedAddonConfig = (raw.selectedAddonConfig && typeof raw.selectedAddonConfig === 'object')
     ? safeJsonClone(raw.selectedAddonConfig, {})
     : {};
@@ -1168,7 +1218,8 @@ function normalizeProjectRecord(raw) {
     createdAt: toIsoTimestamp(raw.createdAt, now),
     updatedAt: toIsoTimestamp(raw.updatedAt || raw.createdAt, now),
     selectedAddonConfig,
-    lines
+    lines,
+    todos
   };
 }
 
@@ -4008,6 +4059,37 @@ app.post('/api/user-projects/sync', requireUserAuth, async (req, res) => {
   } catch (err) {
     console.error('Synk av brukerprosjekter feilet', err);
     return res.status(500).json({ error: 'Kunne ikke synkronisere prosjekter' });
+  }
+});
+
+app.get('/api/email-project-suggestions/dismissed', requireUserAuth, requireMicrosoftOwnerAuth, async (_req, res) => {
+  try {
+    const state = await readEmailProjectSuggestionState();
+    res.json(state);
+  } catch (err) {
+    console.error('Henting av skjulte prosjektforslag feilet', err);
+    res.status(500).json({ error: 'Kunne ikke hente skjulte prosjektforslag' });
+  }
+});
+
+app.post('/api/email-project-suggestions/dismiss', requireUserAuth, requireMicrosoftOwnerAuth, async (req, res) => {
+  try {
+    const conversationId = safeString(req.body?.conversationId);
+    if (!conversationId) {
+      return res.status(400).json({ error: 'Mangler conversationId' });
+    }
+    const state = await readEmailProjectSuggestionState();
+    const ids = new Set(state.dismissedConversationIds);
+    ids.add(conversationId);
+    const next = {
+      dismissedConversationIds: Array.from(ids),
+      updatedAt: new Date().toISOString()
+    };
+    await writeEmailProjectSuggestionState(next);
+    res.json(next);
+  } catch (err) {
+    console.error('Skjuling av prosjektforslag feilet', err);
+    res.status(500).json({ error: 'Kunne ikke skjule prosjektforslag' });
   }
 });
 

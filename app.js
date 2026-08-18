@@ -3,8 +3,10 @@
 import {
   ADMIN_NAV_ALLOWED_EMAILS,
   AUTH_SESSION_KEY,
+  CALENDAR_EVENT_TYPE_EXTENDED_PROPERTY_ID,
   CALENDAR_PROJECT_EXTENDED_PROPERTY_ID,
   CALENDAR_PROJECT_FLOW_TASK_EXTENDED_PROPERTY_ID,
+  CALENDAR_TODO_EXTENDED_PROPERTY_ID,
   DEFAULT_MARGIN_RATE,
   DEFAULT_MATERIAL_MARGIN_RATE,
   EMAIL_REGEX,
@@ -24,6 +26,10 @@ import {
   OFFER_SORT_STORAGE_KEY,
   OUTLOOK_PROJECT_CATEGORY_COLOR,
   OUTLOOK_PROJECT_CATEGORY_NAME,
+  OUTLOOK_TODO_COMPLETED_CATEGORY_COLOR,
+  OUTLOOK_TODO_COMPLETED_CATEGORY_NAME,
+  OUTLOOK_TODO_CATEGORY_COLOR,
+  OUTLOOK_TODO_CATEGORY_NAME,
   PROJECT_FLOW_ALL_PROJECTS,
   PROJECT_FLOW_DEFAULT_ZOOM_INDEX,
   PROJECT_FLOW_PHASES,
@@ -182,7 +188,9 @@ const EMAIL_PROJECT_SUGGESTION_DISMISSED_KEY_PREFIX = 'busbar.emailProjectSugges
 const emailProjectSuggestionState = {
   dismissed: new Set(),
   dismissedStorageKey: '',
-  suggestionsById: new Map()
+  suggestionsById: new Map(),
+  dismissedLoaded: false,
+  dismissedLoading: false
 };
 const projectFolderStatusState = {
   loaded: false,
@@ -261,6 +269,11 @@ let microsoftAuthConfigPromise = null;
 let microsoftMsalClient = null;
 let microsoftLastAccount = null;
 const outlookCategoryReadyAccounts = new Set();
+const dashboardTodoCompletionTimers = new Map();
+const dashboardTodoEditState = {
+  projectId: '',
+  todoId: ''
+};
 const calendarViewState = {
   mode: 'month',
   cursor: new Date(),
@@ -269,7 +282,8 @@ const calendarViewState = {
   loadedEnd: null,
   formAttendees: [],
   editingEventCategories: [],
-  datePickerCursor: new Date()
+  datePickerCursor: new Date(),
+  todoDatePickerCursor: new Date()
 };
 const emailViewState = {
   messages: [],
@@ -1757,6 +1771,86 @@ function openCalendarDatePickerPopover(){
   popover.hidden = false;
 }
 
+function closeDashboardTodoDatePickerPopover(){
+  const popover = $('dashboardTodoDatePickerPopover');
+  if (popover) popover.hidden = true;
+}
+
+function renderDashboardTodoDatePickerPopover(){
+  const popover = $('dashboardTodoDatePickerPopover');
+  if (!popover) return;
+  const selected = dateFromCalendarInputValue($('dashboardTodoDate')?.value);
+  const cursor = calendarViewState.todoDatePickerCursor instanceof Date
+    ? calendarViewState.todoDatePickerCursor
+    : selected || new Date();
+  const monthStart = startOfMonth(cursor);
+  const gridStart = startOfWeekMonday(monthStart);
+  const today = startOfDay(new Date());
+  popover.innerHTML = '';
+
+  const head = document.createElement('div');
+  head.className = 'calendar-date-picker-head';
+  const title = document.createElement('div');
+  title.className = 'calendar-date-picker-title';
+  title.textContent = new Intl.DateTimeFormat('no-NO', { month: 'long', year: 'numeric' }).format(cursor);
+  const nav = document.createElement('div');
+  nav.className = 'calendar-date-picker-nav';
+  const prev = document.createElement('button');
+  prev.type = 'button';
+  prev.setAttribute('aria-label', 'Forrige måned');
+  prev.textContent = '‹';
+  prev.addEventListener('click', ()=>{
+    calendarViewState.todoDatePickerCursor = addMonths(cursor, -1);
+    renderDashboardTodoDatePickerPopover();
+  });
+  const next = document.createElement('button');
+  next.type = 'button';
+  next.setAttribute('aria-label', 'Neste måned');
+  next.textContent = '›';
+  next.addEventListener('click', ()=>{
+    calendarViewState.todoDatePickerCursor = addMonths(cursor, 1);
+    renderDashboardTodoDatePickerPopover();
+  });
+  nav.append(prev, next);
+  head.append(title, nav);
+  popover.appendChild(head);
+
+  const grid = document.createElement('div');
+  grid.className = 'calendar-date-picker-grid';
+  ['Ma', 'Ti', 'On', 'To', 'Fr', 'Lø', 'Sø'].forEach(label=>{
+    const weekday = document.createElement('div');
+    weekday.className = 'calendar-date-picker-weekday';
+    weekday.textContent = label;
+    grid.appendChild(weekday);
+  });
+  for (let index = 0; index < 42; index += 1){
+    const day = addDays(gridStart, index);
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'calendar-date-picker-day';
+    btn.classList.toggle('is-outside', day.getMonth() !== cursor.getMonth());
+    btn.classList.toggle('is-today', sameCalendarDay(day, today));
+    btn.classList.toggle('is-selected', selected ? sameCalendarDay(day, selected) : false);
+    btn.textContent = String(day.getDate());
+    btn.addEventListener('click', ()=>{
+      const input = $('dashboardTodoDate');
+      if (input) input.value = formatDateInputValue(day);
+      closeDashboardTodoDatePickerPopover();
+    });
+    grid.appendChild(btn);
+  }
+  popover.appendChild(grid);
+}
+
+function openDashboardTodoDatePickerPopover(){
+  const popover = $('dashboardTodoDatePickerPopover');
+  if (!popover) return;
+  const selected = dateFromCalendarInputValue($('dashboardTodoDate')?.value);
+  calendarViewState.todoDatePickerCursor = selected || new Date();
+  renderDashboardTodoDatePickerPopover();
+  popover.hidden = false;
+}
+
 function formatCalendarDurationOption(hours){
   const normalized = Number(hours);
   if (!Number.isFinite(normalized)) return '';
@@ -1777,6 +1871,32 @@ function populateCalendarDurationOptions(){
 
 function populateCalendarTimeOptions(){
   const select = $('calendarEventStartTime');
+  if (!select || select.options.length) return;
+  for (let hour = 0; hour < 24; hour += 1){
+    for (let minute = 0; minute < 60; minute += 15){
+      const value = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+      const option = document.createElement('option');
+      option.value = value;
+      option.textContent = value;
+      select.appendChild(option);
+    }
+  }
+}
+
+function populateDashboardTodoDurationOptions(){
+  const select = $('dashboardTodoDuration');
+  if (!select || select.options.length) return;
+  for (let value = 0.5; value <= 24; value += 0.5){
+    const option = document.createElement('option');
+    option.value = String(value);
+    option.textContent = formatCalendarDurationOption(value);
+    if (value === 1) option.selected = true;
+    select.appendChild(option);
+  }
+}
+
+function populateDashboardTodoTimeOptions(){
+  const select = $('dashboardTodoStartTime');
   if (!select || select.options.length) return;
   for (let hour = 0; hour < 24; hour += 1){
     for (let minute = 0; minute < 60; minute += 15){
@@ -1835,7 +1955,10 @@ function setGraphStatus(id, message, state = ''){
 function renderCalendarEvents(events){
   renderCalendarEventsModule(events, {
     formatGraphDateTime,
-    getCalendarEventLinkedProjectId
+    getCalendarEventLinkedProjectId,
+    getCalendarEventVisualKind,
+    isCalendarTodoCompletedEvent,
+    isCalendarTodoEvent
   });
 }
 
@@ -1847,6 +1970,9 @@ function renderCalendarGrid(events){
     getCalendarEventDisplayDates,
     getCalendarEventLinkedProjectId,
     getCalendarEventProjectFlowTaskId,
+    getCalendarEventVisualKind,
+    isCalendarTodoCompletedEvent,
+    isCalendarTodoEvent,
     getIsoWeekNumber,
     parseGraphDate,
     sameCalendarDay,
@@ -1985,12 +2111,77 @@ function getCalendarEventLinkedProjectId(event){
   return String(property?.value || '').trim();
 }
 
+function normalizeCalendarEventType(value){
+  const raw = String(value || '').trim().toLowerCase();
+  if (['calendar', 'project-flow', 'todo'].includes(raw)) return raw;
+  return '';
+}
+
+function getCalendarEventStoredType(event){
+  const properties = Array.isArray(event?.singleValueExtendedProperties)
+    ? event.singleValueExtendedProperties
+    : [];
+  const property = properties.find(item=>String(item?.id || '') === CALENDAR_EVENT_TYPE_EXTENDED_PROPERTY_ID);
+  return normalizeCalendarEventType(property?.value);
+}
+
 function getCalendarEventProjectFlowTaskId(event){
   const properties = Array.isArray(event?.singleValueExtendedProperties)
     ? event.singleValueExtendedProperties
     : [];
   const property = properties.find(item=>String(item?.id || '') === CALENDAR_PROJECT_FLOW_TASK_EXTENDED_PROPERTY_ID);
   return String(property?.value || '').trim();
+}
+
+function getCalendarEventTodoId(event){
+  const properties = Array.isArray(event?.singleValueExtendedProperties)
+    ? event.singleValueExtendedProperties
+    : [];
+  const property = properties.find(item=>String(item?.id || '') === CALENDAR_TODO_EXTENDED_PROPERTY_ID);
+  return String(property?.value || '').trim();
+}
+
+function hasCalendarTodoSignature(event){
+  const subject = String(event?.subject || '').trim().toLowerCase();
+  const preview = String(event?.bodyPreview || '').trim().toLowerCase();
+  return subject.startsWith('to-do:')
+    || subject.startsWith('todo:')
+    || preview.includes('to-do:');
+}
+
+function isCalendarTodoEvent(event){
+  return getCalendarEventStoredType(event) === 'todo'
+    || Boolean(getCalendarEventTodoId(event))
+    || hasOutlookCategory(event, OUTLOOK_TODO_CATEGORY_NAME)
+    || hasOutlookCategory(event, OUTLOOK_TODO_COMPLETED_CATEGORY_NAME)
+    || hasCalendarTodoSignature(event);
+}
+
+function hasOutlookCategory(event, categoryName){
+  const target = String(categoryName || '').trim().toLowerCase();
+  if (!target) return false;
+  return (Array.isArray(event?.categories) ? event.categories : [])
+    .some(item=>String(item || '').trim().toLowerCase() === target);
+}
+
+function isCalendarTodoCompletedEvent(event){
+  return isCalendarTodoEvent(event) && hasOutlookCategory(event, OUTLOOK_TODO_COMPLETED_CATEGORY_NAME);
+}
+
+function getCalendarEventType(event){
+  const storedType = getCalendarEventStoredType(event);
+  if (storedType) return storedType;
+  if (isCalendarTodoEvent(event)) return 'todo';
+  if (getCalendarEventProjectFlowTaskId(event)) return 'project-flow';
+  if (hasOutlookCategory(event, OUTLOOK_PROJECT_CATEGORY_NAME)) return 'calendar';
+  return '';
+}
+
+function getCalendarEventVisualKind(event){
+  const type = getCalendarEventType(event);
+  if (type === 'todo') return isCalendarTodoCompletedEvent(event) ? 'todo-completed' : 'todo';
+  if (type === 'calendar' || type === 'project-flow') return 'project';
+  return '';
 }
 
 function getCalendarEventDisplayDates(event){
@@ -2012,21 +2203,53 @@ function isCalendarProjectFlowMultiDayEvent(event){
   return Boolean(dates && !sameCalendarDay(dates.startDay, dates.endDay));
 }
 
-function mergeOutlookProjectCategory(categories = [], includeProjectCategory = true){
+function mergeOutlookCategory(categories = [], categoryName, includeCategory = true){
   const normalized = (Array.isArray(categories) ? categories : [])
     .map(item=>String(item || '').trim())
     .filter(Boolean)
     .filter((item, index, array)=>array.findIndex(value=>value.toLowerCase() === item.toLowerCase()) === index)
-    .filter(item=>item.toLowerCase() !== OUTLOOK_PROJECT_CATEGORY_NAME.toLowerCase());
-  if (includeProjectCategory){
-    normalized.push(OUTLOOK_PROJECT_CATEGORY_NAME);
+    .filter(item=>item.toLowerCase() !== String(categoryName || '').toLowerCase());
+  if (includeCategory && categoryName){
+    normalized.push(categoryName);
   }
   return normalized;
 }
 
-async function ensureOutlookProjectCategory(){
+function mergeOutlookProjectCategory(categories = [], includeProjectCategory = true){
+  return mergeOutlookCategory(categories, OUTLOOK_PROJECT_CATEGORY_NAME, includeProjectCategory);
+}
+
+function mergeOutlookTodoCategory(categories = [], includeTodoCategory = true){
+  return mergeOutlookCategory(
+    (Array.isArray(categories) ? categories : []).filter(item=>String(item || '').trim().toLowerCase() !== OUTLOOK_TODO_COMPLETED_CATEGORY_NAME.toLowerCase()),
+    OUTLOOK_TODO_CATEGORY_NAME,
+    includeTodoCategory
+  );
+}
+
+function mergeOutlookTodoCompletedCategory(categories = [], includeTodoCategory = true){
+  return mergeOutlookCategory(
+    (Array.isArray(categories) ? categories : []).filter(item=>String(item || '').trim().toLowerCase() !== OUTLOOK_TODO_CATEGORY_NAME.toLowerCase()),
+    OUTLOOK_TODO_COMPLETED_CATEGORY_NAME,
+    includeTodoCategory
+  );
+}
+
+function stripBusbarCalendarCategories(categories = []){
+  const blocked = new Set([
+    OUTLOOK_PROJECT_CATEGORY_NAME.toLowerCase(),
+    OUTLOOK_TODO_CATEGORY_NAME.toLowerCase(),
+    OUTLOOK_TODO_COMPLETED_CATEGORY_NAME.toLowerCase()
+  ]);
+  return (Array.isArray(categories) ? categories : [])
+    .map(item=>String(item || '').trim())
+    .filter(Boolean)
+    .filter(item=>!blocked.has(item.toLowerCase()));
+}
+
+async function ensureOutlookCategory(categoryName, categoryColor){
   if (!authState.loggedIn) return false;
-  const accountKey = getCurrentUserEmail() || 'current';
+  const accountKey = `${getCurrentUserEmail() || 'current'}:${categoryName}`;
   if (outlookCategoryReadyAccounts.has(accountKey)) return true;
   try{
     const query = new URLSearchParams({
@@ -2034,20 +2257,20 @@ async function ensureOutlookProjectCategory(){
     });
     const payload = await microsoftGraphRequest(`/me/outlook/masterCategories?${query.toString()}`, MICROSOFT_GRAPH_OUTLOOK_CATEGORY_SCOPES);
     const categories = Array.isArray(payload?.value) ? payload.value : [];
-    const existing = categories.find(item=>String(item?.displayName || '').toLowerCase() === OUTLOOK_PROJECT_CATEGORY_NAME.toLowerCase());
+    const existing = categories.find(item=>String(item?.displayName || '').toLowerCase() === String(categoryName || '').toLowerCase());
     if (!existing){
       await microsoftGraphRequest('/me/outlook/masterCategories', MICROSOFT_GRAPH_OUTLOOK_CATEGORY_SCOPES, {
         method: 'POST',
         body: {
-          displayName: OUTLOOK_PROJECT_CATEGORY_NAME,
-          color: OUTLOOK_PROJECT_CATEGORY_COLOR
+          displayName: categoryName,
+          color: categoryColor
         }
       });
-    } else if (String(existing.color || '') !== OUTLOOK_PROJECT_CATEGORY_COLOR){
-      await microsoftGraphRequest(`/me/outlook/masterCategories/${encodeURIComponent(existing.id || OUTLOOK_PROJECT_CATEGORY_NAME)}`, MICROSOFT_GRAPH_OUTLOOK_CATEGORY_SCOPES, {
+    } else if (String(existing.color || '') !== categoryColor){
+      await microsoftGraphRequest(`/me/outlook/masterCategories/${encodeURIComponent(existing.id || categoryName)}`, MICROSOFT_GRAPH_OUTLOOK_CATEGORY_SCOPES, {
         method: 'PATCH',
         body: {
-          color: OUTLOOK_PROJECT_CATEGORY_COLOR
+          color: categoryColor
         }
       });
     }
@@ -2057,6 +2280,18 @@ async function ensureOutlookProjectCategory(){
     console.warn('Kunne ikke klargjøre Outlook-kategori', err);
     return false;
   }
+}
+
+async function ensureOutlookProjectCategory(){
+  return ensureOutlookCategory(OUTLOOK_PROJECT_CATEGORY_NAME, OUTLOOK_PROJECT_CATEGORY_COLOR);
+}
+
+async function ensureOutlookTodoCategory(){
+  return ensureOutlookCategory(OUTLOOK_TODO_CATEGORY_NAME, OUTLOOK_TODO_CATEGORY_COLOR);
+}
+
+async function ensureOutlookTodoCompletedCategory(){
+  return ensureOutlookCategory(OUTLOOK_TODO_COMPLETED_CATEGORY_NAME, OUTLOOK_TODO_COMPLETED_CATEGORY_COLOR);
 }
 
 function resetCalendarEventForm(){
@@ -2075,9 +2310,11 @@ function resetCalendarEventForm(){
   const startDateEl = $('calendarEventStartDate');
   const startTimeEl = $('calendarEventStartTime');
   const durationEl = $('calendarEventDuration');
+  const typeEl = $('calendarEventType');
   if (startDateEl) startDateEl.value = formatDateInputValue(start);
   if (startTimeEl) startTimeEl.value = formatTimeInputValue(start);
   if (durationEl) durationEl.value = calendarDurationFromDates(start, end);
+  if (typeEl) typeEl.value = '';
   const nativeDatePicker = $('calendarEventDatePicker');
   if (nativeDatePicker) nativeDatePicker.value = formatIsoDateInputValue(start);
   setCalendarFormAttendees([]);
@@ -2097,6 +2334,7 @@ function openCalendarEventForm(event = null){
   const startDateEl = $('calendarEventStartDate');
   const startTimeEl = $('calendarEventStartTime');
   const durationEl = $('calendarEventDuration');
+  const typeEl = $('calendarEventType');
   const bodyEl = $('calendarEventBody');
   calendarViewState.editingEventCategories = Array.isArray(event?.categories) ? event.categories : [];
   populateCalendarProjectOptions(getCalendarEventLinkedProjectId(event));
@@ -2107,6 +2345,7 @@ function openCalendarEventForm(event = null){
   if (startDateEl && start) startDateEl.value = formatDateInputValue(start);
   if (startTimeEl && start) startTimeEl.value = formatTimeInputValue(start);
   if (durationEl && start && end) durationEl.value = calendarDurationFromDates(start, end);
+  if (typeEl) typeEl.value = getCalendarEventType(event);
   const nativeDatePicker = $('calendarEventDatePicker');
   if (nativeDatePicker && start) nativeDatePicker.value = formatIsoDateInputValue(start);
   setCalendarFormAttendees((Array.isArray(event?.attendees) ? event.attendees : [])
@@ -2132,6 +2371,7 @@ function getCalendarEventPayloadFromForm(){
   const durationHours = Number($('calendarEventDuration')?.value || 0);
   const body = String($('calendarEventBody')?.value || '').trim();
   const projectId = String($('calendarEventProject')?.value || '').trim();
+  const eventType = normalizeCalendarEventType($('calendarEventType')?.value || '');
   const attendeeInput = $('calendarAttendeeInput');
   const attendees = [
     ...calendarViewState.formAttendees,
@@ -2156,11 +2396,19 @@ function getCalendarEventPayloadFromForm(){
       emailAddress: { address },
       type: 'required'
     })),
-    categories: mergeOutlookProjectCategory(calendarViewState.editingEventCategories, Boolean(projectId)),
-    singleValueExtendedProperties: [{
-      id: CALENDAR_PROJECT_EXTENDED_PROPERTY_ID,
-      value: projectId
-    }]
+    categories: eventType === 'todo'
+      ? mergeOutlookTodoCategory(stripBusbarCalendarCategories(calendarViewState.editingEventCategories), true)
+      : mergeOutlookProjectCategory(stripBusbarCalendarCategories(calendarViewState.editingEventCategories), Boolean(eventType && eventType !== 'todo')),
+    singleValueExtendedProperties: [
+      {
+        id: CALENDAR_PROJECT_EXTENDED_PROPERTY_ID,
+        value: projectId
+      },
+      {
+        id: CALENDAR_EVENT_TYPE_EXTENDED_PROPERTY_ID,
+        value: eventType
+      }
+    ]
   };
 }
 
@@ -2173,6 +2421,9 @@ async function saveCalendarEventFromForm(){
   setGraphStatus('calendarStatus', id ? 'Lagrer avtale...' : 'Oppretter avtale...');
   try{
     const body = getCalendarEventPayloadFromForm();
+    if (body.categories?.includes(OUTLOOK_TODO_CATEGORY_NAME)){
+      await ensureOutlookTodoCategory();
+    }
     if (body.categories?.includes(OUTLOOK_PROJECT_CATEGORY_NAME)){
       await ensureOutlookProjectCategory();
     }
@@ -2895,7 +3146,7 @@ async function loadCalendarEvents(options = {}){
       '$top': '200',
       '$orderby': 'start/dateTime',
       '$select': 'id,subject,start,end,location,organizer,isAllDay,showAs,webLink,bodyPreview,categories',
-      '$expand': `singleValueExtendedProperties($filter=id eq '${CALENDAR_PROJECT_EXTENDED_PROPERTY_ID}' or id eq '${CALENDAR_PROJECT_FLOW_TASK_EXTENDED_PROPERTY_ID}')`
+      '$expand': `singleValueExtendedProperties($filter=id eq '${CALENDAR_PROJECT_EXTENDED_PROPERTY_ID}' or id eq '${CALENDAR_PROJECT_FLOW_TASK_EXTENDED_PROPERTY_ID}' or id eq '${CALENDAR_TODO_EXTENDED_PROPERTY_ID}' or id eq '${CALENDAR_EVENT_TYPE_EXTENDED_PROPERTY_ID}')`
     });
     const payload = await microsoftGraphRequest(`/me/calendarView?${query.toString()}`, MICROSOFT_GRAPH_CALENDAR_SCOPES);
     const events = Array.isArray(payload?.value) ? payload.value : [];
@@ -2940,6 +3191,7 @@ async function loadEmailMessages(options = {}){
     const payload = await microsoftGraphRequest(projectMailboxGraphPath(`/mailFolders/inbox/messages?${query.toString()}`), MICROSOFT_GRAPH_MAIL_SCOPES);
     const messages = Array.isArray(payload?.value) ? payload.value : [];
     renderEmailMessages(messages);
+    await loadGlobalDismissedEmailProjectSuggestions();
     renderDashboardRecommendedActionsWidget();
     renderDashboardEmailProjectSuggestionsWidget();
     list.dataset.loaded = '1';
@@ -2990,6 +3242,9 @@ async function handleMicrosoftLogin(){
 function clearAuthSession(){
   authState = { loggedIn: false, username: '', token: '', profile: null, isAdmin: false };
   resetProjectFolderStatusState();
+  emailProjectSuggestionState.dismissedLoaded = false;
+  emailProjectSuggestionState.dismissedLoading = false;
+  emailProjectSuggestionState.suggestionsById = new Map();
   projectState.customerDatabase = [];
   projectState.globalCustomerDatabaseLoaded = false;
   renderGlobalCustomerViews();
@@ -3097,6 +3352,8 @@ async function completeAuth(auth, statusMessage){
     profile: auth.profile || null,
     isAdmin: auth.isAdmin === true || ADMIN_NAV_ALLOWED_EMAILS.includes(username)
   };
+  emailProjectSuggestionState.dismissedLoaded = false;
+  emailProjectSuggestionState.dismissedLoading = false;
   persistAuthToSession();
   hideLoginModal();
   hideRegisterModal();
@@ -3310,6 +3567,8 @@ if (newCalendarEventBtn){
 }
 populateCalendarDurationOptions();
 populateCalendarTimeOptions();
+populateDashboardTodoDurationOptions();
+populateDashboardTodoTimeOptions();
 const calendarEventForm = $('calendarEventForm');
 if (calendarEventForm){
   calendarEventForm.addEventListener('submit', evt=>{
@@ -3360,10 +3619,27 @@ const calendarDatePickerPopover = $('calendarDatePickerPopover');
 if (calendarDatePickerPopover){
   calendarDatePickerPopover.addEventListener('click', evt=>evt.stopPropagation());
 }
+const dashboardTodoDatePickerBtn = $('dashboardTodoDatePickerBtn');
+if (dashboardTodoDatePickerBtn){
+  dashboardTodoDatePickerBtn.addEventListener('click', evt=>{
+    evt.stopPropagation();
+    const popover = $('dashboardTodoDatePickerPopover');
+    if (popover && !popover.hidden){
+      closeDashboardTodoDatePickerPopover();
+    } else {
+      openDashboardTodoDatePickerPopover();
+    }
+  });
+}
+const dashboardTodoDatePickerPopover = $('dashboardTodoDatePickerPopover');
+if (dashboardTodoDatePickerPopover){
+  dashboardTodoDatePickerPopover.addEventListener('click', evt=>evt.stopPropagation());
+}
 document.addEventListener('click', evt=>{
   const target = evt.target instanceof Element ? evt.target : null;
   if (target?.closest?.('.calendar-date-input-row')) return;
   closeCalendarDatePickerPopover();
+  closeDashboardTodoDatePickerPopover();
 });
 const cancelCalendarEventBtn = $('cancelCalendarEventBtn');
 if (cancelCalendarEventBtn){
@@ -3672,6 +3948,41 @@ function generateProjectId(){
   return `proj-${Date.now().toString(36)}-${Math.random().toString(16).slice(2, 10)}`;
 }
 
+function normalizeProjectTodo(raw){
+  if (!raw || typeof raw !== 'object') return null;
+  const title = String(raw.title || raw.text || raw.name || '').trim();
+  if (!title) return null;
+  const now = new Date().toISOString();
+  const dueCandidate = raw.dueAt || raw.due || raw.dateTime || raw.datetime || '';
+  const dueDate = dueCandidate ? new Date(dueCandidate) : null;
+  const dueAt = dueDate && !Number.isNaN(dueDate.getTime()) ? dueDate.toISOString() : '';
+  const durationHours = Math.min(24, Math.max(0.5, Number(raw.durationHours || raw.duration || 1) || 1));
+  return {
+    id: String(raw.id || generateProjectId()).trim(),
+    title,
+    dueAt,
+    durationHours,
+    completed: raw.completed === true,
+    createdAt: raw.createdAt || now,
+    updatedAt: raw.updatedAt || raw.createdAt || now,
+    completedAt: raw.completedAt || '',
+    calendarEventId: String(raw.calendarEventId || '').trim(),
+    remindedAt: raw.remindedAt || ''
+  };
+}
+
+function normalizeProjectTodos(items){
+  return (Array.isArray(items) ? items : [])
+    .map(normalizeProjectTodo)
+    .filter(Boolean)
+    .sort((a, b)=>{
+      if (a.completed !== b.completed) return a.completed ? 1 : -1;
+      const aTime = new Date(a.dueAt || a.createdAt || 0).getTime() || 0;
+      const bTime = new Date(b.dueAt || b.createdAt || 0).getTime() || 0;
+      return aTime - bTime;
+    });
+}
+
 function normalizeProject(raw){
   if (!raw) return null;
   const fallback = new Date().toISOString();
@@ -3699,7 +4010,8 @@ function normalizeProject(raw){
     createdAt: raw.createdAt || fallback,
     updatedAt: raw.updatedAt || fallback,
     selectedAddonConfig,
-    lines: Array.isArray(raw.lines) ? raw.lines : []
+    lines: Array.isArray(raw.lines) ? raw.lines : [],
+    todos: normalizeProjectTodos(raw.todos || raw.toDos || raw.todoItems || [])
   };
 }
 
@@ -3794,10 +4106,21 @@ function getProjectUpdateTimestamp(project){
   return updated;
 }
 
+function preserveProjectTodoItems(candidate, existing){
+  if (!candidate || !existing) return candidate;
+  const existingTodos = Array.isArray(existing.todos) ? existing.todos : [];
+  const candidateTodos = Array.isArray(candidate.todos) ? candidate.todos : [];
+  if (!existingTodos.length || candidateTodos.length) return candidate;
+  return {
+    ...candidate,
+    todos: normalizeProjectTodos(existingTodos)
+  };
+}
+
 function mergeProjectsByLatest(localProjects, remoteProjects){
   const merged = new Map();
   const add = project=>{
-    const normalized = normalizeProject(project);
+    let normalized = normalizeProject(project);
     if (!normalized) return;
     const key = normalized.id || `${normalized.name}|${normalized.customer}|${normalized.contactPerson}`;
     const existing = merged.get(key);
@@ -3805,6 +4128,7 @@ function mergeProjectsByLatest(localProjects, remoteProjects){
       merged.set(key, normalized);
       return;
     }
+    normalized = preserveProjectTodoItems(normalized, existing);
     const existingTs = getProjectUpdateTimestamp(existing);
     const candidateTs = getProjectUpdateTimestamp(normalized);
     if (candidateTs > existingTs){
@@ -4198,6 +4522,7 @@ async function flushProjectSync(){
       updateProjectHistories();
       saveProjectsToStorage({ skipRemoteSync: true });
       renderProjectDashboard();
+      renderMainDashboard();
       updateProjectMetaDisplay();
     }
   }catch(err){
@@ -4255,6 +4580,7 @@ async function syncProjectsForCurrentUser(){
     updateProjectHistories();
     saveProjectsToStorage({ skipRemoteSync: true });
     renderProjectDashboard();
+    renderMainDashboard();
     updateProjectMetaDisplay();
     const syncedProjects = await pushUserProjectsToServer(email, projectState.projects);
     if (syncedProjects.length){
@@ -4263,6 +4589,7 @@ async function syncProjectsForCurrentUser(){
       updateProjectHistories();
       saveProjectsToStorage({ skipRemoteSync: true });
       renderProjectDashboard();
+      renderMainDashboard();
       updateProjectMetaDisplay();
     }
     projectState.customerDatabase = normalizeGlobalCustomerPayload(await fetchCustomerDatabaseFromServer());
@@ -4278,6 +4605,7 @@ async function syncProjectsForCurrentUser(){
     updateProjectHistories();
     saveProjectsToStorage({ skipRemoteSync: true });
     renderProjectDashboard();
+    renderMainDashboard();
     updateProjectMetaDisplay();
   }
 }
@@ -4530,7 +4858,8 @@ function createProject(projectName, customerName, contactPerson, details = {}){
     createdAt: now,
     updatedAt: now,
     selectedAddonConfig: normalizeSelectedAddonConfig(null, null),
-    lines: []
+    lines: [],
+    todos: []
   };
   projectState.projects.push(project);
   sortProjects();
@@ -4564,7 +4893,8 @@ function copyProject(sourceProjectId, customerName, contactPerson, details = {})
     lines: (Array.isArray(source.lines) ? source.lines : []).map(line=>({
       ...deepClone(line),
       id: generateProjectId()
-    }))
+    })),
+    todos: []
   };
   projectState.projects.push(project);
   sortProjects();
@@ -4865,6 +5195,9 @@ function persistProjectInfo(projectName, customerName, contactPerson, options = 
     sourceEmailFrom: sourceEmail?.from || ''
   });
   setActiveProject(created);
+  if (sourceEmail?.conversationId){
+    dismissEmailProjectSuggestion(sourceEmail.conversationId);
+  }
 }
 
 function formatProjectTimestamp(value){
@@ -6884,6 +7217,315 @@ function renderDashboardRecommendedActionsWidget(){
   renderDashboardRecommendedActionsWidgetModule(actions);
 }
 
+function formatDashboardTodoDue(value){
+  const date = new Date(value || 0);
+  if (Number.isNaN(date.getTime())) return 'Uten tidspunkt';
+  return new Intl.DateTimeFormat('no-NO', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  }).format(date);
+}
+
+function escapeHtml(value){
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function escapeAttr(value){
+  return escapeHtml(value);
+}
+
+function getDashboardTodos(){
+  return projectState.projects
+    .filter(project=>project && !projectIsArchived(project))
+    .flatMap(project=>(Array.isArray(project.todos) ? project.todos : []).map(todo=>({ project, todo })))
+    .filter(({ project, todo })=>!todo.completed || dashboardTodoCompletionTimers.has(getDashboardTodoKey(project.id, todo.id)))
+    .sort((a, b)=>{
+      if (a.todo.completed !== b.todo.completed) return a.todo.completed ? 1 : -1;
+      const aTime = new Date(a.todo.dueAt || a.todo.createdAt || 0).getTime() || 0;
+      const bTime = new Date(b.todo.dueAt || b.todo.createdAt || 0).getTime() || 0;
+      return aTime - bTime;
+    });
+}
+
+function getDashboardTodoKey(projectId, todoId){
+  return `${String(projectId || '').trim()}::${String(todoId || '').trim()}`;
+}
+
+function clearDashboardTodoCompletionTimer(projectId, todoId){
+  const key = getDashboardTodoKey(projectId, todoId);
+  const timerId = dashboardTodoCompletionTimers.get(key);
+  if (timerId){
+    window.clearTimeout(timerId);
+    dashboardTodoCompletionTimers.delete(key);
+  }
+}
+
+function scheduleDashboardTodoCompletion(projectId, todoId){
+  clearDashboardTodoCompletionTimer(projectId, todoId);
+  const key = getDashboardTodoKey(projectId, todoId);
+  const timerId = window.setTimeout(()=>{
+    dashboardTodoCompletionTimers.delete(key);
+    const project = getProjectById(projectId);
+    const todo = (Array.isArray(project?.todos) ? project.todos : []).find(item=>item.id === todoId);
+    if (!project || !todo || todo.completed !== true) return;
+    syncDashboardTodoCalendarSoon(projectId, todoId);
+    renderMainDashboard();
+  }, 10000);
+  dashboardTodoCompletionTimers.set(key, timerId);
+}
+
+function renderDashboardTodoWidget(){
+  const list = $('dashboardTodoList');
+  if (!list) return;
+
+  const todos = getDashboardTodos();
+  if (!todos.length){
+    list.innerHTML = '<p class="muted-text dashboard-empty-text">Ingen To-Do-oppgaver.</p>';
+    return;
+  }
+  const now = Date.now();
+  list.innerHTML = todos.map(({ project, todo })=>{
+    const dueTime = new Date(todo.dueAt || 0).getTime();
+    const overdue = !todo.completed && dueTime && dueTime < now;
+    const completed = todo.completed ? ' checked' : '';
+    const pendingRemoval = todo.completed && dashboardTodoCompletionTimers.has(getDashboardTodoKey(project.id, todo.id));
+    const classes = ['dashboard-todo-item'];
+    if (todo.completed) classes.push('is-complete');
+    if (pendingRemoval) classes.push('is-pending-removal');
+    if (overdue) classes.push('is-overdue');
+    return `
+      <div class="${classes.join(' ')}" data-dashboard-todo-project="${escapeAttr(project.id)}" data-dashboard-todo-id="${escapeAttr(todo.id)}">
+        <label class="dashboard-todo-check">
+          <input type="checkbox" data-dashboard-todo-toggle${completed}>
+          <span></span>
+        </label>
+        <div class="dashboard-todo-text">
+          <strong>${escapeHtml(todo.title)}</strong>
+          <span>${escapeHtml(getDashboardProjectTitle(project))}</span>
+          <small>${escapeHtml(formatDashboardTodoDue(todo.dueAt))}${pendingRemoval ? ' | Fullføres om 10 sek.' : (overdue ? ' | Påminnelse' : '')}</small>
+        </div>
+        <button type="button" class="btn alt btn-small dashboard-todo-delete" data-dashboard-todo-delete aria-label="Slett To-Do">&#10005;</button>
+      </div>
+    `;
+  }).join('');
+}
+
+function populateDashboardTodoProjectOptions(selectedProjectId = ''){
+  const projectSelect = $('dashboardTodoProject');
+  if (!projectSelect) return;
+  const projects = projectState.projects
+    .filter(project=>project && !projectIsArchived(project))
+    .sort((a, b)=>String(getDashboardProjectTitle(a)).localeCompare(String(getDashboardProjectTitle(b)), 'no'));
+  projectSelect.innerHTML = '<option value="">Velg prosjekt</option>';
+  projects.forEach(project=>{
+    const option = document.createElement('option');
+    option.value = project.id;
+    option.textContent = getDashboardProjectTitle(project);
+    projectSelect.appendChild(option);
+  });
+  if (selectedProjectId && projects.some(project=>project.id === selectedProjectId)){
+    projectSelect.value = selectedProjectId;
+  }
+}
+
+function findDashboardTodo(projectId, todoId){
+  const project = getProjectById(projectId);
+  if (!project) return { project: null, todo: null };
+  const todo = (Array.isArray(project.todos) ? project.todos : []).find(item=>item.id === todoId) || null;
+  return { project, todo };
+}
+
+function openDashboardTodoForm(projectId = '', todoId = ''){
+  const form = $('dashboardTodoForm');
+  if (!form) return;
+  const isEdit = Boolean(todoId);
+  const existing = isEdit ? findDashboardTodo(projectId, todoId) : { project: null, todo: null };
+  const selectedProjectId = existing.project?.id || projectId;
+  populateDashboardTodoProjectOptions(selectedProjectId);
+  populateDashboardTodoTimeOptions();
+  populateDashboardTodoDurationOptions();
+  const now = new Date();
+  now.setHours(now.getHours() + 1, 0, 0, 0);
+  const dueDate = existing.todo?.dueAt ? new Date(existing.todo.dueAt) : now;
+  const safeDate = Number.isNaN(dueDate.getTime()) ? now : dueDate;
+  const dateInput = $('dashboardTodoDate');
+  const timeSelect = $('dashboardTodoStartTime');
+  const durationSelect = $('dashboardTodoDuration');
+  const titleInput = $('dashboardTodoText');
+  if (dateInput) dateInput.value = formatDateInputValue(safeDate);
+  if (timeSelect) timeSelect.value = formatTimeInputValue(safeDate);
+  if (durationSelect) durationSelect.value = String(existing.todo?.durationHours || 1);
+  if (titleInput) titleInput.value = existing.todo?.title || '';
+  dashboardTodoEditState.projectId = existing.project?.id || '';
+  dashboardTodoEditState.todoId = existing.todo?.id || '';
+  closeDashboardTodoDatePickerPopover();
+  form.hidden = false;
+  openFormModal('dashboardTodoForm', isEdit && existing.todo ? 'Endre oppgave' : 'Ny oppgave');
+  titleInput?.focus();
+}
+
+function closeDashboardTodoForm(){
+  dashboardTodoEditState.projectId = '';
+  dashboardTodoEditState.todoId = '';
+  closeDashboardTodoDatePickerPopover();
+  closeFormModal('dashboardTodoForm');
+}
+
+function getDashboardTodoFormDateTime(){
+  const dateValue = parseCalendarDateInputValue($('dashboardTodoDate')?.value || '');
+  const timeValue = String($('dashboardTodoStartTime')?.value || '').trim();
+  if (!dateValue) throw new Error('Dato må skrives som DD/MM/ÅÅÅÅ.');
+  if (!/^\d{2}:\d{2}$/.test(timeValue)) throw new Error('Velg starttid.');
+  const date = new Date(`${dateValue}T${timeValue}:00`);
+  if (Number.isNaN(date.getTime())) throw new Error('Velg gyldig dato og tidspunkt.');
+  return date;
+}
+
+function touchProjectTodo(project, todo){
+  const now = new Date().toISOString();
+  if (todo) todo.updatedAt = now;
+  if (project) project.updatedAt = now;
+}
+
+function addDashboardTodo(projectId, title, dueAt, durationHours = 1){
+  const project = getProjectById(projectId);
+  if (!project) throw new Error('Velg prosjekt.');
+  const normalizedTitle = String(title || '').trim();
+  if (!normalizedTitle) throw new Error('Skriv inn oppgave.');
+  const dueDate = new Date(dueAt || '');
+  if (Number.isNaN(dueDate.getTime())) throw new Error('Velg dato og tidspunkt.');
+  const normalizedDuration = Math.min(24, Math.max(0.5, Number(durationHours) || 1));
+  const todo = normalizeProjectTodo({
+    id: generateProjectId(),
+    title: normalizedTitle,
+    dueAt: dueDate.toISOString(),
+    durationHours: normalizedDuration,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  });
+  project.todos = normalizeProjectTodos([...(Array.isArray(project.todos) ? project.todos : []), todo]);
+  touchProjectTodo(project, todo);
+  saveProjectsToStorage();
+  renderMainDashboard();
+  syncDashboardTodoCalendarSoon(project.id, todo.id);
+}
+
+function updateDashboardTodo(projectId, todoId, nextProjectId, title, dueAt, durationHours = 1){
+  const { project, todo } = findDashboardTodo(projectId, todoId);
+  if (!project || !todo) throw new Error('Fant ikke To-Do-oppgaven.');
+  const targetProject = getProjectById(nextProjectId || projectId);
+  if (!targetProject) throw new Error('Velg prosjekt.');
+  const normalizedTitle = String(title || '').trim();
+  if (!normalizedTitle) throw new Error('Skriv inn oppgave.');
+  const dueDate = new Date(dueAt || '');
+  if (Number.isNaN(dueDate.getTime())) throw new Error('Velg dato og tidspunkt.');
+  const normalizedDuration = Math.min(24, Math.max(0.5, Number(durationHours) || 1));
+  clearDashboardTodoCompletionTimer(project.id, todo.id);
+
+  const updatedTodo = normalizeProjectTodo({
+    ...todo,
+    title: normalizedTitle,
+    dueAt: dueDate.toISOString(),
+    durationHours: normalizedDuration,
+    updatedAt: new Date().toISOString()
+  });
+
+  if (targetProject.id !== project.id){
+    project.todos = normalizeProjectTodos((Array.isArray(project.todos) ? project.todos : []).filter(item=>item.id !== todo.id));
+    targetProject.todos = normalizeProjectTodos([...(Array.isArray(targetProject.todos) ? targetProject.todos : []), updatedTodo]);
+    touchProjectTodo(project, null);
+    touchProjectTodo(targetProject, updatedTodo);
+  } else {
+    project.todos = normalizeProjectTodos((Array.isArray(project.todos) ? project.todos : []).map(item=>item.id === todo.id ? updatedTodo : item));
+    touchProjectTodo(project, updatedTodo);
+  }
+
+  saveProjectsToStorage();
+  renderMainDashboard();
+  syncDashboardTodoCalendarSoon(targetProject.id, updatedTodo.id);
+}
+
+function setDashboardTodoCompleted(projectId, todoId, completed){
+  const project = getProjectById(projectId);
+  if (!project) return;
+  const todos = Array.isArray(project.todos) ? project.todos : [];
+  const todo = todos.find(item=>item.id === todoId);
+  if (!todo) return;
+  todo.completed = completed === true;
+  todo.completedAt = todo.completed ? new Date().toISOString() : '';
+  if (todo.completed){
+    scheduleDashboardTodoCompletion(projectId, todoId);
+  } else {
+    clearDashboardTodoCompletionTimer(projectId, todoId);
+  }
+  touchProjectTodo(project, todo);
+  project.todos = normalizeProjectTodos(todos);
+  saveProjectsToStorage();
+  renderMainDashboard();
+}
+
+async function deleteDashboardTodoCalendarEvent(todo){
+  const todoId = String(todo?.id || '').trim();
+  if (!todoId) return;
+  const savedEventId = String(todo?.calendarEventId || '').trim();
+  if (savedEventId){
+    const deleted = await deleteCalendarEventById(savedEventId, { statusTarget: 'calendarStatus' });
+    if (deleted) return;
+  }
+  const existingEvent = await findDashboardTodoCalendarEvent(todoId);
+  const foundEventId = String(existingEvent?.id || '').trim();
+  if (foundEventId && foundEventId !== savedEventId){
+    await deleteCalendarEventById(foundEventId, { statusTarget: 'calendarStatus' });
+  }
+}
+
+function deleteDashboardTodo(projectId, todoId){
+  const project = getProjectById(projectId);
+  if (!project) return;
+  clearDashboardTodoCompletionTimer(projectId, todoId);
+  const todos = Array.isArray(project.todos) ? project.todos : [];
+  const todo = todos.find(item=>item.id === todoId);
+  project.todos = normalizeProjectTodos(todos.filter(item=>item.id !== todoId));
+  touchProjectTodo(project, null);
+  saveProjectsToStorage();
+  renderMainDashboard();
+  if (todo) void deleteDashboardTodoCalendarEvent(todo);
+}
+
+function submitDashboardTodoForm(evt){
+  evt?.preventDefault?.();
+  try{
+    if (dashboardTodoEditState.todoId){
+      updateDashboardTodo(
+        dashboardTodoEditState.projectId,
+        dashboardTodoEditState.todoId,
+        $('dashboardTodoProject')?.value || '',
+        $('dashboardTodoText')?.value || '',
+        getDashboardTodoFormDateTime().toISOString(),
+        $('dashboardTodoDuration')?.value || '1'
+      );
+    } else {
+      addDashboardTodo(
+        $('dashboardTodoProject')?.value || '',
+        $('dashboardTodoText')?.value || '',
+        getDashboardTodoFormDateTime().toISOString(),
+        $('dashboardTodoDuration')?.value || '1'
+      );
+    }
+    closeDashboardTodoForm();
+  }catch(err){
+    alert(err?.message || 'Kunne ikke lagre To-Do.');
+  }
+}
+
 function getEmailProjectSuggestionDismissedStorageKey(){
   const email = getCurrentUserEmail() || 'local';
   return `${EMAIL_PROJECT_SUGGESTION_DISMISSED_KEY_PREFIX}.${email}`;
@@ -6905,6 +7547,54 @@ function saveDismissedEmailProjectSuggestions(){
     getEmailProjectSuggestionDismissedStorageKey(),
     Array.from(emailProjectSuggestionState.dismissed)
   );
+}
+
+function applyDismissedEmailProjectSuggestions(values){
+  emailProjectSuggestionState.dismissed = new Set(
+    (Array.isArray(values) ? values : [])
+      .map(value=>String(value || '').trim())
+      .filter(Boolean)
+  );
+  saveDismissedEmailProjectSuggestions();
+}
+
+async function loadGlobalDismissedEmailProjectSuggestions(options = {}){
+  if (!authState.loggedIn || !canAccessProjectMailbox()) return;
+  if (emailProjectSuggestionState.dismissedLoading) return;
+  if (emailProjectSuggestionState.dismissedLoaded && !options.force) return;
+  emailProjectSuggestionState.dismissedLoading = true;
+  try{
+    const res = await fetch(buildApiUrl('/api/email-project-suggestions/dismissed'), {
+      cache: 'no-store',
+      headers: authHeaders()
+    });
+    if (!res.ok) throw new Error(`Kunne ikke hente skjulte prosjektforslag (${res.status})`);
+    const payload = await res.json();
+    applyDismissedEmailProjectSuggestions(payload?.dismissedConversationIds);
+    emailProjectSuggestionState.dismissedLoaded = true;
+    renderDashboardEmailProjectSuggestionsWidget();
+  }catch(err){
+    console.warn('Henting av globale prosjektforslag-skjulinger feilet', err);
+  }finally{
+    emailProjectSuggestionState.dismissedLoading = false;
+  }
+}
+
+async function dismissEmailProjectSuggestionGlobally(conversationId){
+  const id = String(conversationId || '').trim();
+  if (!id || !authState.loggedIn || !canAccessProjectMailbox()) return;
+  try{
+    const res = await fetch(buildApiUrl('/api/email-project-suggestions/dismiss'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ conversationId: id })
+    });
+    if (!res.ok) throw new Error(`Kunne ikke skjule prosjektforslag (${res.status})`);
+    const payload = await res.json();
+    applyDismissedEmailProjectSuggestions(payload?.dismissedConversationIds);
+  }catch(err){
+    console.warn('Global skjuling av prosjektforslag feilet', err);
+  }
 }
 
 function getEmailAddressFromMessage(message){
@@ -7083,6 +7773,9 @@ function dismissEmailProjectSuggestion(suggestionId){
   emailProjectSuggestionState.dismissed.add(id);
   saveDismissedEmailProjectSuggestions();
   renderDashboardEmailProjectSuggestionsWidget();
+  void dismissEmailProjectSuggestionGlobally(id).finally(()=>{
+    renderDashboardEmailProjectSuggestionsWidget();
+  });
 }
 
 function openProjectFlowProjectFromDashboardStatus(statusLabel, projectId = ''){
@@ -7146,6 +7839,7 @@ function renderMainDashboard(){
   renderDashboardTotalsWidget();
   renderDashboardProjectStatusWidget();
   renderDashboardFlowStatusWidget();
+  renderDashboardTodoWidget();
   renderDashboardRecommendedActionsWidget();
   renderDashboardEmailProjectSuggestionsWidget();
   if (canAccessProjectMailbox() && $('emailMessagesList')?.dataset.loaded !== '1'){
@@ -7362,6 +8056,10 @@ function buildProjectFlowCalendarPayload(project, task){
         value: project.id
       },
       {
+        id: CALENDAR_EVENT_TYPE_EXTENDED_PROPERTY_ID,
+        value: 'project-flow'
+      },
+      {
         id: CALENDAR_PROJECT_FLOW_TASK_EXTENDED_PROPERTY_ID,
         value: task.id
       }
@@ -7369,7 +8067,7 @@ function buildProjectFlowCalendarPayload(project, task){
   };
 }
 
-async function deleteProjectFlowCalendarEvent(calendarEventId){
+async function deleteCalendarEventById(calendarEventId, options = {}){
   const eventId = String(calendarEventId || '').trim();
   if (!eventId || !authState.loggedIn) return false;
   try{
@@ -7382,10 +8080,141 @@ async function deleteProjectFlowCalendarEvent(calendarEventId){
     }
     return true;
   }catch(err){
-    console.warn('Kunne ikke slette prosjektflytoppgave fra kalender', err);
-    setProjectFlowStatus('Oppgaven ble oppdatert, men kalenderavtalen kunne ikke slettes.', 'error');
+    console.warn('Kunne ikke slette kalenderavtale', err);
+    if (options.statusTarget === 'project-flow'){
+      setProjectFlowStatus('Oppgaven ble oppdatert, men kalenderavtalen kunne ikke slettes.', 'error');
+    }
     return false;
   }
+}
+
+async function deleteProjectFlowCalendarEvent(calendarEventId){
+  return deleteCalendarEventById(calendarEventId, { statusTarget: 'project-flow' });
+}
+
+function buildDashboardTodoCalendarPayload(project, todo){
+  const startDate = new Date(todo?.dueAt || '');
+  if (!project?.id || !todo?.id || Number.isNaN(startDate.getTime())) return null;
+  const durationHours = Math.min(24, Math.max(0.5, Number(todo.durationHours || 1) || 1));
+  const endDate = new Date(startDate.getTime() + durationHours * 3600000);
+  return {
+    subject: `${getDashboardProjectTitle(project)} - ${todo.title}`,
+    start: {
+      dateTime: formatDateTimeLocalInput(startDate),
+      timeZone: 'Europe/Oslo'
+    },
+    end: {
+      dateTime: formatDateTimeLocalInput(endDate),
+      timeZone: 'Europe/Oslo'
+    },
+    isAllDay: false,
+    showAs: 'free',
+    isReminderOn: true,
+    reminderMinutesBeforeStart: 0,
+    categories: todo.completed
+      ? mergeOutlookTodoCompletedCategory([], true)
+      : mergeOutlookTodoCategory([], true),
+    body: {
+      contentType: 'text',
+      content: [
+        `Prosjekt: ${getDashboardProjectTitle(project)}`,
+        `To-Do: ${todo.title}`,
+        `Tidspunkt: ${formatDashboardTodoDue(todo.dueAt)}`,
+        `Varighet: ${formatCalendarDurationOption(durationHours)}`
+      ].join('\n')
+    },
+    singleValueExtendedProperties: [
+      {
+        id: CALENDAR_PROJECT_EXTENDED_PROPERTY_ID,
+        value: project.id
+      },
+      {
+        id: CALENDAR_EVENT_TYPE_EXTENDED_PROPERTY_ID,
+        value: 'todo'
+      },
+      {
+        id: CALENDAR_TODO_EXTENDED_PROPERTY_ID,
+        value: todo.id
+      }
+    ]
+  };
+}
+
+async function findDashboardTodoCalendarEvent(todoId){
+  const id = String(todoId || '').trim();
+  if (!id || !authState.loggedIn) return null;
+  try{
+    const query = new URLSearchParams({
+      '$top': '10',
+      '$orderby': 'lastModifiedDateTime desc',
+      '$select': 'id,subject,start,end,categories,lastModifiedDateTime',
+      '$expand': `singleValueExtendedProperties($filter=id eq '${CALENDAR_TODO_EXTENDED_PROPERTY_ID}')`,
+      '$filter': `singleValueExtendedProperties/any(ep: ep/id eq '${CALENDAR_TODO_EXTENDED_PROPERTY_ID}' and ep/value eq '${id.replace(/'/g, "''")}')`
+    });
+    const payload = await microsoftGraphRequest(`/me/events?${query.toString()}`, MICROSOFT_GRAPH_CALENDAR_SCOPES);
+    return Array.isArray(payload?.value) && payload.value.length ? payload.value[0] : null;
+  }catch(err){
+    console.warn('Kunne ikke finne eksisterende To-Do-avtale', err);
+    return null;
+  }
+}
+
+async function syncDashboardTodoCalendar(projectId, todoId){
+  const project = getProjectById(projectId);
+  const todo = (Array.isArray(project?.todos) ? project.todos : []).find(item=>item.id === todoId);
+  if (!project?.id || !todo?.id || !authState.loggedIn) return;
+  const payload = buildDashboardTodoCalendarPayload(project, todo);
+  if (!payload) return;
+  try{
+    if (todo.completed){
+      await ensureOutlookTodoCompletedCategory();
+    } else {
+      await ensureOutlookTodoCategory();
+    }
+    let savedEvent = null;
+    let eventIdToPatch = String(todo.calendarEventId || '').trim();
+    if (!eventIdToPatch){
+      const existingEvent = await findDashboardTodoCalendarEvent(todo.id);
+      eventIdToPatch = String(existingEvent?.id || '').trim();
+    }
+    if (todo.completed && !eventIdToPatch){
+      console.warn('Fant ingen eksisterende To-Do-avtale å markere som fullført');
+      return;
+    }
+    if (eventIdToPatch){
+      try{
+        savedEvent = await microsoftGraphRequest(`/me/events/${encodeURIComponent(eventIdToPatch)}`, MICROSOFT_GRAPH_CALENDAR_SCOPES, {
+          method: 'PATCH',
+          body: payload
+        });
+      }catch(err){
+        console.warn('Kunne ikke oppdatere eksisterende To-Do-avtale', err);
+        throw err;
+      }
+    } else {
+      savedEvent = await microsoftGraphRequest('/me/events', MICROSOFT_GRAPH_CALENDAR_SCOPES, {
+        method: 'POST',
+        body: payload
+      });
+    }
+    const eventId = String(savedEvent?.id || todo.calendarEventId || '').trim();
+    if (eventId && eventId !== todo.calendarEventId){
+      todo.calendarEventId = eventId;
+      touchProjectTodo(project, todo);
+      saveProjectsToStorage();
+      renderDashboardTodoWidget();
+    }
+    resetCalendarLoadedRange();
+    if (dashboardState.activePage === 'calendar'){
+      void loadCalendarEvents({ silent: true });
+    }
+  }catch(err){
+    console.warn('Kunne ikke synke To-Do til kalender', err);
+  }
+}
+
+function syncDashboardTodoCalendarSoon(projectId, todoId){
+  window.setTimeout(()=>void syncDashboardTodoCalendar(projectId, todoId), 0);
 }
 
 async function syncProjectFlowMilestoneCalendar(projectId, milestoneId){
@@ -9522,6 +10351,54 @@ if (dashboardRecommendedActions){
   });
 }
 
+const dashboardNewTodoBtn = $('dashboardNewTodoBtn');
+if (dashboardNewTodoBtn){
+  dashboardNewTodoBtn.addEventListener('click', ()=>openDashboardTodoForm());
+}
+
+const dashboardTodoForm = $('dashboardTodoForm');
+if (dashboardTodoForm){
+  dashboardTodoForm.addEventListener('submit', submitDashboardTodoForm);
+}
+const dashboardTodoCancelBtn = $('dashboardTodoCancelBtn');
+if (dashboardTodoCancelBtn){
+  dashboardTodoCancelBtn.addEventListener('click', closeDashboardTodoForm);
+}
+
+const dashboardTodoList = $('dashboardTodoList');
+if (dashboardTodoList){
+  dashboardTodoList.addEventListener('change', evt=>{
+    const input = evt.target;
+    if (!(input instanceof HTMLInputElement) || !input.matches('[data-dashboard-todo-toggle]')) return;
+    const item = input.closest('[data-dashboard-todo-id]');
+    if (!item) return;
+    setDashboardTodoCompleted(
+      item.getAttribute('data-dashboard-todo-project') || '',
+      item.getAttribute('data-dashboard-todo-id') || '',
+      input.checked
+    );
+  });
+  dashboardTodoList.addEventListener('click', evt=>{
+    const btn = evt.target?.closest?.('[data-dashboard-todo-delete]');
+    if (btn){
+      const item = btn.closest('[data-dashboard-todo-id]');
+      if (!item) return;
+      deleteDashboardTodo(
+        item.getAttribute('data-dashboard-todo-project') || '',
+        item.getAttribute('data-dashboard-todo-id') || ''
+      );
+      return;
+    }
+    if (evt.target?.closest?.('.dashboard-todo-check')) return;
+    const item = evt.target?.closest?.('[data-dashboard-todo-id]');
+    if (!item) return;
+    openDashboardTodoForm(
+      item.getAttribute('data-dashboard-todo-project') || '',
+      item.getAttribute('data-dashboard-todo-id') || ''
+    );
+  });
+}
+
 const dashboardEmailProjectSuggestions = $('dashboardEmailProjectSuggestions');
 if (dashboardEmailProjectSuggestions){
   dashboardEmailProjectSuggestions.addEventListener('click', evt=>{
@@ -10072,6 +10949,7 @@ document.addEventListener('keydown', evt=>{
         ? String(topFormModal.id).slice(0, -5)
         : '';
       if (formId === 'projectForm') cancelProjectModal();
+      else if (formId === 'dashboardTodoForm') closeDashboardTodoForm();
       else if (formId === 'calendarEventForm') closeCalendarEventForm();
       else if (formId === 'emailComposeForm') closeEmailComposeForm();
       else if (formId === 'companyEditForm') closeCompanyEditForm();
