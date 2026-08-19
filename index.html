@@ -884,6 +884,33 @@
     </div>
   </div>
 
+  <div id="linePriceAdjustModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="linePriceAdjustTitle">
+    <div class="modal">
+      <h3 id="linePriceAdjustTitle">Juster priser</h3>
+      <p id="linePriceAdjustLine" class="muted-text"></p>
+      <form id="linePriceAdjustForm" class="project-form line-price-adjust-form" onsubmit="return false;" autocomplete="off">
+        <label for="lineAdjustMaterialInput">Materiellkost
+          <input id="lineAdjustMaterialInput" type="text" inputmode="decimal">
+        </label>
+        <label for="lineAdjustMontasjeInput">Montasje
+          <input id="lineAdjustMontasjeInput" type="text" inputmode="decimal">
+        </label>
+        <label for="lineAdjustEngineeringInput">Ingeni&oslash;r
+          <input id="lineAdjustEngineeringInput" type="text" inputmode="decimal">
+        </label>
+        <label for="lineAdjustOpphengInput">Opphengsmateriell
+          <input id="lineAdjustOpphengInput" type="text" inputmode="decimal">
+        </label>
+        <p id="linePriceAdjustError" class="login-error project-error" role="alert"></p>
+        <div class="actions">
+          <button id="linePriceAdjustReset" type="button" class="btn alt">Tilbakestill</button>
+          <button id="linePriceAdjustCancel" type="button" class="btn alt">Avbryt</button>
+          <button id="linePriceAdjustSubmit" type="button" class="btn">Lagre</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <div id="projectStatusModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="projectStatusTitle">
     <div class="modal">
       <h3 id="projectStatusTitle">Endre prosjektstatus</h3>

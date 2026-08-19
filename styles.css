@@ -1199,6 +1199,10 @@ main.app-views{
   align-items:stretch;
 }
 
+.project-line-item.is-price-adjusted .project-line-main{
+  border-color:rgba(254,190,16,0.82);
+}
+
 .project-line-main{
   flex:1 1 auto;
   min-width:0;
@@ -1244,7 +1248,8 @@ main.app-views{
 }
 
 .line-edit-btn,
-.line-delete-btn{
+.line-delete-btn,
+.line-price-adjust-btn{
   width:auto;
   flex:0 0 auto;
   white-space:nowrap;
@@ -1282,6 +1287,24 @@ main.app-views{
   color:var(--muted);
   font-size:0.85rem;
   white-space:nowrap;
+}
+
+.project-metric-row.is-price-adjusted,
+.project-line-row .is-price-adjusted{
+  color:var(--warning);
+}
+
+.project-line-row .line-material.is-price-adjusted{
+  color:var(--warning);
+}
+
+.line-price-adjust-form{
+  grid-template-columns:repeat(4, minmax(0, 1fr));
+}
+
+.line-price-adjust-form .actions,
+.line-price-adjust-form .project-error{
+  grid-column:1 / -1;
 }
 
 .project-inline-selectors{

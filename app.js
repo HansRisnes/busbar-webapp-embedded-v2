@@ -131,6 +131,7 @@ import {
 } from './src/client/dashboard.js';
 import {
   compareProjectsForSort as compareProjectsForSortModule,
+  getProjectDisplayTitle,
   getProjectStatusConfig,
   loadSortMode,
   normalizeProjectSearchText,
@@ -392,6 +393,10 @@ let currentEngineeringMarginRate = DEFAULT_MARGIN_RATE;
 let currentOpphengMarginRate = DEFAULT_MARGIN_RATE;
 let currentTapOffMarginRate = DEFAULT_MARGIN_RATE;
 let currentDgModalTarget = 'material';
+const linePriceAdjustState = {
+  projectId: '',
+  lineId: ''
+};
 const toNum = x => {
   if (x===undefined || x===null) return NaN;
   const v = Number(String(x).replace(/\s/g,'').replace(',','.'));
@@ -4800,6 +4805,51 @@ function getContactsForCustomer(customerName){
   return Array.from(record.contacts.values()).map(contact=>contact.name).filter(Boolean);
 }
 
+function uniqueSuggestionValues(values){
+  const seen = new Set();
+  return (Array.isArray(values) ? values : [])
+    .map(value=>String(value || '').trim())
+    .filter(Boolean)
+    .filter(value=>{
+      const key = normalizeLookupKey(value);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
+function getCustomerSuggestionValues(){
+  return uniqueSuggestionValues([
+    ...(Array.isArray(projectState.customerDatabase) ? projectState.customerDatabase : []).map(customer=>customer?.name),
+    ...projectState.customerHistory,
+    ...projectState.projects.map(project=>project?.customer)
+  ]).sort((a, b)=>a.localeCompare(b, 'no'));
+}
+
+function getContactSuggestionValues(customerName = ''){
+  const scopedContacts = getContactsForCustomer(customerName);
+  if (scopedContacts.length) return uniqueSuggestionValues(scopedContacts).sort((a, b)=>a.localeCompare(b, 'no'));
+  return uniqueSuggestionValues([
+    ...flattenGlobalContacts().map(contact=>contact?.name),
+    ...projectState.contactHistory,
+    ...projectState.projects.map(project=>project?.contactPerson)
+  ]).sort((a, b)=>a.localeCompare(b, 'no'));
+}
+
+function filterSuggestionValues(values, query){
+  const normalizedQuery = normalizeLookupKey(query);
+  const entries = uniqueSuggestionValues(values);
+  if (!normalizedQuery) return entries.slice(0, 12);
+  const starts = [];
+  const contains = [];
+  entries.forEach(value=>{
+    const key = normalizeLookupKey(value);
+    if (key.startsWith(normalizedQuery)) starts.push(value);
+    else if (key.includes(normalizedQuery)) contains.push(value);
+  });
+  return [...starts, ...contains].slice(0, 12);
+}
+
 function getKnownProjectDetails(customerName, contactPerson){
   const record = getCustomerRecord(customerName);
   const contact = record?.contacts.get(normalizeLookupKey(contactPerson));
@@ -5045,6 +5095,12 @@ function showSuggestions(listEl, items){
   listEl.hidden = false;
 }
 
+function refreshProjectCustomerDataForSuggestions(){
+  if (!authState.loggedIn) return;
+  if (Array.isArray(projectState.customerDatabase) && projectState.customerDatabase.length) return;
+  void loadGlobalCustomerDatabase({ silent: true });
+}
+
 function updateProjectSubmitState(){
   const submit = $('projectSubmit');
   if (!submit) return;
@@ -5075,6 +5131,7 @@ function openProjectModal(options = {}){
     : (projectModalState.mode === 'copy' ? 'Kopier prosjekt' : 'Nytt prosjekt');
   form.hidden = false;
   openFormModal('projectForm', titleText);
+  refreshProjectCustomerDataForSuggestions();
   if (projectInput){
     projectInput.disabled = projectModalState.mode === 'copy';
     if (projectModalState.mode === 'copy'){
@@ -5783,6 +5840,198 @@ function applyProjectMarginRate(projectId, nextRate){
   renderProjectDashboard();
   syncActiveCalculatorAddonConfig(project);
   return { updatedLines, skippedLines, appliedRate: normalizedRate };
+}
+
+function getLineCostSnapshot(line){
+  const totals = line?.totals || {};
+  return {
+    material: round2(Number(totals.material) || 0),
+    montasje: round2(Number(totals.montasje?.cost) || 0),
+    engineering: round2(Number(totals.engineering?.cost) || 0),
+    oppheng: round2(Number(totals.oppheng?.cost) || 0)
+  };
+}
+
+function getLinePriceAdjustment(line){
+  const adjustment = line?.totals?.priceAdjustments;
+  return adjustment && typeof adjustment === 'object' ? adjustment : null;
+}
+
+function getLinePriceAdjustmentFields(line){
+  const adjustment = getLinePriceAdjustment(line);
+  if (!adjustment?.original || !adjustment?.values) return [];
+  return ['material', 'montasje', 'engineering', 'oppheng'].filter(key=>{
+    const original = Number(adjustment.original[key]);
+    const value = Number(adjustment.values[key]);
+    return Number.isFinite(original) && Number.isFinite(value) && round2(original) !== round2(value);
+  });
+}
+
+function lineHasPriceAdjustments(line){
+  return getLinePriceAdjustmentFields(line).length > 0;
+}
+
+function getProjectPriceAdjustmentFields(project){
+  const fields = new Set();
+  (Array.isArray(project?.lines) ? project.lines : []).forEach(line=>{
+    getLinePriceAdjustmentFields(line).forEach(field=>fields.add(field));
+  });
+  return fields;
+}
+
+function getAdjustedLineCostValues(line){
+  const snapshot = getLineCostSnapshot(line);
+  const adjustment = getLinePriceAdjustment(line);
+  if (!adjustment?.values) return snapshot;
+  return {
+    material: Number.isFinite(Number(adjustment.values.material)) ? round2(Number(adjustment.values.material)) : snapshot.material,
+    montasje: Number.isFinite(Number(adjustment.values.montasje)) ? round2(Number(adjustment.values.montasje)) : snapshot.montasje,
+    engineering: Number.isFinite(Number(adjustment.values.engineering)) ? round2(Number(adjustment.values.engineering)) : snapshot.engineering,
+    oppheng: Number.isFinite(Number(adjustment.values.oppheng)) ? round2(Number(adjustment.values.oppheng)) : snapshot.oppheng
+  };
+}
+
+function recalculateLineTotalsFromCostValues(line, values){
+  if (!line?.totals || typeof line.totals !== 'object') return false;
+  const totals = line.totals;
+  const inputs = line.inputs && typeof line.inputs === 'object' ? line.inputs : {};
+  const recalculated = calculateTotalsFromMaterial({
+    material: values.material,
+    marginRate: resolveMarginRateFromData({ input: inputs, totals }),
+    freightRate: Number(inputs.freightRate ?? totals.freightRate ?? 0.10),
+    montasjeCost: values.montasje,
+    montasjeMarginRate: resolveMontasjeDgRate(inputs?.montasjeMarginRate, totals?.montasjeMarginRate, DEFAULT_MARGIN_RATE),
+    engineeringCost: values.engineering,
+    engineeringMarginRate: resolveDgRate(inputs?.engineeringMarginRate, totals?.engineeringMarginRate, DEFAULT_MARGIN_RATE),
+    opphengCost: values.oppheng,
+    opphengMarginRate: resolveDgRate(inputs?.opphengMarginRate, totals?.opphengMarginRate, DEFAULT_MARGIN_RATE)
+  });
+
+  totals.material = recalculated.material;
+  totals.marginRate = recalculated.marginRate;
+  totals.marginFactor = recalculated.marginFactor;
+  totals.margin = recalculated.margin;
+  totals.subtotal = recalculated.subtotal;
+  totals.freightRate = recalculated.freightRate;
+  totals.freight = recalculated.freight;
+  totals.totalExMontasje = recalculated.totalExMontasje;
+  totals.montasje = { ...(totals.montasje || {}), cost: values.montasje };
+  totals.montasjeMarginRate = recalculated.montasjeMarginRate;
+  totals.montasjeMargin = recalculated.montasjeMargin;
+  totals.totalInclMontasje = recalculated.totalInclMontasje;
+  totals.engineering = { ...(totals.engineering || {}), cost: values.engineering };
+  totals.engineeringMarginRate = recalculated.engineeringMarginRate;
+  totals.engineeringMargin = recalculated.engineeringMargin;
+  totals.totalInclEngineering = recalculated.totalInclEngineering;
+  totals.oppheng = { ...(totals.oppheng || {}), cost: values.oppheng };
+  totals.opphengMarginRate = recalculated.opphengMarginRate;
+  totals.opphengMargin = recalculated.opphengMargin;
+  totals.totalInclOppheng = recalculated.totalInclOppheng;
+  totals.total = recalculated.total;
+  setLineSelectedAddonConfig(line, getSelectedAddonConfig(line));
+  return true;
+}
+
+function parseLinePriceAdjustInput(inputEl, label){
+  const raw = String(inputEl?.value || '').trim();
+  const value = toNum(raw);
+  if (!Number.isFinite(value) || value < 0){
+    throw new Error(`${label} må være et gyldig tall.`);
+  }
+  return round2(value);
+}
+
+function openLinePriceAdjustModal(projectId, lineId){
+  const project = getProjectById(projectId);
+  const line = (Array.isArray(project?.lines) ? project.lines : []).find(item=>item.id === lineId);
+  const modal = $('linePriceAdjustModal');
+  if (!project || !line || !modal) return;
+  linePriceAdjustState.projectId = project.id;
+  linePriceAdjustState.lineId = line.id;
+  const values = getAdjustedLineCostValues(line);
+  const lineText = $('linePriceAdjustLine');
+  if (lineText) lineText.textContent = `${getProjectDisplayTitle(project)} - ${line.lineNumber || 'Uten linjenummer'}`;
+  const setInput = (id, value)=>{
+    const input = $(id);
+    if (input) input.value = fmtNO.format(value);
+  };
+  setInput('lineAdjustMaterialInput', values.material);
+  setInput('lineAdjustMontasjeInput', values.montasje);
+  setInput('lineAdjustEngineeringInput', values.engineering);
+  setInput('lineAdjustOpphengInput', values.oppheng);
+  const errorEl = $('linePriceAdjustError');
+  if (errorEl) errorEl.textContent = '';
+  modal.style.display = 'flex';
+  $('lineAdjustMaterialInput')?.focus();
+}
+
+function closeLinePriceAdjustModal(){
+  const modal = $('linePriceAdjustModal');
+  if (modal) modal.style.display = 'none';
+  const errorEl = $('linePriceAdjustError');
+  if (errorEl) errorEl.textContent = '';
+  linePriceAdjustState.projectId = '';
+  linePriceAdjustState.lineId = '';
+}
+
+function saveLinePriceAdjustments(){
+  const project = getProjectById(linePriceAdjustState.projectId);
+  const line = (Array.isArray(project?.lines) ? project.lines : []).find(item=>item.id === linePriceAdjustState.lineId);
+  const errorEl = $('linePriceAdjustError');
+  if (!project || !line) return;
+  if (!line.totals || typeof line.totals !== 'object'){
+    if (errorEl) errorEl.textContent = 'Linjen mangler beregnede summer og kan ikke justeres.';
+    return;
+  }
+  try{
+    const values = {
+      material: parseLinePriceAdjustInput($('lineAdjustMaterialInput'), 'Materiellkost'),
+      montasje: parseLinePriceAdjustInput($('lineAdjustMontasjeInput'), 'Montasje'),
+      engineering: parseLinePriceAdjustInput($('lineAdjustEngineeringInput'), 'Ingeniør'),
+      oppheng: parseLinePriceAdjustInput($('lineAdjustOpphengInput'), 'Opphengsmateriell')
+    };
+    const currentAdjustment = getLinePriceAdjustment(line);
+    const original = currentAdjustment?.original || getLineCostSnapshot(line);
+    line.totals.priceAdjustments = {
+      original: deepClone(original),
+      values: deepClone(values),
+      updatedAt: new Date().toISOString()
+    };
+    recalculateLineTotalsFromCostValues(line, values);
+    if (!lineHasPriceAdjustments(line)){
+      delete line.totals.priceAdjustments;
+    }
+    line.updatedAt = new Date().toISOString();
+    project.updatedAt = line.updatedAt;
+    saveProjectsToStorage();
+    renderProjectDashboard();
+    renderMainDashboard();
+    closeLinePriceAdjustModal();
+  }catch(err){
+    if (errorEl) errorEl.textContent = err?.message || 'Kunne ikke justere priser.';
+  }
+}
+
+function resetLinePriceAdjustments(){
+  const project = getProjectById(linePriceAdjustState.projectId);
+  const line = (Array.isArray(project?.lines) ? project.lines : []).find(item=>item.id === linePriceAdjustState.lineId);
+  if (!project || !line?.totals) return;
+  const original = getLinePriceAdjustment(line)?.original;
+  if (original){
+    recalculateLineTotalsFromCostValues(line, {
+      material: Number(original.material) || 0,
+      montasje: Number(original.montasje) || 0,
+      engineering: Number(original.engineering) || 0,
+      oppheng: Number(original.oppheng) || 0
+    });
+  }
+  delete line.totals.priceAdjustments;
+  line.updatedAt = new Date().toISOString();
+  project.updatedAt = line.updatedAt;
+  saveProjectsToStorage();
+  renderProjectDashboard();
+  renderMainDashboard();
+  closeLinePriceAdjustModal();
 }
 
 function promptAndApplyProjectMarginRate(projectId){
@@ -9188,6 +9437,8 @@ function renderProjectDashboard(){
       formatLineUpdatedText,
       formatProjectMarginBadgeText,
       formatProjectTimestamp,
+      getLinePriceAdjustmentFields,
+      getProjectPriceAdjustmentFields,
       getProjectFlowStatusForProject,
       getProjectMaterialMarginStats,
       getProjectResponsibleName,
@@ -10111,6 +10362,40 @@ if (projectMarginModal){
   });
 }
 
+const linePriceAdjustCancel = $('linePriceAdjustCancel');
+if (linePriceAdjustCancel){
+  linePriceAdjustCancel.addEventListener('click', closeLinePriceAdjustModal);
+}
+const linePriceAdjustSubmit = $('linePriceAdjustSubmit');
+if (linePriceAdjustSubmit){
+  linePriceAdjustSubmit.addEventListener('click', saveLinePriceAdjustments);
+}
+const linePriceAdjustReset = $('linePriceAdjustReset');
+if (linePriceAdjustReset){
+  linePriceAdjustReset.addEventListener('click', resetLinePriceAdjustments);
+}
+['lineAdjustMaterialInput','lineAdjustMontasjeInput','lineAdjustEngineeringInput','lineAdjustOpphengInput'].forEach(id=>{
+  const input = $(id);
+  if (!input) return;
+  input.addEventListener('keydown', evt=>{
+    if (evt.key === 'Enter'){
+      evt.preventDefault();
+      saveLinePriceAdjustments();
+    } else if (evt.key === 'Escape'){
+      evt.preventDefault();
+      closeLinePriceAdjustModal();
+    }
+  });
+});
+const linePriceAdjustModal = $('linePriceAdjustModal');
+if (linePriceAdjustModal){
+  linePriceAdjustModal.addEventListener('click', evt=>{
+    if (evt.target === linePriceAdjustModal){
+      closeLinePriceAdjustModal();
+    }
+  });
+}
+
 const projectStatusModal = $('projectStatusModal');
 if (projectStatusModal){
   projectStatusModal.addEventListener('click', evt=>{
@@ -10177,6 +10462,10 @@ if (projectListEl){
   projectListEl.addEventListener('click', evt=>{
     const target = evt.target.closest('button');
     if (!target) return;
+    if (target.dataset.linePriceAdjust){
+      openLinePriceAdjustModal(target.dataset.projectId, target.dataset.linePriceAdjust);
+      return;
+    }
     if (target.dataset.lineEdit){
       openProjectLine(target.dataset.projectId, target.dataset.lineEdit);
       return;
@@ -10884,11 +11173,16 @@ function bindSuggestionBehaviour(inputId, listId, source){
   const listEl = $(listId);
   if (!input || !listEl) return;
   const getSource = ()=>typeof source === 'function' ? source() : source;
+  const refreshSuggestions = ()=>{
+    showSuggestions(listEl, filterSuggestionValues(getSource(), input.value));
+  };
   input.addEventListener('focus', ()=>{
-    showSuggestions(listEl, getSource());
+    refreshProjectCustomerDataForSuggestions();
+    refreshSuggestions();
   });
   input.addEventListener('input', ()=>{
-    hideSuggestions(listEl);
+    refreshProjectCustomerDataForSuggestions();
+    refreshSuggestions();
     updateProjectSubmitState();
     const errorEl = $('projectError');
     if (errorEl) errorEl.textContent = '';
@@ -10919,6 +11213,14 @@ function bindSuggestionBehaviour(inputId, listId, source){
       hideSuggestions(listEl);
       if (inputId === 'customerNameInput'){
         updateContactSuggestionsForCustomer();
+      } else if (inputId === 'contactPersonInput'){
+        const customerName = ($('customerNameInput')?.value || '').trim();
+        const contact = flattenGlobalContacts()
+          .find(item=>normalizeLookupKey(item?.name) === normalizeLookupKey(value)
+            && (!customerName || normalizeLookupKey(item?.customerName) === normalizeLookupKey(customerName)));
+        if (!customerName && contact?.customerName && $('customerNameInput')){
+          $('customerNameInput').value = contact.customerName;
+        }
       }
       updateProjectSubmitState();
     }
@@ -10926,10 +11228,10 @@ function bindSuggestionBehaviour(inputId, listId, source){
 }
 
 bindSuggestionBehaviour('projectNameInput', 'projectSuggestions', projectState.projectHistory);
-bindSuggestionBehaviour('customerNameInput', 'customerSuggestions', projectState.customerHistory);
+bindSuggestionBehaviour('customerNameInput', 'customerSuggestions', getCustomerSuggestionValues);
 bindSuggestionBehaviour('contactPersonInput', 'contactSuggestions', ()=>{
   const customerName = ($('customerNameInput')?.value || '').trim();
-  return getContactsForCustomer(customerName);
+  return getContactSuggestionValues(customerName);
 });
 
 const editProjectBtn = $('editProjectBtn');
@@ -10972,6 +11274,11 @@ document.addEventListener('keydown', evt=>{
     const projectMarginModalEl = $('projectMarginModal');
     if (projectMarginModalEl && projectMarginModalEl.style.display === 'flex'){
       closeProjectMarginModal();
+      return;
+    }
+    const linePriceAdjustModalEl = $('linePriceAdjustModal');
+    if (linePriceAdjustModalEl && linePriceAdjustModalEl.style.display === 'flex'){
+      closeLinePriceAdjustModal();
       return;
     }
     const projectDetailsModalEl = $('projectDetailsModal');

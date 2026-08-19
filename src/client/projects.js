@@ -237,6 +237,8 @@ export function createProjectRow(project, options = {}){
   const formatProjectMarginBadgeText = requireHelper(helpers, 'formatProjectMarginBadgeText', ()=>'DG prosjekt: -');
   const getProjectMaterialMarginStats = requireHelper(helpers, 'getProjectMaterialMarginStats', ()=>({ uniqueCount: 0 }));
   const shouldUseWarningForProjectMargin = requireHelper(helpers, 'shouldUseWarningForProjectMargin', ()=>false);
+  const getProjectPriceAdjustmentFields = requireHelper(helpers, 'getProjectPriceAdjustmentFields', ()=>new Set());
+  const getLinePriceAdjustmentFields = requireHelper(helpers, 'getLinePriceAdjustmentFields', ()=>[]);
   const projectHasConfirmedFolder = requireHelper(helpers, 'projectHasConfirmedFolder', ()=>false);
   const buildAddonSelectorControl = requireHelper(helpers, 'buildAddonSelectorControl', ()=>document.createElement('span'));
   const getSelectedAddonConfig = requireHelper(helpers, 'getSelectedAddonConfig', ()=>({}));
@@ -382,6 +384,7 @@ export function createProjectRow(project, options = {}){
 
   const metricsStack = document.createElement('div');
   metricsStack.className = 'project-metrics-column';
+  const adjustedProjectFields = getProjectPriceAdjustmentFields(project);
   [
     { label: 'Total strømskinne', value: `${fmtNO.format(projectTotals.busbarTotal)} NOK` },
     { label: 'Materiellkost', value: `${fmtNO.format(projectTotals.skinMaterialTotal)} NOK`, className: 'is-muted-italic', plain: true },
@@ -390,6 +393,15 @@ export function createProjectRow(project, options = {}){
   ].forEach(item=>{
     const metricRow = document.createElement('div');
     metricRow.className = `project-metric-row${item.className ? ` ${item.className}` : ''}`;
+    const normalizedMetricLabel = String(item.label || '').toLowerCase();
+    const adjustedMetric = normalizedMetricLabel.includes('materiell')
+      ? adjustedProjectFields.has('material')
+      : normalizedMetricLabel.includes('montasje')
+        ? adjustedProjectFields.has('montasje')
+        : normalizedMetricLabel.includes('total')
+          ? (normalizedMetricLabel.includes('str') ? adjustedProjectFields.has('material') : adjustedProjectFields.size > 0)
+          : false;
+    if (adjustedMetric) metricRow.classList.add('is-price-adjusted');
     metricRow.appendChild(createProjectMetricText(item));
     metricsStack.appendChild(metricRow);
   });
@@ -438,8 +450,10 @@ export function createProjectRow(project, options = {}){
     linesWrapper.appendChild(emptyLine);
   } else {
     lines.forEach(line=>{
+      const adjustedLineFields = getLinePriceAdjustmentFields(line);
       const lineWrap = document.createElement('div');
       lineWrap.className = 'project-line-item';
+      if (adjustedLineFields.length) lineWrap.classList.add('is-price-adjusted');
       const lineMain = document.createElement('div');
       lineMain.className = 'project-line-main';
 
@@ -460,10 +474,12 @@ export function createProjectRow(project, options = {}){
 
       const totalSpan = document.createElement('span');
       totalSpan.className = 'line-total';
+      if (adjustedLineFields.length) totalSpan.classList.add('is-price-adjusted');
       totalSpan.textContent = formatLineTotal(line);
 
       const materialSpan = document.createElement('span');
       materialSpan.className = 'line-material';
+      if (adjustedLineFields.includes('material')) materialSpan.classList.add('is-price-adjusted');
       materialSpan.textContent = formatLineSkinMaterialCost(line);
 
       const updatedSpan = document.createElement('span');
@@ -489,6 +505,14 @@ export function createProjectRow(project, options = {}){
       const lineActionButtons = document.createElement('div');
       lineActionButtons.className = 'line-action-buttons';
 
+      const lineAdjustBtn = document.createElement('button');
+      lineAdjustBtn.type = 'button';
+      lineAdjustBtn.className = 'btn alt line-price-adjust-btn';
+      lineAdjustBtn.dataset.linePriceAdjust = line.id;
+      lineAdjustBtn.dataset.projectId = project.id;
+      lineAdjustBtn.textContent = 'Juster priser';
+      lineAdjustBtn.disabled = archiveMode;
+
       const lineEditBtn = document.createElement('button');
       lineEditBtn.type = 'button';
       lineEditBtn.className = 'btn alt line-edit-btn';
@@ -507,7 +531,7 @@ export function createProjectRow(project, options = {}){
 
       lineMain.append(lineBtn, lineAddonControl);
       lineWrap.appendChild(lineMain);
-      lineActionButtons.append(lineEditBtn, lineDeleteBtn);
+      lineActionButtons.append(lineAdjustBtn, lineEditBtn, lineDeleteBtn);
       lineWrap.appendChild(lineActionButtons);
       linesWrapper.appendChild(lineWrap);
     });
