@@ -1,4 +1,4 @@
-﻿// v2 + v2.1, XCP-S/XCM, distribusjon/feeder, avtappingsbokser, ekspansjon-modal >30 m
+// v2 + v2.1, XCP-S/XCM, distribusjon/feeder, avtappingsbokser, ekspansjon-modal >30 m
 
 import {
   ADMIN_NAV_ALLOWED_EMAILS,
@@ -183,7 +183,8 @@ const LEGACY_PROJECTS_STORAGE_KEY = 'busbar.projects.v1';
 const projectSyncState = {
   timerId: null,
   inFlight: false,
-  pending: false
+  pending: false,
+  deletedProjectIds: new Set()
 };
 const EMAIL_PROJECT_SUGGESTION_DISMISSED_KEY_PREFIX = 'busbar.emailProjectSuggestions.dismissed';
 const emailProjectSuggestionState = {
@@ -4183,18 +4184,21 @@ async function fetchUserProjectsFromServer(email){
   return {
     updatedAt: typeof payload?.updatedAt === 'string' ? payload.updatedAt : null,
     isAdmin: payload?.isAdmin === true,
+    deletedProjectIds: Array.isArray(payload?.deletedProjectIds) ? payload.deletedProjectIds.map(String).filter(Boolean) : [],
     ownerEmails: Array.isArray(payload?.ownerEmails) ? payload.ownerEmails.map(normalizeUserEmail).filter(hasValidUserEmail) : [],
     projects: projects.map(normalizeProject).filter(Boolean)
   };
 }
 
 async function pushUserProjectsToServer(email, projects){
+  const deletedProjectIds = Array.from(projectSyncState.deletedProjectIds).filter(Boolean);
   const res = await fetch(buildApiUrl('/api/user-projects/sync'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify({
       email,
       ownerEmails: authState.isAdmin === true ? projectState.projectOwnerEmails : undefined,
+      deletedProjectIds,
       projects: Array.isArray(projects) ? projects : []
     })
   });
@@ -4219,10 +4223,14 @@ async function pushUserProjectsToServer(email, projects){
     updateAuthUI();
   }
   const syncedProjects = Array.isArray(payload?.projects) ? payload.projects : [];
+  if (Array.isArray(payload?.deletedProjectIds)){
+    payload.deletedProjectIds.map(String).filter(Boolean).forEach(id=>projectSyncState.deletedProjectIds.add(id));
+  }
+  deletedProjectIds.forEach(id=>projectSyncState.deletedProjectIds.delete(id));
   projectState.projectOwnerEmails = Array.isArray(payload?.ownerEmails)
     ? payload.ownerEmails.map(normalizeUserEmail).filter(hasValidUserEmail)
     : projectState.projectOwnerEmails;
-  return syncedProjects.map(normalizeProject).filter(Boolean);
+  return syncedProjects.map(normalizeProject).filter(project=>project && !projectSyncState.deletedProjectIds.has(project.id));
 }
 
 async function fetchCustomerDatabaseFromServer(){
@@ -4521,15 +4529,13 @@ async function flushProjectSync(){
   projectSyncState.inFlight = true;
   try{
     const syncedProjects = await pushUserProjectsToServer(email, projectState.projects);
-    if (syncedProjects.length){
-      projectState.projects = mergeProjectsByLatest(projectState.projects, syncedProjects);
-      sortProjects();
-      updateProjectHistories();
-      saveProjectsToStorage({ skipRemoteSync: true });
-      renderProjectDashboard();
-      renderMainDashboard();
-      updateProjectMetaDisplay();
-    }
+    projectState.projects = syncedProjects;
+    sortProjects();
+    updateProjectHistories();
+    saveProjectsToStorage({ skipRemoteSync: true });
+    renderProjectDashboard();
+    renderMainDashboard();
+    updateProjectMetaDisplay();
   }catch(err){
     console.warn('Kunne ikke synkronisere prosjekter mot server', err);
   }finally{
@@ -4570,16 +4576,21 @@ async function syncProjectsForCurrentUser(){
       persistAuthToSession();
     }
     const remoteProjects = Array.isArray(remoteSnapshot?.projects) ? remoteSnapshot.projects : [];
+    if (Array.isArray(remoteSnapshot?.deletedProjectIds)){
+      remoteSnapshot.deletedProjectIds.forEach(id=>projectSyncState.deletedProjectIds.add(id));
+    }
     projectState.projectOwnerEmails = Array.isArray(remoteSnapshot?.ownerEmails) && remoteSnapshot.ownerEmails.length
       ? remoteSnapshot.ownerEmails
       : [email];
     const hasAuthoritativeEmptyRemote = !!remoteSnapshot?.updatedAt && remoteProjects.length === 0;
+    const filterDeletedProjects = projects => (Array.isArray(projects) ? projects : [])
+      .filter(project=>project && !projectSyncState.deletedProjectIds.has(project.id));
     const localProjects = hasAuthoritativeEmptyRemote
       ? []
-      : mergeProjectsByLatest(projectState.projects, loadLocalProjectsForMigration(email));
+      : filterDeletedProjects(mergeProjectsByLatest(projectState.projects, loadLocalProjectsForMigration(email)));
     const mergedProjects = hasAuthoritativeEmptyRemote
       ? []
-      : mergeProjectsByLatest(localProjects, remoteProjects);
+      : filterDeletedProjects(mergeProjectsByLatest(localProjects, remoteProjects));
     projectState.projects = mergedProjects;
     sortProjects();
     updateProjectHistories();
@@ -4588,15 +4599,13 @@ async function syncProjectsForCurrentUser(){
     renderMainDashboard();
     updateProjectMetaDisplay();
     const syncedProjects = await pushUserProjectsToServer(email, projectState.projects);
-    if (syncedProjects.length){
-      projectState.projects = mergeProjectsByLatest(projectState.projects, syncedProjects);
-      sortProjects();
-      updateProjectHistories();
-      saveProjectsToStorage({ skipRemoteSync: true });
-      renderProjectDashboard();
-      renderMainDashboard();
-      updateProjectMetaDisplay();
-    }
+    projectState.projects = syncedProjects;
+    sortProjects();
+    updateProjectHistories();
+    saveProjectsToStorage({ skipRemoteSync: true });
+    renderProjectDashboard();
+    renderMainDashboard();
+    updateProjectMetaDisplay();
     projectState.customerDatabase = normalizeGlobalCustomerPayload(await fetchCustomerDatabaseFromServer());
     projectState.globalCustomerDatabaseLoaded = true;
     updateProjectHistories();
@@ -4991,6 +5000,7 @@ function deleteProject(projectId){
   );
   if (!confirmed) return;
 
+  projectSyncState.deletedProjectIds.add(String(projectId));
   projectState.projects = projectState.projects.filter(project=>project.id !== projectId);
   if (projectState.expandedProjectId === projectId){
     projectState.expandedProjectId = null;

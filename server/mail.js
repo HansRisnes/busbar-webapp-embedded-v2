@@ -1096,9 +1096,11 @@ async function buildMergedCustomerDatabase() {
   ]);
   const byKey = new Map();
   const projectKeysByCustomer = new Map();
+  const deletedProjectIds = new Set(Array.isArray(archive.deletedProjectIds) ? archive.deletedProjectIds.map(safeString).filter(Boolean) : []);
   database.customers.forEach(customer => mergeCustomerIntoMap(byKey, customer));
   Object.values(archive.users || {}).forEach(user => {
     (Array.isArray(user.projects) ? user.projects : []).forEach(project => {
+      if (deletedProjectIds.has(safeString(project?.id))) return;
       const customerName = safeString(project.customer);
       if (!customerName) return;
       const customerKey = normalizeLookupKey(customerName);
@@ -1242,13 +1244,18 @@ function enrichProjectOwner(project, ownerEmail, authStore) {
 
 function buildVisibleProjectsForAuth(archive, auth, authStore = { users: {} }) {
   const email = normalizeEmail(auth?.email);
+  const deletedProjectIds = new Set(Array.isArray(archive?.deletedProjectIds) ? archive.deletedProjectIds.map(safeString).filter(Boolean) : []);
+  const isDeletedProject = project => deletedProjectIds.has(safeString(project?.id));
   if (!auth?.isAdmin) {
     const user = archive.users[email] || { email, updatedAt: null, projects: [] };
     return {
       email,
       updatedAt: user.updatedAt,
       ownerEmails: [email],
-      projects: (Array.isArray(user.projects) ? user.projects : []).map(project => enrichProjectOwner(project, email, authStore))
+      deletedProjectIds: Array.from(deletedProjectIds),
+      projects: (Array.isArray(user.projects) ? user.projects : [])
+        .filter(project => !isDeletedProject(project))
+        .map(project => enrichProjectOwner(project, email, authStore))
     };
   }
   const projects = [];
@@ -1261,6 +1268,7 @@ function buildVisibleProjectsForAuth(archive, auth, authStore = { users: {} }) {
       updatedAt = userUpdatedAt;
     }
     (Array.isArray(user?.projects) ? user.projects : []).forEach(project => {
+      if (isDeletedProject(project)) return;
       projects.push(enrichProjectOwner(project, ownerEmail, authStore));
     });
   });
@@ -1268,6 +1276,7 @@ function buildVisibleProjectsForAuth(archive, auth, authStore = { users: {} }) {
     email,
     updatedAt,
     projects,
+    deletedProjectIds: Array.from(deletedProjectIds),
     ownerEmails: Object.keys(archive.users || {}).map(normalizeEmail).filter(isValidEmail)
   };
 }
@@ -1288,20 +1297,26 @@ async function readProjectArchive() {
   const usersRaw = (stored && typeof stored === 'object' && stored.users && typeof stored.users === 'object')
     ? stored.users
     : {};
+  const deletedProjectIds = Array.isArray(stored?.deletedProjectIds)
+    ? stored.deletedProjectIds.map(safeString).filter(Boolean)
+    : [];
   const users = {};
   Object.entries(usersRaw).forEach(([key, value]) => {
     const email = normalizeEmail(key || value?.email);
     if (!isValidEmail(email)) return;
     users[email] = normalizeStoredUserRecord(email, value);
   });
-  return { users };
+  return { users, deletedProjectIds };
 }
 
 async function writeProjectArchive(state) {
   const users = (state && typeof state === 'object' && state.users && typeof state.users === 'object')
     ? state.users
     : {};
-  await writeJsonFile(PROJECT_ARCHIVE_FILE, { users });
+  const deletedProjectIds = Array.isArray(state?.deletedProjectIds)
+    ? Array.from(new Set(state.deletedProjectIds.map(safeString).filter(Boolean)))
+    : [];
+  await writeJsonFile(PROJECT_ARCHIVE_FILE, { users, deletedProjectIds });
 }
 
 function parseBasicAuthHeader(headerValue) {
@@ -3957,6 +3972,7 @@ app.get('/api/user-projects', requireUserAuth, async (req, res) => {
       email: visibleRecord.email,
       updatedAt: visibleRecord.updatedAt,
       ownerEmails: visibleRecord.ownerEmails,
+      deletedProjectIds: visibleRecord.deletedProjectIds,
       isAdmin: req.userAuth.isAdmin === true,
       projects: visibleRecord.projects
     });
@@ -3982,9 +3998,14 @@ app.post('/api/user-projects/sync', requireUserAuth, async (req, res) => {
       return res.status(413).json({ error: 'For mange prosjekter i én synk' });
     }
 
+    const requestedDeletedProjectIds = Array.isArray(req.body?.deletedProjectIds)
+      ? req.body.deletedProjectIds.map(safeString).filter(Boolean)
+      : [];
+    const requestedDeletedProjectIdSet = new Set(requestedDeletedProjectIds);
+
     const normalizedProjects = req.body.projects
       .map(normalizeProjectRecord)
-      .filter(Boolean);
+      .filter(project => project && !requestedDeletedProjectIdSet.has(safeString(project.id)));
     const updatedAt = new Date().toISOString();
 
     const nextUserRecord = await withOfferNumberLock(async () => {
@@ -3997,6 +4018,15 @@ app.post('/api/user-projects/sync', requireUserAuth, async (req, res) => {
         : {};
       const record = await withProjectArchiveLock(async () => {
         const archive = await readProjectArchive();
+        const deletedProjectIds = new Set(Array.isArray(archive.deletedProjectIds) ? archive.deletedProjectIds.map(safeString).filter(Boolean) : []);
+        requestedDeletedProjectIds.forEach(id => deletedProjectIds.add(id));
+        if (requestedDeletedProjectIds.length) {
+          Object.values(archive.users || {}).forEach(user => {
+            if (!user || !Array.isArray(user.projects)) return;
+            user.projects = user.projects.filter(project => !deletedProjectIds.has(safeString(project?.id)));
+          });
+        }
+        archive.deletedProjectIds = Array.from(deletedProjectIds);
         normalizedProjects.forEach(project=>{
           ensureProjectNumber(project, projectNumbers, counterState);
         });
@@ -4053,6 +4083,7 @@ app.post('/api/user-projects/sync', requireUserAuth, async (req, res) => {
       email: nextUserRecord.email,
       updatedAt: nextUserRecord.updatedAt,
       ownerEmails: nextUserRecord.ownerEmails,
+      deletedProjectIds: nextUserRecord.deletedProjectIds,
       isAdmin: req.userAuth.isAdmin === true,
       projects: nextUserRecord.projects
     });
