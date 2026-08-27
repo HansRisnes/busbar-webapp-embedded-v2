@@ -6782,20 +6782,21 @@ function isProjectFlowWeekStart(date, index){
 }
 
 function getProjectFlowVisibleProjects(){
+  const activeProjects = projectState.projects.filter(project=>!projectIsArchived(project));
   const selectedId = String(projectFlowState.selectedProjectId || PROJECT_FLOW_ALL_PROJECTS).trim();
   if (selectedId && selectedId !== PROJECT_FLOW_ALL_PROJECTS){
-    const project = projectState.projects.find(item=>item.id === selectedId);
+    const project = activeProjects.find(item=>item.id === selectedId);
     return project ? [project] : [];
   }
   const filter = String(projectFlowState.dashboardStatusFilter || '').trim();
   if (filter){
-    return projectState.projects.filter(project=>getProjectFlowStatusForProject(project).label === filter);
+    return activeProjects.filter(project=>getProjectFlowStatusForProject(project).label === filter);
   }
-  return [...projectState.projects];
+  return activeProjects;
 }
 
 function getProjectFlowAllTasks(){
-  return projectState.projects.flatMap(project=>{
+  return projectState.projects.filter(project=>!projectIsArchived(project)).flatMap(project=>{
     return getProjectFlowMilestones(project.id).map(task=>({
       ...task,
       projectId: project.id,
@@ -7221,8 +7222,9 @@ function updateProjectFlowProjectSelect(){
   const select = $('projectFlowProjectSelect');
   if (!select) return;
   const current = String(projectFlowState.selectedProjectId || '').trim();
+  const activeProjects = projectState.projects.filter(project=>!projectIsArchived(project));
   select.innerHTML = '';
-  if (!projectState.projects.length){
+  if (!activeProjects.length){
     const option = document.createElement('option');
     option.value = '';
     option.textContent = 'Ingen prosjekter';
@@ -7235,7 +7237,7 @@ function updateProjectFlowProjectSelect(){
   allOption.value = PROJECT_FLOW_ALL_PROJECTS;
   allOption.textContent = 'Alle prosjekter';
   select.appendChild(allOption);
-  projectState.projects.forEach(project=>{
+  activeProjects.forEach(project=>{
     const option = document.createElement('option');
     option.value = project.id || '';
     option.textContent = project.projectNumber
@@ -7243,7 +7245,7 @@ function updateProjectFlowProjectSelect(){
       : project.name || 'Uten navn';
     select.appendChild(option);
   });
-  const exists = current === PROJECT_FLOW_ALL_PROJECTS || projectState.projects.some(project=>project.id === current);
+  const exists = current === PROJECT_FLOW_ALL_PROJECTS || activeProjects.some(project=>project.id === current);
   projectFlowState.selectedProjectId = exists ? current : PROJECT_FLOW_ALL_PROJECTS;
   select.value = projectFlowState.selectedProjectId;
   select.disabled = false;
@@ -7367,6 +7369,79 @@ function getProjectFlowBarLayout(spanDays, label = ''){
     showDelete,
     isTight: days > 1 && estimatedTitleWidth > Math.max(24, barWidth - fixedWidth)
   };
+}
+
+function createProjectFlowTaskBar(item, spanDays, label, stackOffset = 0){
+  const bar = document.createElement('div');
+  bar.className = 'project-flow-bar';
+  bar.dataset.projectFlowDrag = item.id;
+  bar.dataset.projectFlowTaskBar = item.id;
+  bar.dataset.projectId = item.projectId;
+  if (spanDays <= 1) bar.classList.add('is-single-day');
+  if (item.completed) bar.classList.add('is-completed');
+  const barLayout = getProjectFlowBarLayout(spanDays, label);
+  if (!barLayout.showResize) bar.classList.add('is-no-resize');
+  if (!barLayout.showDelete) bar.classList.add('is-no-delete');
+  if (barLayout.isTight) bar.classList.add('is-tight');
+  if (stackOffset){
+    bar.style.top = `calc(50% + ${stackOffset}px)`;
+  }
+  bar.style.setProperty('--project-flow-span-days', String(spanDays));
+
+  const resizeStart = document.createElement('span');
+  resizeStart.className = 'project-flow-resize-handle is-start';
+  resizeStart.dataset.projectFlowResize = 'start';
+  resizeStart.setAttribute('aria-hidden', 'true');
+  const check = document.createElement('input');
+  check.type = 'checkbox';
+  check.checked = item.completed;
+  check.dataset.projectFlowToggle = item.id;
+  check.dataset.projectId = item.projectId;
+  check.title = 'Marker fullført';
+  const text = document.createElement('button');
+  text.type = 'button';
+  text.className = 'project-flow-bar-title';
+  text.dataset.projectFlowEdit = item.id;
+  text.dataset.projectId = item.projectId;
+  text.textContent = label;
+  const remove = document.createElement('button');
+  remove.type = 'button';
+  remove.className = 'project-flow-delete';
+  remove.dataset.projectFlowDelete = item.id;
+  remove.dataset.projectId = item.projectId;
+  remove.textContent = '✕';
+  remove.title = 'Slett oppgave';
+  const resizeEnd = document.createElement('span');
+  resizeEnd.className = 'project-flow-resize-handle is-end';
+  resizeEnd.dataset.projectFlowResize = 'end';
+  resizeEnd.setAttribute('aria-hidden', 'true');
+  const linkIn = document.createElement('button');
+  linkIn.type = 'button';
+  linkIn.className = 'project-flow-link-handle is-driven-by';
+  linkIn.dataset.projectFlowLink = 'drivenBy';
+  linkIn.dataset.projectFlowLinkTask = item.id;
+  linkIn.dataset.projectId = item.projectId;
+  linkIn.title = 'Styres av';
+  linkIn.setAttribute('aria-label', 'Styres av');
+  const linkOut = document.createElement('button');
+  linkOut.type = 'button';
+  linkOut.className = 'project-flow-link-handle is-drives';
+  linkOut.dataset.projectFlowLink = 'drives';
+  linkOut.dataset.projectFlowLinkTask = item.id;
+  linkOut.dataset.projectId = item.projectId;
+  linkOut.title = 'Styrer';
+  linkOut.setAttribute('aria-label', 'Styrer');
+  if (spanDays <= 1){
+    bar.append(linkIn, check, linkOut);
+  } else {
+    bar.append(linkIn);
+    if (barLayout.showResize) bar.append(resizeStart);
+    bar.append(check, text);
+    if (barLayout.showDelete) bar.append(remove);
+    if (barLayout.showResize) bar.append(resizeEnd);
+    bar.append(linkOut);
+  }
+  return bar;
 }
 
 function getProjectFlowVisibleWeekCount(){
@@ -9160,7 +9235,7 @@ function renderProjectFlowView(options = {}){
   const addBtn = $('addProjectFlowMilestoneBtn');
   const refreshBtn = $('refreshProjectFlowBtn');
   const visibleProjects = getProjectFlowVisibleProjects();
-  if (addBtn) addBtn.disabled = !projectState.projects.length;
+  if (addBtn) addBtn.disabled = !visibleProjects.length;
   if (refreshBtn) refreshBtn.disabled = false;
   updateProjectFlowExpandToggleButton();
   if (!visibleProjects.length){
@@ -9365,134 +9440,97 @@ function renderProjectFlowView(options = {}){
         ? group.projectRows.flatMap(project=>{
           const projectTasks = phaseTasks.filter(task=>task.projectId === project.id);
           return projectTasks.length
-            ? projectTasks.map(task=>({ type: 'task', task, project }))
+            ? [{ type: 'tasks', tasks: projectTasks, project }]
             : [{ type: 'empty', project }];
         })
-        : phaseTasks.map(task=>({ type: 'task', task, project: null }));
+        : phaseTasks.length
+          ? [{ type: 'tasks', tasks: phaseTasks, project: null }]
+          : [];
 
       rowsToRender.forEach(row=>{
         if (row.type === 'empty'){
           appendEmptyTaskRow(getProjectFlowProjectLabel(row.project), row.project.id, true);
           return;
         }
-        const item = row.task;
-        const projectRowLabel = group.projectRows?.length
-          ? getProjectFlowProjectLabel(row.project || projectState.projects.find(project=>project.id === item.projectId))
-          : getProjectFlowTaskLabel(item, group.includeProjectInTask);
+        const taskItems = Array.isArray(row.tasks) ? row.tasks : [];
+        if (!taskItems.length) return;
+        const taskLayouts = taskItems.map(item=>{
+          const startDate = parseProjectFlowDate(item.startDate);
+          const endDate = parseProjectFlowDate(item.endDate);
+          const startIndex = startDate ? getProjectFlowDayDiff(start, startDate) : -1;
+          const endIndex = endDate ? getProjectFlowDayDiff(start, endDate) : startIndex;
+          return {
+            item,
+            label: group.projectRows?.length
+              ? getProjectFlowProjectLabel(row.project || projectState.projects.find(project=>project.id === item.projectId))
+              : getProjectFlowTaskLabel(item, group.includeProjectInTask),
+            startIndex,
+            endIndex,
+            spanDays: Math.max(1, endIndex - startIndex + 1)
+          };
+        });
         const taskLabel = document.createElement('div');
         taskLabel.className = 'project-flow-task-label';
-        taskLabel.dataset.projectFlowTaskRow = item.id;
-        taskLabel.dataset.projectId = item.projectId;
-        if (item.completed) taskLabel.classList.add('is-completed');
-        const taskTitle = document.createElement('button');
-        taskTitle.type = 'button';
-        taskTitle.dataset.projectFlowEdit = item.id;
-        taskTitle.dataset.projectId = item.projectId;
-        taskTitle.textContent = projectRowLabel;
-        const taskMeta = document.createElement('span');
-        taskMeta.textContent = `${formatProjectFlowDisplayDate(item.startDate)} - ${formatProjectFlowDisplayDate(item.endDate)}`;
-        taskLabel.append(taskTitle, taskMeta);
-        if (item.fileName){
-          const fileMeta = document.createElement('span');
-          fileMeta.className = 'project-flow-task-file';
-          fileMeta.textContent = `Fil: ${item.fileName}`;
-          taskLabel.appendChild(fileMeta);
-        }
+        if (taskItems.length > 1) taskLabel.classList.add('is-multi-task');
+        taskLabel.dataset.projectFlowTaskRow = taskItems[0].id;
+        taskLabel.dataset.projectId = row.project?.id || taskItems[0].projectId;
+        taskLabel.style.minHeight = `${Math.max(62, (taskItems.length * 44) + 18)}px`;
+        taskLayouts.forEach(layout=>{
+          const taskEntry = document.createElement('div');
+          taskEntry.className = 'project-flow-task-entry';
+          if (layout.item.completed) taskEntry.classList.add('is-completed');
+          const taskTitle = document.createElement('button');
+          taskTitle.type = 'button';
+          taskTitle.dataset.projectFlowEdit = layout.item.id;
+          taskTitle.dataset.projectId = layout.item.projectId;
+          taskTitle.textContent = layout.label;
+          const taskMeta = document.createElement('span');
+          taskMeta.textContent = `${formatProjectFlowDisplayDate(layout.item.startDate)} - ${formatProjectFlowDisplayDate(layout.item.endDate)}`;
+          taskEntry.append(taskTitle, taskMeta);
+          if (layout.item.fileName){
+            const fileMeta = document.createElement('span');
+            fileMeta.className = 'project-flow-task-file';
+            fileMeta.textContent = `Fil: ${layout.item.fileName}`;
+            taskEntry.appendChild(fileMeta);
+          }
+          taskLabel.appendChild(taskEntry);
+        });
         grid.appendChild(taskLabel);
 
-        const startDate = parseProjectFlowDate(item.startDate);
-        const endDate = parseProjectFlowDate(item.endDate);
-        const startIndex = startDate ? getProjectFlowDayDiff(start, startDate) : -1;
-        const endIndex = endDate ? getProjectFlowDayDiff(start, endDate) : startIndex;
-        const spanDays = Math.max(1, endIndex - startIndex + 1);
         dates.forEach((date, index)=>{
           const dateKey = getProjectFlowDateKey(date);
           const cell = document.createElement('div');
           cell.className = 'project-flow-cell';
-          cell.dataset.projectId = item.projectId;
-          cell.dataset.phaseId = item.phaseId;
-          cell.dataset.projectFlowRowTask = item.id;
+          if (taskItems.length > 1) cell.classList.add('is-multi-task');
+          cell.style.minHeight = `${Math.max(62, (taskItems.length * 44) + 18)}px`;
+          cell.dataset.projectId = row.project?.id || taskItems[0].projectId;
+          cell.dataset.phaseId = phase.id;
+          cell.dataset.projectFlowRowTask = taskItems[0].id;
           cell.dataset.date = dateKey;
           if (dateKey === todayKey) cell.classList.add('is-today');
           if ([0, 6].includes(date.getDay())) cell.classList.add('is-weekend');
           if (isProjectFlowWeekStart(date, index)) cell.classList.add('is-week-start');
           const dateIndex = getProjectFlowDayDiff(start, date);
-          const isCovered = dateIndex >= startIndex && dateIndex <= endIndex;
-          cell.dataset.projectFlowDateCell = isCovered ? item.id : '';
+          const coveredTasks = taskLayouts.filter(layout=>
+            dateIndex >= layout.startIndex && dateIndex <= layout.endIndex
+          );
+          const isCovered = coveredTasks.length > 0;
+          cell.dataset.projectFlowDateCell = coveredTasks[0]?.item.id || '';
           if (isCovered) cell.classList.add('is-covered');
-          if (isCovered && dateIndex !== startIndex) cell.classList.add('is-covered-continuation');
-          if (dateIndex === startIndex){
-            const bar = document.createElement('div');
-            bar.className = 'project-flow-bar';
-            bar.dataset.projectFlowDrag = item.id;
-            bar.dataset.projectFlowTaskBar = item.id;
-            bar.dataset.projectId = item.projectId;
-            if (spanDays <= 1) bar.classList.add('is-single-day');
-            if (item.completed) bar.classList.add('is-completed');
-            const barLayout = getProjectFlowBarLayout(spanDays, projectRowLabel);
-            if (!barLayout.showResize) bar.classList.add('is-no-resize');
-            if (!barLayout.showDelete) bar.classList.add('is-no-delete');
-            if (barLayout.isTight) bar.classList.add('is-tight');
-            bar.style.setProperty('--project-flow-span-days', String(spanDays));
-            const resizeStart = document.createElement('span');
-            resizeStart.className = 'project-flow-resize-handle is-start';
-            resizeStart.dataset.projectFlowResize = 'start';
-            resizeStart.setAttribute('aria-hidden', 'true');
-            const check = document.createElement('input');
-            check.type = 'checkbox';
-            check.checked = item.completed;
-            check.dataset.projectFlowToggle = item.id;
-            check.dataset.projectId = item.projectId;
-            check.title = 'Marker fullført';
-            const text = document.createElement('button');
-            text.type = 'button';
-            text.className = 'project-flow-bar-title';
-            text.dataset.projectFlowEdit = item.id;
-            text.dataset.projectId = item.projectId;
-            text.textContent = projectRowLabel;
-            const remove = document.createElement('button');
-            remove.type = 'button';
-            remove.className = 'project-flow-delete';
-            remove.dataset.projectFlowDelete = item.id;
-            remove.dataset.projectId = item.projectId;
-            remove.textContent = '✕';
-            remove.title = 'Slett oppgave';
-            const resizeEnd = document.createElement('span');
-            resizeEnd.className = 'project-flow-resize-handle is-end';
-            resizeEnd.dataset.projectFlowResize = 'end';
-            resizeEnd.setAttribute('aria-hidden', 'true');
-            const linkIn = document.createElement('button');
-            linkIn.type = 'button';
-            linkIn.className = 'project-flow-link-handle is-driven-by';
-            linkIn.dataset.projectFlowLink = 'drivenBy';
-            linkIn.dataset.projectFlowLinkTask = item.id;
-            linkIn.dataset.projectId = item.projectId;
-            linkIn.title = 'Styres av';
-            linkIn.setAttribute('aria-label', 'Styres av');
-            const linkOut = document.createElement('button');
-            linkOut.type = 'button';
-            linkOut.className = 'project-flow-link-handle is-drives';
-            linkOut.dataset.projectFlowLink = 'drives';
-            linkOut.dataset.projectFlowLinkTask = item.id;
-            linkOut.dataset.projectId = item.projectId;
-            linkOut.title = 'Styrer';
-            linkOut.setAttribute('aria-label', 'Styrer');
-            if (spanDays <= 1){
-              bar.append(linkIn, check, linkOut);
-            } else {
-              bar.append(linkIn);
-              if (barLayout.showResize) bar.append(resizeStart);
-              bar.append(check, text);
-              if (barLayout.showDelete) bar.append(remove);
-              if (barLayout.showResize) bar.append(resizeEnd);
-              bar.append(linkOut);
-            }
-            cell.appendChild(bar);
+          if (isCovered && coveredTasks.some(layout=>dateIndex !== layout.startIndex)){
+            cell.classList.add('is-covered-continuation');
           }
+          taskLayouts.forEach((layout, taskIndex)=>{
+            if (dateIndex !== layout.startIndex) return;
+            const stackOffset = taskItems.length > 1
+              ? (taskIndex - ((taskItems.length - 1) / 2)) * 44
+              : 0;
+            cell.appendChild(createProjectFlowTaskBar(layout.item, layout.spanDays, layout.label, stackOffset));
+          });
           grid.appendChild(cell);
         });
       });
-      appendEmptyTaskRow();
+      if (!selectedProject) appendEmptyTaskRow();
     });
   });
 
