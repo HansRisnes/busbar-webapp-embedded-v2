@@ -100,15 +100,16 @@ export const PROJECT_STATUS_OPTIONS = Object.freeze([
   { id: 'finished', label: 'Ferdig', tone: 'done' }
 ]);
 export const PROJECT_ARCHIVE_STATUS_IDS = Object.freeze(['lost', 'finished']);
+// betaTarget er kun koblingsmetadata. Prosjektflytene deler foreløpig ingen status eller handlinger.
 export const PROJECT_FLOW_PHASES = Object.freeze([
-  { id: 'request', label: 'Forespørsel' },
-  { id: 'offer', label: 'Tilbud' },
-  { id: 'order', label: 'Ordre' },
-  { id: 'engineering', label: 'Prosjektering' },
-  { id: 'procurement', label: 'Innkjøp' },
-  { id: 'production', label: 'Produksjon' },
-  { id: 'delivery', label: 'Levering' },
-  { id: 'finished', label: 'Ferdig' }
+  { id: 'request', label: 'Forespørsel', betaTarget: { type: 'task', number: '1.01.0' } },
+  { id: 'offer', label: 'Tilbud', betaTarget: { type: 'task', number: '1.02.0' } },
+  { id: 'order', label: 'Bestilling', betaTarget: { type: 'task', number: '1.03.0' } },
+  { id: 'engineering', label: 'Prosjektering', betaTarget: { type: 'phase', number: '2.00.0' } },
+  { id: 'procurement', label: 'Innkjøp', betaTarget: { type: 'phase', number: '3.00.0' } },
+  { id: 'production', label: 'Bekreftelse fra leverandør', betaTarget: { type: 'task', number: '3.04.0' } },
+  { id: 'delivery', label: 'Leveranse strømskinne', betaTarget: { type: 'task', number: 'X.03.0' } },
+  { id: 'finished', label: 'Fakturert', betaTarget: { type: 'task', number: '1.04.0' } }
 ]);
 export const PROJECT_FLOW_VISIBLE_WEEK_LEVELS = Object.freeze([5, 4, 3, 2]);
 export const PROJECT_FLOW_DEFAULT_ZOOM_INDEX = 1;

@@ -101,6 +101,7 @@
           <a class="sidebar-nav-item" href="calculator.html" data-dashboard-link="calculator"><svg class="sidebar-nav-icon" aria-hidden="true"><use href="#icon-calculator"></use></svg><span class="sidebar-nav-label">Prisverkt&oslash;y</span></a>
           <button type="button" class="sidebar-nav-item" data-dashboard-nav="projects"><svg class="sidebar-nav-icon" aria-hidden="true"><use href="#icon-projects"></use></svg><span class="sidebar-nav-label">Prosjekter</span></button>
           <button type="button" class="sidebar-nav-item" data-dashboard-nav="project-flow"><svg class="sidebar-nav-icon" aria-hidden="true"><use href="#icon-project-flow"></use></svg><span class="sidebar-nav-label">Prosjektflyt</span></button>
+          <button type="button" class="sidebar-nav-item" data-dashboard-nav="project-flow-beta"><svg class="sidebar-nav-icon" aria-hidden="true"><use href="#icon-project-flow"></use></svg><span class="sidebar-nav-label">Prosjektflyt-Beta</span></button>
           <button type="button" class="sidebar-nav-item" data-dashboard-nav="offers"><svg class="sidebar-nav-icon" aria-hidden="true"><use href="#icon-offers"></use></svg><span class="sidebar-nav-label">Tilbud</span></button>
           <button type="button" class="sidebar-nav-item" data-dashboard-nav="email"><svg class="sidebar-nav-icon" aria-hidden="true"><use href="#icon-email"></use></svg><span class="sidebar-nav-label">E-post</span></button>
           <button type="button" class="sidebar-nav-item" data-dashboard-nav="calendar"><svg class="sidebar-nav-icon" aria-hidden="true"><use href="#icon-calendar"></use></svg><span class="sidebar-nav-label">Kalender</span></button>
@@ -143,12 +144,12 @@
                 <p class="muted-text">Summer fra alle beregnede linjer.</p>
               </div>
               <div class="dashboard-total-filters" aria-label="Filtrer totaler">
-                <label class="dashboard-total-filter" for="dashboardTotalsYearFilter">?r
+                <label class="dashboard-total-filter" for="dashboardTotalsYearFilter">År
                   <select id="dashboardTotalsYearFilter">
                     <option value="all">Alle</option>
                   </select>
                 </label>
-                <label class="dashboard-total-filter" for="dashboardTotalsMonthFilter">M?ned
+                <label class="dashboard-total-filter" for="dashboardTotalsMonthFilter">Måned
                   <select id="dashboardTotalsMonthFilter">
                     <option value="all">Alle</option>
                   </select>
@@ -367,6 +368,196 @@
           </div>
         </form>
         <div id="projectFlowTimeline" class="project-flow-timeline" aria-live="polite"></div>
+      </section>
+      <section id="projectFlowBetaView" class="dashboard-page placeholder-page" data-dashboard-page="project-flow-beta" hidden>
+        <div class="placeholder-header">
+          <h2>Prosjektflyt-Beta</h2>
+          <p class="muted-text">Nytt utkast til prosjektflyt med struktur inspirert av arbeidsflytverkt&oslash;y som Asana og ClickUp.</p>
+        </div>
+        <div class="project-flow-beta-shell">
+          <div class="project-flow-toolbar project-flow-beta-toolbar section-toolbar">
+            <div class="toolbar-left">
+              <div class="dashboard-sort-controls">
+                <label for="projectFlowBetaProjectSelect">Prosjekt</label>
+                <select id="projectFlowBetaProjectSelect"></select>
+              </div>
+            </div>
+          </div>
+          <div class="project-flow-beta-tabs" role="tablist" aria-label="Prosjektflyt beta visning">
+            <button id="projectFlowBetaListTab" type="button" class="project-flow-beta-tab is-active" data-project-flow-beta-view="list" role="tab" aria-selected="true">Liste</button>
+            <button id="projectFlowBetaTimelineTab" type="button" class="project-flow-beta-tab" data-project-flow-beta-view="timeline" role="tab" aria-selected="false">Fremdriftsplan</button>
+          </div>
+          <div id="projectFlowBetaListPanel" class="project-flow-beta-table-wrap" data-project-flow-beta-panel="list" aria-label="Prosjektflyt beta liste">
+            <table class="project-flow-beta-table">
+              <colgroup>
+                <col class="project-flow-beta-col-task">
+                <col class="project-flow-beta-col-comment">
+                <col class="project-flow-beta-col-due">
+                <col class="project-flow-beta-col-assignee">
+                <col class="project-flow-beta-col-phase">
+                <col class="project-flow-beta-col-priority">
+                <col class="project-flow-beta-col-blocking">
+              </colgroup>
+              <thead>
+                <tr class="project-flow-beta-list-top-row" aria-hidden="true">
+                  <th colspan="7"></th>
+                </tr>
+                <tr>
+                  <th>Oppgaver</th>
+                  <th>Kommentar</th>
+                  <th>Tidsfrist</th>
+                  <th>Ansvarlig</th>
+                  <th>Prosjektfaser</th>
+                  <th>Prioritet</th>
+                  <th>Blokkerer</th>
+                </tr>
+              </thead>
+              <tbody id="projectFlowBetaTableBody">
+                <tr class="project-flow-beta-phase-row">
+                  <td colspan="7"><span class="project-flow-beta-caret">▾</span><strong>1.00.0 Str&oslash;mskinner - Salg</strong></td>
+                </tr>
+                <tr>
+                  <td><span class="project-flow-beta-status is-done"></span>1.01.0 Foresp&oslash;rsel</td>
+                  <td></td>
+                  <td><span class="project-flow-beta-date-icon"></span></td>
+                  <td><span class="project-flow-beta-assignee-icon"></span></td>
+                  <td><span class="project-flow-beta-tag is-sales">Salg</span></td>
+                  <td><span class="project-flow-beta-priority is-high">H&oslash;y</span></td>
+                  <td><span class="project-flow-beta-blocker"><span class="project-flow-beta-blocker-lock" aria-hidden="true"></span>1.03.0 Bestilling &middot; FS</span></td>
+                </tr>
+                <tr>
+                  <td><span class="project-flow-beta-status is-done"></span>1.02.0 Tilbud</td>
+                  <td></td>
+                  <td><span class="project-flow-beta-date-icon"></span></td>
+                  <td><span class="project-flow-beta-assignee-icon"></span></td>
+                  <td><span class="project-flow-beta-tag is-sales">Salg</span></td>
+                  <td><span class="project-flow-beta-priority is-medium">Middels</span></td>
+                  <td><span class="project-flow-beta-blocker"><span class="project-flow-beta-blocker-lock" aria-hidden="true"></span>1.03.0 Bestilling &middot; FS</span></td>
+                </tr>
+                <tr>
+                  <td><span class="project-flow-beta-status is-waiting"></span>1.03.0 Bestilling</td>
+                  <td></td>
+                  <td><span class="project-flow-beta-date-icon"></span></td>
+                  <td><span class="project-flow-beta-assignee-icon"></span></td>
+                  <td><span class="project-flow-beta-tag is-sales">Salg</span></td>
+                  <td></td>
+                  <td></td>
+                </tr>
+                <tr>
+                  <td><span class="project-flow-beta-status is-waiting"></span>1.04.0 Fakturert</td>
+                  <td></td>
+                  <td><span class="project-flow-beta-date-icon"></span></td>
+                  <td><span class="project-flow-beta-assignee-icon"></span></td>
+                  <td><span class="project-flow-beta-tag is-sales">Salg</span></td>
+                  <td></td>
+                  <td></td>
+                </tr>
+                <tr class="project-flow-beta-phase-row">
+                  <td colspan="7"><span class="project-flow-beta-caret">▾</span><strong>2.00.0 Str&oslash;mskinner - Prosjektering</strong></td>
+                </tr>
+                <tr>
+                  <td><span class="project-flow-beta-status is-approval"></span>2.01.0 Oppdatere Dynamics/solgt</td>
+                  <td></td>
+                  <td><span class="project-flow-beta-date-icon"></span></td>
+                  <td><span class="project-flow-beta-assignee-icon"></span></td>
+                  <td><span class="project-flow-beta-tag is-engineering">Prosjektering</span></td>
+                  <td></td>
+                </tr>
+                <tr>
+                  <td><span class="project-flow-beta-caret">▾</span><span class="project-flow-beta-status is-waiting"></span>2.02.0 Leveringsomfang <span class="project-flow-beta-subtask-count">6</span></td>
+                  <td></td>
+                  <td><span class="project-flow-beta-date-icon"></span></td>
+                  <td><span class="project-flow-beta-assignee-icon"></span></td>
+                  <td><span class="project-flow-beta-tag is-engineering">Prosjektering</span></td>
+                  <td></td>
+                </tr>
+                <tr class="project-flow-beta-subtask-row">
+                  <td><span class="project-flow-beta-status is-approval"></span>2.02.1 Fleksibler</td>
+                  <td></td>
+                  <td><span class="project-flow-beta-date-icon"></span></td>
+                  <td><span class="project-flow-beta-assignee-icon"></span></td>
+                  <td><span class="project-flow-beta-tag is-engineering">Prosjektering</span></td>
+                  <td></td>
+                </tr>
+                <tr class="project-flow-beta-subtask-row">
+                  <td><span class="project-flow-beta-status is-approval"></span>2.02.2 branngjennomf&oslash;ringer</td>
+                  <td></td>
+                  <td><span class="project-flow-beta-date-icon"></span></td>
+                  <td><span class="project-flow-beta-assignee-icon"></span></td>
+                  <td><span class="project-flow-beta-tag is-engineering">Prosjektering</span></td>
+                  <td><span class="project-flow-beta-priority is-low">Lav</span></td>
+                </tr>
+                <tr class="project-flow-beta-subtask-row">
+                  <td><span class="project-flow-beta-status is-approval"></span>2.02.3 Utsparinger</td>
+                  <td></td>
+                  <td><span class="project-flow-beta-date-icon"></span></td>
+                  <td><span class="project-flow-beta-assignee-icon"></span></td>
+                  <td><span class="project-flow-beta-tag is-engineering">Prosjektering</span></td>
+                  <td></td>
+                </tr>
+                <tr class="project-flow-beta-subtask-row">
+                  <td><span class="project-flow-beta-status is-approval"></span>2.02.4 Detaljtegninger rom</td>
+                  <td></td>
+                  <td><span class="project-flow-beta-date-icon"></span></td>
+                  <td><span class="project-flow-beta-assignee-icon"></span></td>
+                  <td><span class="project-flow-beta-tag is-engineering">Prosjektering</span></td>
+                  <td></td>
+                </tr>
+                <tr class="project-flow-beta-subtask-row">
+                  <td><span class="project-flow-beta-status is-approval"></span>2.02.5 Detaljtegninger trafo</td>
+                  <td></td>
+                  <td><span class="project-flow-beta-date-icon"></span></td>
+                  <td><span class="project-flow-beta-assignee-icon"></span></td>
+                  <td><span class="project-flow-beta-tag is-engineering">Prosjektering</span></td>
+                  <td></td>
+                </tr>
+                <tr class="project-flow-beta-subtask-row">
+                  <td><span class="project-flow-beta-status is-approval"></span>2.02.6 Detaljtegninger tavle</td>
+                  <td></td>
+                  <td><span class="project-flow-beta-date-icon"></span></td>
+                  <td><span class="project-flow-beta-assignee-icon"></span></td>
+                  <td><span class="project-flow-beta-tag is-engineering">Prosjektering</span></td>
+                  <td></td>
+                </tr>
+                <tr>
+                  <td><span class="project-flow-beta-status is-approval"></span>2.03.0 Befaring/Teams-m&oslash;te</td>
+                  <td></td>
+                  <td><span class="project-flow-beta-date-icon"></span></td>
+                  <td><span class="project-flow-beta-assignee-icon"></span></td>
+                  <td><span class="project-flow-beta-tag is-engineering">Prosjektering</span></td>
+                  <td></td>
+                </tr>
+                <tr>
+                  <td><span class="project-flow-beta-status is-waiting"></span>2.04.0 Prosjektere/Tegne</td>
+                  <td></td>
+                  <td><span class="project-flow-beta-date-icon"></span></td>
+                  <td><span class="project-flow-beta-assignee-icon"></span></td>
+                  <td><span class="project-flow-beta-tag is-engineering">Prosjektering</span></td>
+                  <td></td>
+                </tr>
+                <tr>
+                  <td><span class="project-flow-beta-status is-waiting"></span>2.05.0 Sende tegninger til kunde</td>
+                  <td></td>
+                  <td><span class="project-flow-beta-date-icon"></span></td>
+                  <td><span class="project-flow-beta-assignee-icon"></span></td>
+                  <td><span class="project-flow-beta-tag is-engineering">Prosjektering</span></td>
+                  <td></td>
+                </tr>
+                <tr>
+                  <td><span class="project-flow-beta-status is-waiting"></span>2.06.0 Godkjente tegninger fra kunde/design freeze</td>
+                  <td></td>
+                  <td><span class="project-flow-beta-date-icon"></span></td>
+                  <td><span class="project-flow-beta-assignee-icon"></span></td>
+                  <td><span class="project-flow-beta-tag is-engineering">Prosjektering</span></td>
+                  <td></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div id="projectFlowBetaTimelinePanel" class="project-flow-beta-timeline-wrap" data-project-flow-beta-panel="timeline" aria-label="Prosjektflyt beta fremdriftsplan" hidden>
+            <div id="projectFlowBetaTimeline" class="project-flow-beta-timeline" aria-live="polite"></div>
+          </div>
+        </div>
       </section>
       <section id="calendarView" class="dashboard-page placeholder-page" data-dashboard-page="calendar" hidden>
         <div class="placeholder-header">

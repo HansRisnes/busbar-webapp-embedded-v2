@@ -249,6 +249,15 @@ const projectMarginModalState = {
 const projectStatusModalState = {
   projectId: null
 };
+const projectFlowBetaState = {
+  selectedProjectId: '',
+  activeView: 'list',
+  visualTaskStatus: {},
+  collapsedItems: {},
+  visualPriority: {},
+  visualAssignee: {},
+  visualSchedule: {}
+};
 const offerDetailsWarningState = {
   resolver: null
 };
@@ -368,6 +377,9 @@ function handleDashboardPageActivated(page, options = {}){
       loadProjectFlowState();
       renderProjectFlowView();
     }
+  } else if (page === 'project-flow-beta'){
+    renderProjectFlowBetaView();
+    window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
   } else if (page === 'customers' || page === 'company-card'){
     loadGlobalCustomerDatabase({ silent: !forceRefresh });
   } else if (page === 'busbar-folders' || page === 'project-folders' || page === 'supplier-folders'){
@@ -1269,7 +1281,7 @@ function setMarketChangeValue(elementId, change){
   if (rateEl && percentEl){
     const rate = Number(change?.rate);
     const rateText = Number.isFinite(rate) ? fmtFxNO.format(rate) : '--';
-    const arrow = percent > 0 ? '?' : percent < 0 ? '?' : '?';
+    const arrow = percent > 0 ? '↑' : percent < 0 ? '↓' : '→';
     rateEl.textContent = rateText;
     percentEl.textContent = Number.isFinite(percent)
       ? `${arrow} ${fmtMarketPercentNO.format(Math.abs(percent))} %`
@@ -6831,7 +6843,7 @@ function buildProjectFlowDates(start, end){
   return dates;
 }
 
-function syncProjectFlowTopScrollbar(scroller, topScrollbar){
+function syncProjectFlowTopScrollbar(scroller, topScrollbar, onScroll = renderProjectFlowDependencyLines){
   if (!scroller || !topScrollbar) return;
   let syncing = false;
   let middlePan = null;
@@ -6842,21 +6854,21 @@ function syncProjectFlowTopScrollbar(scroller, topScrollbar){
     syncing = true;
     scroller.scrollLeft = Math.max(0, Math.min(scroller.scrollWidth - scroller.clientWidth, middlePan.targetScrollLeft));
     topScrollbar.scrollLeft = scroller.scrollLeft;
-    renderProjectFlowDependencyLines();
+    onScroll?.();
     syncing = false;
   };
   topScrollbar.addEventListener('scroll', ()=>{
     if (syncing) return;
     syncing = true;
     scroller.scrollLeft = topScrollbar.scrollLeft;
-    renderProjectFlowDependencyLines();
+    onScroll?.();
     syncing = false;
   });
   scroller.addEventListener('scroll', ()=>{
     if (syncing) return;
     syncing = true;
     topScrollbar.scrollLeft = scroller.scrollLeft;
-    renderProjectFlowDependencyLines();
+    onScroll?.();
     syncing = false;
   });
   scroller.addEventListener('mousedown', evt=>{
@@ -7269,7 +7281,7 @@ function populateProjectFlowPhaseSelect(){
   PROJECT_FLOW_PHASES.forEach(phase=>{
     const option = document.createElement('option');
     option.value = phase.id;
-    option.textContent = phase.label;
+    option.textContent = getProjectFlowPhaseDisplayLabel(phase);
     select.appendChild(option);
   });
 }
@@ -7278,7 +7290,7 @@ function getProjectFlowDependencyOptionLabel(task){
   const projectLabel = task.projectNumber
     ? `${task.projectNumber} - ${task.projectName}`
     : task.projectName;
-  return `${projectLabel}: ${getProjectFlowPhaseLabel(task.phaseId)}`;
+  return `${projectLabel}: ${getProjectFlowPhaseDisplayLabel(task.phaseId)}`;
 }
 
 function populateProjectFlowDependencySelect(select, selectedTaskId = '', currentTaskId = '', relation = '', currentProjectId = ''){
@@ -7413,13 +7425,22 @@ function getProjectFlowPhaseLabel(phaseId){
   return PROJECT_FLOW_PHASES.find(phase=>phase.id === phaseId)?.label || PROJECT_FLOW_PHASES[0].label;
 }
 
+function getProjectFlowPhaseDisplayLabel(phaseOrId){
+  const phase = typeof phaseOrId === 'object'
+    ? phaseOrId
+    : PROJECT_FLOW_PHASES.find(item=>item.id === phaseOrId);
+  if (!phase) return PROJECT_FLOW_PHASES[0].label;
+  const number = String(phase.betaTarget?.number || '').trim();
+  return number ? `${number} ${phase.label}` : phase.label;
+}
+
 function getProjectFlowTaskLabel(item, includeProject = false){
   if (includeProject){
     return item.projectNumber
       ? `${item.projectNumber} - ${item.projectName || 'Uten navn'}`
       : item.projectName || 'Uten navn';
   }
-  return getProjectFlowPhaseLabel(item.phaseId);
+  return getProjectFlowPhaseDisplayLabel(item.phaseId);
 }
 
 function renderDashboardTotalsWidget(){
@@ -8878,7 +8899,7 @@ function startProjectFlowLinkDrag(evt, handle){
   };
   handle.classList.add('is-linking');
   updateProjectFlowLinkTargetHighlights();
-  renderProjectFlowDependencyLines();
+      onScroll?.();
 }
 
 function updateProjectFlowLinkDrag(evt){
@@ -9165,7 +9186,7 @@ function renderProjectFlowView(options = {}){
     'Oppgave',
     'Ny oppgave',
     'Ingen oppgaver',
-    ...PROJECT_FLOW_PHASES.map(phase=>phase.label),
+    ...PROJECT_FLOW_PHASES.map(phase=>getProjectFlowPhaseDisplayLabel(phase)),
     ...visibleProjects.map(project=>getProjectFlowProjectLabel(project)),
     ...sortedMilestones.map(item=>getProjectFlowTaskLabel(item, !selectedProject))
   ]);
@@ -9279,16 +9300,12 @@ function renderProjectFlowView(options = {}){
       phaseLabel.className = 'project-flow-group-label';
       phaseLabel.dataset.projectFlowPhaseToggle = phase.id;
       phaseLabel.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
-      phaseLabel.innerHTML = `<span class="project-flow-group-caret">${collapsed ? '+' : '-'}</span><span>${phase.label}</span><strong>${phaseTasks.length}</strong>`;
+      phaseLabel.innerHTML = `<span class="project-flow-group-caret">${collapsed ? '+' : '-'}</span><span>${getProjectFlowPhaseDisplayLabel(phase)}</span><strong>${phaseTasks.length}</strong>`;
       grid.appendChild(phaseLabel);
-      dates.forEach((date, index)=>{
-        const dateKey = getProjectFlowDateKey(date);
-        const cell = document.createElement('div');
-        cell.className = 'project-flow-group-cell';
-        if (dateKey === todayKey) cell.classList.add('is-today');
-        if (isProjectFlowWeekStart(date, index)) cell.classList.add('is-week-start');
-        grid.appendChild(cell);
-      });
+      const phaseTrack = document.createElement('div');
+      phaseTrack.className = 'project-flow-group-cell is-full-row';
+      phaseTrack.style.gridColumn = `2 / span ${dates.length}`;
+      grid.appendChild(phaseTrack);
       if (collapsed) return;
 
       if (!phaseTasks.length && !group.projectRows?.length){
@@ -9474,6 +9491,11 @@ function renderProjectFlowView(options = {}){
   scroller.appendChild(linkOverlay);
   syncProjectFlowTopScrollbar(scroller, topScrollbar);
   root.append(title, topScrollbar, scroller);
+  requestAnimationFrame(()=>{
+    const dayWidth = getProjectFlowDayWidth();
+    grid.style.setProperty('--project-flow-day-width', `${dayWidth}px`);
+    topScrollbarInner.style.setProperty('--project-flow-day-width', `${dayWidth}px`);
+  });
   if (previousScroll){
     requestAnimationFrame(()=>{
       scroller.scrollLeft = previousScroll.left;
@@ -9531,6 +9553,1283 @@ function renderProjectDashboard(){
   });
 }
 
+const PROJECT_FLOW_BETA_BASE_PHASES = [
+  {
+    number: '1.00.0',
+    title: 'Strømskinner - Salg',
+    rows: [
+      { number: '1.01.0', title: 'Forespørsel', status: 'done', phase: 'Salg', blocks: ['1.03.0 Bestilling'] },
+      { number: '1.02.0', title: 'Tilbud', status: 'done', phase: 'Salg', blocks: ['1.03.0 Bestilling'] },
+      { number: '1.03.0', title: 'Bestilling', status: 'waiting', phase: 'Salg' },
+      { number: '1.04.0', title: 'Fakturert', status: 'waiting', phase: 'Salg' }
+    ]
+  },
+  {
+    number: '2.00.0',
+    title: 'Strømskinner - Prosjektering',
+    rows: [
+      { number: '2.01.0', title: 'Oppdatere Dynamics/solgt', status: 'approval', phase: 'Prosjektering' },
+      {
+        number: '2.02.0',
+        title: 'Leveringsomfang',
+        status: 'waiting',
+        phase: 'Prosjektering',
+        children: [
+          { number: '2.02.1', title: 'Fleksibler', status: 'approval', phase: 'Prosjektering', blocks: ['2.02.0 Leveringsomfang'] },
+          { number: '2.02.2', title: 'branngjennomføringer', status: 'approval', phase: 'Prosjektering', blocks: ['2.02.0 Leveringsomfang'] },
+          { number: '2.02.3', title: 'Utsparinger', status: 'approval', phase: 'Prosjektering', blocks: ['2.02.0 Leveringsomfang'] },
+          { number: '2.02.4', title: 'Detaljtegninger rom', status: 'approval', phase: 'Prosjektering', blocks: ['2.02.0 Leveringsomfang'] },
+          { number: '2.02.5', title: 'Detaljtegninger trafo', status: 'approval', phase: 'Prosjektering', blocks: ['2.02.0 Leveringsomfang'] },
+          { number: '2.02.6', title: 'Detaljtegninger tavle', status: 'approval', phase: 'Prosjektering', blocks: ['2.02.0 Leveringsomfang'] }
+        ]
+      },
+      { number: '2.03.0', title: 'Befaring/Teams-møte', status: 'approval', phase: 'Prosjektering' },
+      { number: '2.04.0', title: 'Prosjektere/Tegne', status: 'waiting', phase: 'Prosjektering', blocks: ['2.05.0 Sende tegninger til kunde'] },
+      { number: '2.05.0', title: 'Sende tegninger til kunde', status: 'waiting', phase: 'Prosjektering', blocks: ['2.06.0 Godkjente tegninger fra kunde/design freeze'] },
+      { number: '2.06.0', title: 'Godkjente tegninger fra kunde/design freeze', status: 'waiting', phase: 'Prosjektering' }
+    ]
+  },
+  {
+    number: '3.00.0',
+    title: 'Strømskinner - Innkjøp',
+    rows: [
+      {
+        number: '3.01.0',
+        title: 'Internkontroll/sidemannssjekk',
+        status: 'waiting',
+        phase: 'Innkjøp',
+        blocks: ['3.02.0 Sende bestilling/BOM til leverandør'],
+        children: [
+          { number: '3.01.1', title: 'Faserekkefølge', status: 'done', phase: 'Prosjektering', blocks: ['3.01.0 Internkontroll/sidemannssjekk'] },
+          { number: '3.01.2', title: 'PE/N på riktig side', status: 'done', phase: 'Prosjektering', blocks: ['3.01.0 Internkontroll/sidemannssjekk'] },
+          { number: '3.01.3', title: 'Riktig spenning (V)', status: 'done', phase: 'Prosjektering', blocks: ['3.01.0 Internkontroll/sidemannssjekk'] },
+          { number: '3.01.4', title: 'Riktig ampere (A)', status: 'done', phase: 'Prosjektering', blocks: ['3.01.0 Internkontroll/sidemannssjekk'] },
+          { number: '3.01.5', title: 'Branngjennomføring', status: 'done', phase: 'Prosjektering', blocks: ['3.01.0 Internkontroll/sidemannssjekk'] },
+          { number: '3.01.6', title: 'Riktig antall skjøteblokker (Schneider)', status: 'done', phase: 'Prosjektering', blocks: ['3.01.0 Internkontroll/sidemannssjekk'] },
+          { number: '3.01.7', title: 'Avstand mellom fanene over trafoen og trafoen', status: 'done', phase: 'Prosjektering', blocks: ['3.01.0 Internkontroll/sidemannssjekk'] },
+          { number: '3.01.8', title: 'Tappepunkt på riktig side', status: 'done', phase: 'Prosjektering', blocks: ['3.01.0 Internkontroll/sidemannssjekk'] },
+          { number: '3.01.9', title: 'Kabel som skal føres inn i tappeboks er tilpasset størrelse på boksen', status: 'done', phase: 'Prosjektering', blocks: ['3.01.0 Internkontroll/sidemannssjekk'] }
+        ]
+      },
+      { number: '3.02.0', title: 'Sende bestilling/BOM til leverandør', status: 'waiting', phase: 'Innkjøp', blocks: ['3.03.0 Sende egen bestilling på tavleelement'] },
+      { number: '3.03.0', title: 'Sende egen bestilling på tavleelement', status: 'waiting', phase: 'Innkjøp' },
+      { number: '3.04.0', title: 'Bekreftelse fra leverandør', status: 'done', phase: 'Innkjøp' },
+      { number: '3.05.0', title: 'Mengdekontroll mot kunde', status: 'done', phase: 'Innkjøp' },
+      { number: '3.06.0', title: 'FAT', status: 'approval', phase: 'Innkjøp' }
+    ]
+  }
+];
+
+const PROJECT_FLOW_BETA_LINE_TASK_TEMPLATE = [
+  { suffix: '01.0', title: 'Tavleelement', status: 'approval', phase: 'Leveranse' },
+  { suffix: '02.0', title: 'Oppmåling', status: 'waiting', phase: 'Prosjektering', blocks: ['03.0 Leveranse strømskinne'] },
+  { suffix: '03.0', title: 'Leveranse strømskinne', status: 'waiting', phase: 'Leveranse', blocks: ['04.0 Montasje'] },
+  {
+    suffix: '04.0',
+    title: 'Montasje',
+    status: 'waiting',
+    phase: 'Montasje',
+    blocks: ['05.0 Fleksibler', '06.0 Sluttkontroll'],
+    children: [
+      { suffix: '04.1', title: 'Montasjetegninger', status: 'approval', blocks: ['04.0 Montasje'] },
+      { suffix: '04.2', title: 'Installasjonsmanual', status: 'approval', blocks: ['04.0 Montasje'] }
+    ]
+  },
+  { suffix: '05.0', title: 'Fleksibler', status: 'waiting', phase: 'Leveranse' },
+  { suffix: '06.0', title: 'Sluttkontroll', status: 'waiting', phase: 'Montasje', blocks: ['07.0 SAT'] },
+  { suffix: '07.0', title: 'SAT', status: 'waiting', phase: 'Montasje' },
+  { suffix: '08.0', title: 'FDV', status: 'done', phase: 'Prosjektering' },
+  { suffix: '09.0', title: 'Del fakturering', status: 'approval', phase: 'Salg', blocks: ['1.04.0 Fakturert'] }
+];
+
+function populateProjectFlowBetaProjectSelect(){
+  const select = $('projectFlowBetaProjectSelect');
+  if (!select) return null;
+  const projects = projectState.projects.filter(project=>project && !projectIsArchived(project));
+  const preferredId = projectFlowBetaState.selectedProjectId || projectState.currentProjectId || projects[0]?.id || '';
+  select.innerHTML = '';
+  projects.forEach(project=>{
+    const option = document.createElement('option');
+    option.value = project.id;
+    option.textContent = getProjectDisplayTitle(project);
+    select.appendChild(option);
+  });
+  if (preferredId && projects.some(project=>project.id === preferredId)){
+    select.value = preferredId;
+  }
+  projectFlowBetaState.selectedProjectId = select.value || '';
+  return projects.find(project=>project.id === projectFlowBetaState.selectedProjectId) || null;
+}
+
+function getProjectFlowBetaSelectedProject(){
+  return projectState.projects.find(project=>project.id === projectFlowBetaState.selectedProjectId)
+    || getProjectById(projectState.currentProjectId)
+    || projectState.projects.find(project=>project && !projectIsArchived(project))
+    || null;
+}
+
+function createProjectFlowBetaIcon(className){
+  const span = document.createElement('span');
+  span.className = className;
+  return span;
+}
+
+function createProjectFlowBetaTag(value){
+  if (!value) return document.createTextNode('');
+  const span = document.createElement('span');
+  const classMap = {
+    Salg: 'is-sales',
+    Prosjektering: 'is-engineering',
+    Innkjøp: 'is-purchase',
+    Leveranse: 'is-delivery',
+    Montasje: 'is-montasje'
+  };
+  span.className = `project-flow-beta-tag ${classMap[value] || ''}`.trim();
+  span.textContent = value;
+  return span;
+}
+
+function createProjectFlowBetaPriority(value){
+  if (!value) return document.createTextNode('');
+  const span = document.createElement('span');
+  const classMap = {
+    Høy: 'is-high',
+    Middels: 'is-medium',
+    Lav: 'is-low'
+  };
+  span.className = `project-flow-beta-priority ${classMap[value] || ''}`.trim();
+  span.textContent = value;
+  return span;
+}
+
+function getProjectFlowBetaPriorityStore(project){
+  const key = getProjectFlowBetaVisualProjectKey(project);
+  if (!projectFlowBetaState.visualPriority[key]){
+    projectFlowBetaState.visualPriority[key] = {};
+  }
+  return projectFlowBetaState.visualPriority[key];
+}
+
+function getProjectFlowBetaVisualPriority(project, task){
+  if (!task) return '';
+  const stored = getProjectFlowBetaPriorityStore(project)[task.number];
+  return ['Lav', 'Middels', 'Høy'].includes(stored) ? stored : task.priority || '';
+}
+
+function createProjectFlowBetaPriorityControl(project, task){
+  const value = getProjectFlowBetaVisualPriority(project, task);
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'project-flow-beta-priority-control';
+  button.dataset.projectFlowBetaPriorityTask = task.number;
+  if (value){
+    button.appendChild(createProjectFlowBetaPriority(value));
+    button.title = `Prioritet: ${value}`;
+    button.setAttribute('aria-label', `Prioritet: ${value}`);
+  } else {
+    button.textContent = 'Sett prioritet';
+    button.classList.add('is-empty');
+    button.title = 'Sett prioritet';
+    button.setAttribute('aria-label', 'Sett prioritet');
+  }
+  return button;
+}
+
+function closeProjectFlowBetaPriorityMenu(){
+  document.querySelectorAll('.project-flow-beta-priority-menu').forEach(menu=>menu.remove());
+}
+
+function setProjectFlowBetaVisualPriority(project, task, value){
+  if (!project || !task) return;
+  const store = getProjectFlowBetaPriorityStore(project);
+  if (['Lav', 'Middels', 'Høy'].includes(value)){
+    store[task.number] = value;
+  } else {
+    delete store[task.number];
+  }
+  closeProjectFlowBetaPriorityMenu();
+  renderProjectFlowBetaView();
+}
+
+function openProjectFlowBetaPriorityMenu(control, project, task){
+  if (!control || !project || !task) return;
+  closeProjectFlowBetaDecisionMenu();
+  closeProjectFlowBetaAssigneeMenu();
+  closeProjectFlowBetaScheduleMenu();
+  closeProjectFlowBetaPriorityMenu();
+  const menu = document.createElement('div');
+  menu.className = 'project-flow-beta-priority-menu';
+  const current = getProjectFlowBetaVisualPriority(project, task);
+  [
+    { value: 'Lav', label: 'Lav' },
+    { value: 'Middels', label: 'Middels' },
+    { value: 'Høy', label: 'Høy' },
+    { value: '', label: 'Tøm prioritet' }
+  ].forEach(option=>{
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = option.label;
+    button.dataset.projectFlowBetaPriorityOption = option.value;
+    button.dataset.projectFlowBetaPriorityTask = task.number;
+    if (option.value === current) button.classList.add('is-active');
+    menu.appendChild(button);
+  });
+  document.body.appendChild(menu);
+  const rect = control.getBoundingClientRect();
+  menu.style.left = `${Math.max(8, rect.left)}px`;
+  menu.style.top = `${rect.bottom + 6}px`;
+}
+
+function getProjectFlowBetaAssigneeStore(project){
+  const key = getProjectFlowBetaVisualProjectKey(project);
+  if (!projectFlowBetaState.visualAssignee[key]){
+    projectFlowBetaState.visualAssignee[key] = {};
+  }
+  return projectFlowBetaState.visualAssignee[key];
+}
+
+function normalizeProjectFlowBetaPersonName(value){
+  return String(value || '').trim().replace(/\s+/g, ' ');
+}
+
+function normalizeProjectFlowBetaPersonKey(value){
+  return normalizeProjectFlowBetaPersonName(value)
+    .toLowerCase()
+    .replace(/-/g, ' ')
+    .replace(/\s+/g, ' ');
+}
+
+function getProjectFlowBetaCustomerResponsible(project){
+  const customer = getGlobalCustomerByName(project?.customer || '');
+  return normalizeProjectFlowBetaPersonName(customer?.customerResponsible || '');
+}
+
+function getProjectFlowBetaProjectResponsible(project){
+  return normalizeProjectFlowBetaPersonName(getProjectResponsibleName(project));
+}
+
+function getProjectFlowBetaAlternateOwner(project){
+  const candidates = ['Lars Erik Huseby', 'Hans-Jakob Risnes'];
+  const responsibleKey = normalizeProjectFlowBetaPersonKey(getProjectFlowBetaProjectResponsible(project));
+  return candidates.find(name=>normalizeProjectFlowBetaPersonKey(name) !== responsibleKey) || candidates[0];
+}
+
+function getProjectFlowBetaDefaultAssignee(project, task){
+  if (!task) return '';
+  if (task.number === '3.01.0' || /^3\.01\.\d+$/.test(task.number)){
+    return getProjectFlowBetaAlternateOwner(project);
+  }
+  if (task.phase === 'Salg' || task.phase === 'Leveranse'){
+    return getProjectFlowBetaCustomerResponsible(project)
+      || getProjectFlowBetaProjectResponsible(project);
+  }
+  return getProjectFlowBetaProjectResponsible(project)
+    || getProjectFlowBetaCustomerResponsible(project);
+}
+
+function getProjectFlowBetaAssigneeCandidates(project){
+  const names = new Map();
+  const add = value=>{
+    const name = normalizeProjectFlowBetaPersonName(value);
+    if (!name) return;
+    names.set(normalizeProjectFlowBetaPersonKey(name), name);
+  };
+  add(authState?.profile?.name);
+  add(getCurrentProjectResponsibleName());
+  add(getProjectFlowBetaProjectResponsible(project));
+  add(getProjectFlowBetaCustomerResponsible(project));
+  add('Lars Erik Huseby');
+  add('Hans-Jakob Risnes');
+  projectState.projects.forEach(item=>{
+    add(item.projectResponsible);
+    add(item.projectOwnerName);
+  });
+  normalizeGlobalCustomerPayload(projectState.customerDatabase).forEach(customer=>{
+    add(customer.customerResponsible);
+  });
+  return Array.from(names.values()).sort((a, b)=>a.localeCompare(b, 'no', { sensitivity: 'base' }));
+}
+
+function getProjectFlowBetaVisualAssignee(project, task){
+  if (!task) return '';
+  const stored = getProjectFlowBetaAssigneeStore(project)[task.number];
+  return normalizeProjectFlowBetaPersonName(stored || getProjectFlowBetaDefaultAssignee(project, task));
+}
+
+function createProjectFlowBetaAssigneeControl(project, task){
+  const value = getProjectFlowBetaVisualAssignee(project, task);
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'project-flow-beta-assignee-control';
+  button.dataset.projectFlowBetaAssigneeTask = task.number;
+  button.textContent = value || 'Sett ansvarlig';
+  button.classList.toggle('is-empty', !value);
+  button.title = value ? `Ansvarlig: ${value}` : 'Sett ansvarlig';
+  button.setAttribute('aria-label', button.title);
+  return button;
+}
+
+function closeProjectFlowBetaAssigneeMenu(){
+  document.querySelectorAll('.project-flow-beta-assignee-menu').forEach(menu=>menu.remove());
+}
+
+function setProjectFlowBetaVisualAssignee(project, task, value){
+  if (!project || !task) return;
+  const name = normalizeProjectFlowBetaPersonName(value);
+  const store = getProjectFlowBetaAssigneeStore(project);
+  if (name){
+    store[task.number] = name;
+  } else {
+    delete store[task.number];
+  }
+  closeProjectFlowBetaAssigneeMenu();
+  renderProjectFlowBetaView();
+}
+
+function renderProjectFlowBetaAssigneeSuggestions(menu, project, task, query){
+  const list = menu.querySelector('[data-project-flow-beta-assignee-results]');
+  if (!list) return;
+  const normalizedQuery = normalizeProjectFlowBetaPersonKey(query);
+  const matches = getProjectFlowBetaAssigneeCandidates(project)
+    .filter(name=>!normalizedQuery || normalizeProjectFlowBetaPersonKey(name).includes(normalizedQuery))
+    .slice(0, 8);
+  list.innerHTML = '';
+  matches.forEach(name=>{
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = name;
+    button.dataset.projectFlowBetaAssigneeOption = name;
+    button.dataset.projectFlowBetaAssigneeTask = task.number;
+    list.appendChild(button);
+  });
+  if (!matches.length){
+    const empty = document.createElement('div');
+    empty.className = 'project-flow-beta-assignee-empty';
+    empty.textContent = 'Ingen treff';
+    list.appendChild(empty);
+  }
+}
+
+function openProjectFlowBetaAssigneeMenu(control, project, task){
+  if (!control || !project || !task) return;
+  closeProjectFlowBetaDecisionMenu();
+  closeProjectFlowBetaPriorityMenu();
+  closeProjectFlowBetaAssigneeMenu();
+  closeProjectFlowBetaScheduleMenu();
+  const menu = document.createElement('div');
+  menu.className = 'project-flow-beta-assignee-menu';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.value = getProjectFlowBetaVisualAssignee(project, task);
+  input.placeholder = 'Søk bruker';
+  input.dataset.projectFlowBetaAssigneeInput = task.number;
+  const results = document.createElement('div');
+  results.className = 'project-flow-beta-assignee-results';
+  results.dataset.projectFlowBetaAssigneeResults = '1';
+  menu.append(input, results);
+  document.body.appendChild(menu);
+  const rect = control.getBoundingClientRect();
+  menu.style.left = `${Math.max(8, rect.left)}px`;
+  menu.style.top = `${rect.bottom + 6}px`;
+  renderProjectFlowBetaAssigneeSuggestions(menu, project, task, input.value);
+  input.focus();
+  input.select();
+}
+
+function getProjectFlowBetaScheduleStore(project){
+  const key = getProjectFlowBetaVisualProjectKey(project);
+  if (!projectFlowBetaState.visualSchedule[key]){
+    projectFlowBetaState.visualSchedule[key] = {};
+  }
+  return projectFlowBetaState.visualSchedule[key];
+}
+
+function normalizeProjectFlowBetaSchedule(raw){
+  const dueDate = String(raw?.dueDate || '').trim();
+  const durationValue = Math.max(1, Number.parseInt(raw?.durationValue || '1', 10) || 1);
+  const durationUnit = ['days', 'weeks', 'months'].includes(raw?.durationUnit) ? raw.durationUnit : 'days';
+  return {
+    dueDate,
+    durationValue,
+    durationUnit
+  };
+}
+
+function getProjectFlowBetaVisualSchedule(project, task){
+  const stored = task ? getProjectFlowBetaScheduleStore(project)[task.number] : null;
+  return normalizeProjectFlowBetaSchedule({
+    dueDate: stored?.dueDate || task?.dueDate || '',
+    durationValue: stored?.durationValue || task?.durationValue || task?.durationDays || 1,
+    durationUnit: stored?.durationUnit || task?.durationUnit || 'days'
+  });
+}
+
+function formatProjectFlowBetaDurationLabel(value, unit){
+  const amount = Math.max(1, Number.parseInt(value || '1', 10) || 1);
+  const labels = {
+    days: amount === 1 ? 'dag' : 'dager',
+    weeks: amount === 1 ? 'uke' : 'uker',
+    months: amount === 1 ? 'måned' : 'måneder'
+  };
+  return `${amount} ${labels[unit] || 'dager'}`;
+}
+
+function getProjectFlowBetaScheduleStartDate(schedule){
+  const dueDate = parseProjectFlowDate(schedule?.dueDate || '');
+  if (!dueDate) return null;
+  const amount = Math.max(1, Number.parseInt(schedule?.durationValue || '1', 10) || 1);
+  if (schedule.durationUnit === 'weeks') return addProjectFlowDays(dueDate, -((amount * 7) - 1));
+  if (schedule.durationUnit === 'months'){
+    const start = new Date(dueDate.getFullYear(), dueDate.getMonth() - amount, dueDate.getDate());
+    return addProjectFlowDays(start, 1);
+  }
+  return addProjectFlowDays(dueDate, -(amount - 1));
+}
+
+function getProjectFlowBetaTimelineDays(phases, project){
+  const registeredDates = flattenProjectFlowBetaTasksOnly(phases)
+    .map(task=>getProjectFlowBetaVisualSchedule(project, task))
+    .map(schedule=>getProjectFlowBetaScheduleStartDate(schedule))
+    .filter(date=>date instanceof Date && !Number.isNaN(date.getTime()));
+  const today = startOfDay(new Date());
+  const currentWeekStart = startOfWeekMonday(today);
+  const firstTaskDate = registeredDates.reduce(
+    (earliest, date)=>earliest && earliest < date ? earliest : date,
+    null
+  );
+  const start = startOfWeekMonday(firstTaskDate || currentWeekStart);
+  const yearEnd = new Date(today.getFullYear(), 11, 31);
+  const end = yearEnd < start ? start : yearEnd;
+  const days = [];
+  for (let cursor = start; cursor <= end; cursor = addProjectFlowDays(cursor, 1)){
+    days.push(cursor);
+  }
+  return { start, days };
+}
+
+function scrollProjectFlowBetaToCurrentWeek(scroller, rangeStart, topScrollbar = null){
+  if (!scroller || !(rangeStart instanceof Date)) return;
+  const currentWeekStart = startOfWeekMonday(new Date());
+  const offsetDays = Math.max(0, getProjectFlowDayDiff(rangeStart, currentWeekStart));
+  const dayWidth = 46;
+  requestAnimationFrame(()=>{
+    const nextScrollLeft = Math.max(0, (offsetDays * dayWidth) - 12);
+    scroller.scrollLeft = Math.min(
+      Math.max(0, scroller.scrollWidth - scroller.clientWidth),
+      nextScrollLeft
+    );
+    if (topScrollbar) topScrollbar.scrollLeft = scroller.scrollLeft;
+  });
+}
+
+function createProjectFlowBetaDueControl(project, task, mode = 'full'){
+  const schedule = getProjectFlowBetaVisualSchedule(project, task);
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'project-flow-beta-due-control';
+  button.dataset.projectFlowBetaScheduleTask = task.number;
+  button.classList.toggle('is-compact', mode !== 'full');
+  button.classList.toggle('is-full', mode === 'full');
+  const content = document.createElement('span');
+  content.className = 'project-flow-beta-due-content';
+  if (schedule.dueDate){
+    if (mode === 'date'){
+      content.textContent = formatProjectFlowDisplayDate(schedule.dueDate);
+    } else if (mode === 'duration'){
+      content.textContent = formatProjectFlowBetaDurationLabel(schedule.durationValue, schedule.durationUnit);
+    } else {
+      content.innerHTML = `<span>${formatProjectFlowDisplayDate(schedule.dueDate)}</span><small>${formatProjectFlowBetaDurationLabel(schedule.durationValue, schedule.durationUnit)}</small>`;
+    }
+    button.title = `Tidsfrist ${formatProjectFlowDisplayDate(schedule.dueDate)}, varighet ${formatProjectFlowBetaDurationLabel(schedule.durationValue, schedule.durationUnit)}`;
+  } else {
+    content.textContent = mode === 'duration' ? 'Sett varighet' : 'Sett frist';
+    button.classList.add('is-empty');
+    button.title = 'Sett tidsfrist og varighet';
+  }
+  const icon = document.createElement('span');
+  icon.className = 'project-flow-beta-due-calendar-icon';
+  icon.setAttribute('aria-hidden', 'true');
+  icon.innerHTML = '<svg viewBox="0 0 24 24"><path d="M7 2h2v3h6V2h2v3h2a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2V2Zm12 8H5v9h14v-9Z"/></svg>';
+  button.append(content, icon);
+  button.setAttribute('aria-label', button.title);
+  return button;
+}
+
+function closeProjectFlowBetaScheduleMenu(){
+  document.querySelectorAll('.project-flow-beta-schedule-menu').forEach(menu=>menu.remove());
+}
+
+function setProjectFlowBetaVisualSchedule(project, task, schedule){
+  if (!project || !task) return;
+  const normalized = normalizeProjectFlowBetaSchedule(schedule);
+  const store = getProjectFlowBetaScheduleStore(project);
+  if (normalized.dueDate){
+    store[task.number] = normalized;
+  } else {
+    delete store[task.number];
+  }
+  closeProjectFlowBetaScheduleMenu();
+  renderProjectFlowBetaView();
+}
+
+function renderProjectFlowBetaScheduleCalendar(menu){
+  const calendar = menu?.querySelector('[data-project-flow-beta-schedule-calendar]');
+  const input = menu?.querySelector('[data-project-flow-beta-schedule-date]');
+  if (!calendar || !input) return;
+  const selected = parseProjectFlowDate(input.value || '');
+  const storedCursor = parseProjectFlowDate(menu.dataset.projectFlowBetaCalendarCursor || '');
+  const cursor = storedCursor || selected || new Date();
+  menu.dataset.projectFlowBetaCalendarCursor = formatProjectFlowDate(cursor);
+  const gridStart = startOfWeekMonday(startOfMonth(cursor));
+  const today = startOfDay(new Date());
+  calendar.innerHTML = '';
+
+  const head = document.createElement('div');
+  head.className = 'calendar-date-picker-head';
+  const title = document.createElement('div');
+  title.className = 'calendar-date-picker-title';
+  title.textContent = new Intl.DateTimeFormat('no-NO', { month: 'long', year: 'numeric' }).format(cursor);
+  const nav = document.createElement('div');
+  nav.className = 'calendar-date-picker-nav';
+  [-1, 1].forEach(delta=>{
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.setAttribute('aria-label', delta < 0 ? 'Forrige måned' : 'Neste måned');
+    button.textContent = delta < 0 ? '‹' : '›';
+    button.addEventListener('click', evt=>{
+      evt.preventDefault();
+      evt.stopPropagation();
+      menu.dataset.projectFlowBetaCalendarCursor = formatProjectFlowDate(addMonths(cursor, delta));
+      renderProjectFlowBetaScheduleCalendar(menu);
+    });
+    nav.appendChild(button);
+  });
+  head.append(title, nav);
+  calendar.appendChild(head);
+
+  const grid = document.createElement('div');
+  grid.className = 'calendar-date-picker-grid';
+  ['Ma', 'Ti', 'On', 'To', 'Fr', 'Lø', 'Sø'].forEach(label=>{
+    const weekday = document.createElement('div');
+    weekday.className = 'calendar-date-picker-weekday';
+    weekday.textContent = label;
+    grid.appendChild(weekday);
+  });
+  for (let index = 0; index < 42; index += 1){
+    const day = addDays(gridStart, index);
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'calendar-date-picker-day';
+    button.classList.toggle('is-outside', day.getMonth() !== cursor.getMonth());
+    button.classList.toggle('is-today', sameCalendarDay(day, today));
+    button.classList.toggle('is-selected', selected ? sameCalendarDay(day, selected) : false);
+    button.textContent = String(day.getDate());
+    button.addEventListener('click', evt=>{
+      evt.preventDefault();
+      evt.stopPropagation();
+      input.value = formatProjectFlowInputDate(day);
+      menu.dataset.projectFlowBetaCalendarCursor = formatProjectFlowDate(day);
+      renderProjectFlowBetaScheduleCalendar(menu);
+    });
+    grid.appendChild(button);
+  }
+  calendar.appendChild(grid);
+}
+
+function setProjectFlowBetaScheduleCalendarVisible(menu, visible){
+  const calendar = menu?.querySelector('[data-project-flow-beta-schedule-calendar]');
+  if (!calendar) return;
+  calendar.hidden = !visible;
+  if (visible) renderProjectFlowBetaScheduleCalendar(menu);
+}
+
+function positionProjectFlowBetaScheduleMenu(menu, control){
+  if (!menu || !control) return;
+  const controlRect = control.getBoundingClientRect();
+  const menuRect = menu.getBoundingClientRect();
+  const left = Math.max(8, Math.min(controlRect.right - menuRect.width, window.innerWidth - menuRect.width - 8));
+  const top = Math.max(8, Math.min(controlRect.bottom + 6, window.innerHeight - menuRect.height - 8));
+  menu.style.left = `${left}px`;
+  menu.style.top = `${top}px`;
+}
+
+function positionProjectFlowBetaScheduleCalendar(menu, control){
+  const calendar = menu?.querySelector('[data-project-flow-beta-schedule-calendar]');
+  if (!calendar || !control || calendar.hidden) return;
+  const menuRect = menu.getBoundingClientRect();
+  const calendarRect = calendar.getBoundingClientRect();
+  const hasSpaceOnRight = menuRect.right + calendarRect.width + 8 <= window.innerWidth - 8;
+  const left = hasSpaceOnRight
+    ? menuRect.right + 8
+    : Math.max(8, menuRect.left - calendarRect.width - 8);
+  const top = Math.max(8, Math.min(menuRect.top, window.innerHeight - calendarRect.height - 8));
+  calendar.style.left = `${left}px`;
+  calendar.style.top = `${top}px`;
+}
+
+function openProjectFlowBetaScheduleMenu(control, project, task){
+  if (!control || !project || !task) return;
+  closeProjectFlowBetaDecisionMenu();
+  closeProjectFlowBetaPriorityMenu();
+  closeProjectFlowBetaAssigneeMenu();
+  closeProjectFlowBetaScheduleMenu();
+  const schedule = getProjectFlowBetaVisualSchedule(project, task);
+  const menu = document.createElement('div');
+  menu.className = 'project-flow-beta-schedule-menu';
+  menu.innerHTML = `
+    <label>Tidsfrist
+      <div class="project-flow-beta-date-field">
+        <input type="text" data-project-flow-beta-schedule-date="${task.number}" placeholder="DD/MM/ÅÅÅÅ" value="${schedule.dueDate ? formatProjectFlowInputDate(schedule.dueDate) : ''}">
+        <button type="button" class="project-flow-beta-schedule-calendar-toggle" data-project-flow-beta-schedule-calendar-toggle="${task.number}" aria-label="Velg tidsfrist">
+          <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M7 2h2v3h6V2h2v3h2a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2V2Zm12 8H5v9h14v-9Z"/></svg>
+        </button>
+      </div>
+    </label>
+    <div class="calendar-date-picker-popover project-flow-beta-schedule-calendar" data-project-flow-beta-schedule-calendar hidden></div>
+    <div class="project-flow-beta-duration-fields">
+      <label>Varighet
+        <input type="number" min="1" step="1" data-project-flow-beta-schedule-duration="${task.number}" value="${schedule.durationValue}">
+      </label>
+      <label>Enhet
+        <select data-project-flow-beta-schedule-unit="${task.number}">
+          <option value="days"${schedule.durationUnit === 'days' ? ' selected' : ''}>Dager</option>
+          <option value="weeks"${schedule.durationUnit === 'weeks' ? ' selected' : ''}>Uker</option>
+          <option value="months"${schedule.durationUnit === 'months' ? ' selected' : ''}>Måneder</option>
+        </select>
+      </label>
+    </div>
+    <div class="project-flow-beta-schedule-actions">
+      <button type="button" data-project-flow-beta-schedule-save="${task.number}">Lagre</button>
+      <button type="button" data-project-flow-beta-schedule-clear="${task.number}">Tøm</button>
+    </div>
+  `;
+  document.body.appendChild(menu);
+  positionProjectFlowBetaScheduleMenu(menu, control);
+  const input = menu.querySelector('[data-project-flow-beta-schedule-date]');
+  if (input) input.focus();
+}
+
+function createProjectFlowBetaBlockerChip(value){
+  const span = document.createElement('span');
+  span.className = 'project-flow-beta-blocker';
+  const lock = createProjectFlowBetaIcon('project-flow-beta-blocker-lock');
+  lock.setAttribute('aria-hidden', 'true');
+  span.appendChild(lock);
+  span.appendChild(document.createTextNode(`${value} · FS`));
+  return span;
+}
+
+function createProjectFlowBetaSubtaskCount(task){
+  if (!task?.children?.length) return null;
+  const count = document.createElement('span');
+  count.className = 'project-flow-beta-subtask-count';
+  count.textContent = String(task.children.length);
+  count.title = `${task.children.length} underoppgaver`;
+  count.setAttribute('aria-label', `${task.children.length} underoppgaver`);
+  return count;
+}
+
+function appendProjectFlowBetaBlockers(cell, blockers){
+  const values = Array.isArray(blockers) ? blockers.filter(Boolean) : [];
+  values.forEach(value=>{
+    cell.appendChild(createProjectFlowBetaBlockerChip(value));
+  });
+}
+
+function getProjectFlowBetaTaskNumber(value){
+  const match = String(value || '').trim().match(/^(\d+\.\d+\.\d+)/);
+  return match ? match[1] : '';
+}
+
+function flattenProjectFlowBetaTasksOnly(phases){
+  const tasks = [];
+  phases.forEach(phase=>{
+    phase.rows.forEach(task=>{
+      tasks.push(task);
+      if (task.children?.length) tasks.push(...task.children);
+    });
+  });
+  return tasks;
+}
+
+function buildProjectFlowBetaTaskMap(phases){
+  const map = new Map();
+  flattenProjectFlowBetaTasksOnly(phases).forEach(task=>{
+    map.set(task.number, task);
+  });
+  return map;
+}
+
+function getProjectFlowBetaVisualProjectKey(project){
+  return project?.id || projectFlowBetaState.selectedProjectId || 'default';
+}
+
+function getProjectFlowBetaVisualStore(project){
+  const key = getProjectFlowBetaVisualProjectKey(project);
+  if (!projectFlowBetaState.visualTaskStatus[key]){
+    projectFlowBetaState.visualTaskStatus[key] = {};
+  }
+  return projectFlowBetaState.visualTaskStatus[key];
+}
+
+function getProjectFlowBetaCollapseStore(project){
+  const key = getProjectFlowBetaVisualProjectKey(project);
+  if (!projectFlowBetaState.collapsedItems[key]){
+    projectFlowBetaState.collapsedItems[key] = {};
+  }
+  return projectFlowBetaState.collapsedItems[key];
+}
+
+function getProjectFlowBetaCollapseKey(type, id){
+  return `${type}:${id}`;
+}
+
+function isProjectFlowBetaCollapsed(project, type, id){
+  return getProjectFlowBetaCollapseStore(project)[getProjectFlowBetaCollapseKey(type, id)] === true;
+}
+
+function createProjectFlowBetaCaret(project, type, id, label){
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'project-flow-beta-caret';
+  button.dataset.projectFlowBetaCollapseType = type;
+  button.dataset.projectFlowBetaCollapseId = id;
+  const collapsed = isProjectFlowBetaCollapsed(project, type, id);
+  button.textContent = collapsed ? '▸' : '▾';
+  button.setAttribute('aria-label', `${collapsed ? 'Utvid' : 'Skjul'} ${label || id}`);
+  button.title = collapsed ? 'Utvid' : 'Skjul';
+  return button;
+}
+
+function projectFlowBetaTaskUsesCheck(task){
+  return task?.status !== 'approval';
+}
+
+function projectFlowBetaTaskUsesDecision(task){
+  return task?.status === 'approval';
+}
+
+function getProjectFlowBetaVisualChecked(project, task){
+  if (!task) return false;
+  const store = getProjectFlowBetaVisualStore(project);
+  if (Object.prototype.hasOwnProperty.call(store, task.number)){
+    return store[task.number] === true;
+  }
+  return task.status === 'done';
+}
+
+function getProjectFlowBetaVisualDecision(project, task){
+  if (!task) return '';
+  const value = getProjectFlowBetaVisualStore(project)[task.number];
+  return ['yes', 'no', 'na'].includes(value) ? value : '';
+}
+
+function isProjectFlowBetaVisualComplete(project, task){
+  if (!task) return false;
+  if (projectFlowBetaTaskUsesDecision(task)){
+    return Boolean(getProjectFlowBetaVisualDecision(project, task));
+  }
+  return getProjectFlowBetaVisualChecked(project, task);
+}
+
+function isProjectFlowBetaVisuallyBlocked(project, task, taskMap){
+  if (!task || !taskMap) return false;
+  for (const blocker of taskMap.values()){
+    const blockedNumbers = Array.isArray(blocker.blocks)
+      ? blocker.blocks.map(getProjectFlowBetaTaskNumber).filter(Boolean)
+      : [];
+    if (blockedNumbers.includes(task.number) && !isProjectFlowBetaVisualComplete(project, blocker)){
+      return true;
+    }
+  }
+  return false;
+}
+
+function resetProjectFlowBetaVisualBlockedTasks(project, taskNumber, taskMap, visited = new Set()){
+  if (!project || !taskNumber || !taskMap || visited.has(taskNumber)) return;
+  visited.add(taskNumber);
+  const store = getProjectFlowBetaVisualStore(project);
+  const task = taskMap.get(taskNumber);
+  const blockedNumbers = Array.isArray(task?.blocks)
+    ? task.blocks.map(getProjectFlowBetaTaskNumber).filter(Boolean)
+    : [];
+  blockedNumbers.forEach(blockedNumber=>{
+    const blockedTask = taskMap.get(blockedNumber);
+    if (!blockedTask) return;
+    if (projectFlowBetaTaskUsesDecision(blockedTask)){
+      delete store[blockedTask.number];
+    } else {
+      store[blockedTask.number] = false;
+    }
+    resetProjectFlowBetaVisualBlockedTasks(project, blockedTask.number, taskMap, visited);
+  });
+}
+
+function closeProjectFlowBetaDecisionMenu(){
+  document.querySelectorAll('.project-flow-beta-decision-menu').forEach(menu=>menu.remove());
+}
+
+function setProjectFlowBetaVisualDecision(project, task, value, taskMap){
+  if (!project || !task || !projectFlowBetaTaskUsesDecision(task)) return;
+  const store = getProjectFlowBetaVisualStore(project);
+  if (['yes', 'no', 'na'].includes(value)){
+    store[task.number] = value;
+  } else {
+    delete store[task.number];
+  }
+  if (!store[task.number]){
+    resetProjectFlowBetaVisualBlockedTasks(project, task.number, taskMap);
+  }
+  closeProjectFlowBetaDecisionMenu();
+  renderProjectFlowBetaView();
+}
+
+function openProjectFlowBetaDecisionMenu(control, project, task, taskMap){
+  if (!control || !project || !task || !taskMap) return;
+  closeProjectFlowBetaDecisionMenu();
+  closeProjectFlowBetaPriorityMenu();
+  closeProjectFlowBetaAssigneeMenu();
+  closeProjectFlowBetaScheduleMenu();
+  const menu = document.createElement('div');
+  menu.className = 'project-flow-beta-decision-menu';
+  const current = getProjectFlowBetaVisualDecision(project, task);
+  [
+    { value: 'yes', label: 'Ja' },
+    { value: 'no', label: 'Nei' },
+    { value: 'na', label: 'Ikke aktuell' },
+    { value: '', label: 'Tøm valg' }
+  ].forEach(option=>{
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = option.label;
+    button.dataset.projectFlowBetaDecisionOption = option.value;
+    button.dataset.projectFlowBetaDecisionTask = task.number;
+    if (option.value === current) button.classList.add('is-active');
+    menu.appendChild(button);
+  });
+  document.body.appendChild(menu);
+  const rect = control.getBoundingClientRect();
+  menu.style.left = `${Math.max(8, rect.left)}px`;
+  menu.style.top = `${rect.bottom + 6}px`;
+}
+
+function createProjectFlowBetaTaskVisual(task, context = {}){
+  const project = context.project;
+  const taskMap = context.taskMap;
+  const blocked = isProjectFlowBetaVisuallyBlocked(project, task, taskMap);
+  const checked = getProjectFlowBetaVisualChecked(project, task);
+  const decision = getProjectFlowBetaVisualDecision(project, task);
+  const status = blocked
+    ? 'waiting'
+    : projectFlowBetaTaskUsesDecision(task)
+      ? 'approval'
+      : checked
+        ? 'done'
+        : 'check';
+  const span = document.createElement(projectFlowBetaTaskUsesCheck(task) || projectFlowBetaTaskUsesDecision(task) ? 'button' : 'span');
+  span.className = `project-flow-beta-control is-visual is-${status}`.trim();
+  if (projectFlowBetaTaskUsesDecision(task) && !blocked){
+    span.classList.add(`is-${decision || 'unset'}`);
+    span.textContent = decision === 'yes' ? 'Ja' : decision === 'no' ? 'Nei' : decision === 'na' ? 'IA' : '';
+  }
+  const labelMap = {
+    check: 'Ikke fullført',
+    done: 'Fullført',
+    approval: 'Ja, Nei eller Ikke aktuell',
+    waiting: 'Blokkert/venter'
+  };
+  span.setAttribute('aria-label', labelMap[status] || 'Oppgavestatus');
+  if (projectFlowBetaTaskUsesCheck(task)){
+    span.type = 'button';
+    span.dataset.projectFlowBetaVisualTask = task.number;
+    span.disabled = blocked;
+  } else if (projectFlowBetaTaskUsesDecision(task)){
+    span.type = 'button';
+    span.dataset.projectFlowBetaDecisionTask = task.number;
+    span.disabled = blocked;
+  }
+  if (status === 'approval'){
+    span.title = 'Ja / Nei / Ikke aktuell';
+  } else if (status === 'waiting'){
+    span.title = 'Blokkert/venter';
+  } else {
+    span.title = 'Fullført';
+  }
+  return span;
+}
+
+function appendProjectFlowBetaTaskRow(tbody, task, context = {}, options = {}){
+  const row = document.createElement('tr');
+  if (options.subtask) row.className = 'project-flow-beta-subtask-row';
+  const nameCell = document.createElement('td');
+  const indent = document.createElement('span');
+  indent.className = 'project-flow-beta-task-indent';
+  const taskCollapsed = isProjectFlowBetaCollapsed(context.project, 'task', task.number);
+  if (task.children?.length){
+    indent.appendChild(createProjectFlowBetaCaret(context.project, 'task', task.number, task.title));
+  }
+  const taskContent = document.createElement('span');
+  taskContent.className = 'project-flow-beta-task-content';
+  taskContent.appendChild(indent);
+  taskContent.appendChild(createProjectFlowBetaTaskVisual(task, context));
+  taskContent.appendChild(document.createTextNode(`${task.number} ${task.title}`));
+  const subtaskCount = createProjectFlowBetaSubtaskCount(task);
+  if (subtaskCount) taskContent.appendChild(subtaskCount);
+  nameCell.appendChild(taskContent);
+  row.appendChild(nameCell);
+  row.appendChild(document.createElement('td'));
+  const dueCell = document.createElement('td');
+  dueCell.appendChild(createProjectFlowBetaDueControl(context.project, task));
+  row.appendChild(dueCell);
+  const assigneeCell = document.createElement('td');
+  assigneeCell.appendChild(createProjectFlowBetaAssigneeControl(context.project, task));
+  row.appendChild(assigneeCell);
+  const phaseCell = document.createElement('td');
+  phaseCell.appendChild(createProjectFlowBetaTag(task.phase));
+  row.appendChild(phaseCell);
+  const priorityCell = document.createElement('td');
+  priorityCell.appendChild(createProjectFlowBetaPriorityControl(context.project, task));
+  row.appendChild(priorityCell);
+  const blockerCell = document.createElement('td');
+  appendProjectFlowBetaBlockers(blockerCell, task.blocks);
+  row.appendChild(blockerCell);
+  tbody.appendChild(row);
+  if (task.children?.length && !taskCollapsed){
+    task.children.forEach(child=>appendProjectFlowBetaTaskRow(tbody, child, context, { subtask: true }));
+  }
+}
+
+function appendProjectFlowBetaPhase(tbody, phase, context = {}){
+  const row = document.createElement('tr');
+  row.className = 'project-flow-beta-phase-row';
+  const cell = document.createElement('td');
+  cell.colSpan = 7;
+  const phaseCollapsed = isProjectFlowBetaCollapsed(context.project, 'phase', phase.number);
+  const strong = document.createElement('strong');
+  strong.textContent = `${phase.number} ${phase.title}`;
+  cell.append(createProjectFlowBetaCaret(context.project, 'phase', phase.number, phase.title), strong);
+  row.appendChild(cell);
+  tbody.appendChild(row);
+  if (phaseCollapsed) return;
+  phase.rows.forEach(task=>appendProjectFlowBetaTaskRow(tbody, task, context));
+}
+
+function mapProjectFlowBetaLineBlock(phaseNumber, blockedTask){
+  const text = String(blockedTask || '').trim();
+  if (!text) return '';
+  return /^\d+\.\d+\.\d+\s/.test(text) ? text : `${phaseNumber}.${text}`;
+}
+
+function buildProjectFlowBetaLinePhase(line, index, options = {}){
+  const phaseNumber = 4 + index;
+  const lineName = String(line?.lineNumber || '').trim() || `Linje ${index + 1}`;
+  const lineTasks = options.includePartialInvoicing
+    ? PROJECT_FLOW_BETA_LINE_TASK_TEMPLATE
+    : PROJECT_FLOW_BETA_LINE_TASK_TEMPLATE.filter(task=>task.suffix !== '09.0');
+  return {
+    number: `${phaseNumber}.00.0`,
+    title: `Strømskinner - ${lineName}`,
+    rows: lineTasks.map(task=>({
+      ...task,
+      number: `${phaseNumber}.${task.suffix}`,
+      blocks: Array.isArray(task.blocks)
+        ? task.blocks.map(blocked=>mapProjectFlowBetaLineBlock(phaseNumber, blocked))
+        : undefined,
+      children: Array.isArray(task.children)
+        ? task.children.map(child=>({
+          ...child,
+          number: `${phaseNumber}.${child.suffix}`,
+          blocks: Array.isArray(child.blocks)
+            ? child.blocks.map(blocked=>mapProjectFlowBetaLineBlock(phaseNumber, blocked))
+            : undefined
+        }))
+        : undefined
+    }))
+  };
+}
+
+function getProjectFlowBetaPhases(selectedProject){
+  const phases = [...PROJECT_FLOW_BETA_BASE_PHASES];
+  const lines = Array.isArray(selectedProject?.lines) ? selectedProject.lines : [];
+  if (lines.length){
+    lines.forEach((line, index)=>{
+      phases.push(buildProjectFlowBetaLinePhase(line, index, {
+        includePartialInvoicing: lines.length > 1
+      }));
+    });
+  }
+  return phases;
+}
+
+function setProjectFlowBetaActiveView(view){
+  projectFlowBetaState.activeView = view === 'timeline' ? 'timeline' : 'list';
+  document.querySelectorAll('[data-project-flow-beta-view]').forEach(button=>{
+    const active = button.dataset.projectFlowBetaView === projectFlowBetaState.activeView;
+    button.classList.toggle('is-active', active);
+    button.setAttribute('aria-selected', active ? 'true' : 'false');
+  });
+  document.querySelectorAll('[data-project-flow-beta-panel]').forEach(panel=>{
+    panel.hidden = panel.dataset.projectFlowBetaPanel !== projectFlowBetaState.activeView;
+  });
+}
+
+function renderProjectFlowBetaList(phases, context = {}){
+  const tbody = $('projectFlowBetaTableBody');
+  if (!tbody) return;
+  tbody.innerHTML = '';
+  phases.forEach(phase=>appendProjectFlowBetaPhase(tbody, phase, context));
+}
+
+function measureProjectFlowBetaNaturalWidth(elements, measurer, options = {}){
+  return elements.reduce((max, element)=>{
+    if (!element) return max;
+    const content = options.childSelector ? element.querySelector(options.childSelector) : element;
+    if (!content) return max;
+    measurer.innerHTML = '';
+    const clone = content.cloneNode(true);
+    clone.style.display = 'inline-flex';
+    clone.style.width = 'max-content';
+    clone.style.minWidth = '0';
+    clone.style.maxWidth = 'none';
+    clone.querySelectorAll('*').forEach(child=>{
+      child.style.maxWidth = 'none';
+    });
+    measurer.appendChild(clone);
+    const style = options.includeElementPadding ? getComputedStyle(element) : null;
+    const horizontalPadding = style
+      ? (Number.parseFloat(style.paddingLeft) || 0) + (Number.parseFloat(style.paddingRight) || 0)
+      : 0;
+    return Math.max(max, Math.ceil(clone.getBoundingClientRect().width + horizontalPadding + 2));
+  }, 0);
+}
+
+function updateProjectFlowBetaColumnWidths(){
+  const table = document.querySelector('.project-flow-beta-table');
+  if (!table) return;
+  const shell = document.querySelector('.project-flow-beta-shell');
+  if (!shell) return;
+  const taskCells = [...table.querySelectorAll('tbody tr:not(.project-flow-beta-phase-row) td:first-child')];
+  const listMetaCells = [
+    ...table.querySelectorAll('thead tr:last-child th:nth-child(n+2):nth-child(-n+6)'),
+    ...table.querySelectorAll('tbody tr:not(.project-flow-beta-phase-row) td:nth-child(n+2):nth-child(-n+6)')
+  ];
+  const listDueControls = [...table.querySelectorAll('.project-flow-beta-due-control.is-full')];
+  const timelineMetaCells = [
+    ...document.querySelectorAll('.project-flow-beta-plan-header.is-locked-column:not(.is-task-column)'),
+    ...document.querySelectorAll('.project-flow-beta-plan-meta')
+  ];
+  const measurer = document.createElement('div');
+  measurer.style.position = 'absolute';
+  measurer.style.left = '-10000px';
+  measurer.style.top = '0';
+  measurer.style.visibility = 'hidden';
+  measurer.style.whiteSpace = 'nowrap';
+  measurer.style.width = 'max-content';
+  document.body.appendChild(measurer);
+  const taskContentWidth = measureProjectFlowBetaNaturalWidth(taskCells, measurer, {
+    childSelector: '.project-flow-beta-task-content',
+    includeElementPadding: true
+  });
+  const listMetaWidth = Math.max(
+    measureProjectFlowBetaNaturalWidth(listMetaCells, measurer),
+    measureProjectFlowBetaNaturalWidth(listDueControls, measurer) + 20
+  );
+  const timelineMetaWidth = measureProjectFlowBetaNaturalWidth(timelineMetaCells, measurer);
+  measurer.remove();
+  shell.style.setProperty('--project-flow-beta-task-column-width', `${Math.max(220, taskContentWidth)}px`);
+  shell.style.setProperty('--project-flow-beta-list-meta-column-width', `${Math.max(108, listMetaWidth)}px`);
+  shell.style.setProperty('--project-flow-beta-timeline-meta-column-width', `${Math.max(108, timelineMetaWidth)}px`);
+}
+
+function flattenProjectFlowBetaRows(phases, context = {}){
+  const rows = [];
+  phases.forEach(phase=>{
+    rows.push({ type: 'phase', phase });
+    if (isProjectFlowBetaCollapsed(context.project, 'phase', phase.number)) return;
+    phase.rows.forEach(task=>{
+      rows.push({ type: 'task', task, depth: 0 });
+      if (task.children?.length && !isProjectFlowBetaCollapsed(context.project, 'task', task.number)){
+        task.children.forEach(child=>rows.push({ type: 'task', task: child, depth: 1 }));
+      }
+    });
+  });
+  return rows;
+}
+
+function createProjectFlowBetaTimelineCell(className, text){
+  const cell = document.createElement('div');
+  cell.className = className;
+  if (text !== undefined && text !== null) cell.textContent = text;
+  return cell;
+}
+
+function formatProjectFlowBetaMonth(date){
+  return new Intl.DateTimeFormat('no-NO', { month: 'long' }).format(date);
+}
+
+function getProjectFlowBetaMonthSpans(days){
+  return days.reduce((spans, day)=>{
+    const key = `${day.getFullYear()}-${day.getMonth()}`;
+    const current = spans[spans.length - 1];
+    if (current?.key === key){
+      current.days += 1;
+    } else {
+      spans.push({ key, label: formatProjectFlowBetaMonth(day), days: 1 });
+    }
+    return spans;
+  }, []);
+}
+
+function appendProjectFlowBetaBlankHeaderRow(grid, modifier = ''){
+  ['is-task-column', 'is-meta-column-1', 'is-meta-column-2', 'is-meta-column-3'].forEach(positionClass=>{
+    grid.appendChild(createProjectFlowBetaTimelineCell(
+      `project-flow-beta-plan-header is-empty is-locked-column ${positionClass} ${modifier}`.trim(),
+      ''
+    ));
+  });
+}
+
+function formatProjectFlowBetaDueDate(value){
+  if (!value) return '';
+  const parsed = parseProjectFlowDate(value);
+  return parsed ? formatProjectFlowDisplayDate(parsed) : String(value);
+}
+
+function getProjectFlowBetaScheduleDurationDays(schedule){
+  const amount = Math.max(1, Number.parseInt(schedule?.durationValue || '1', 10) || 1);
+  if (schedule?.durationUnit === 'weeks') return amount * 7;
+  if (schedule?.durationUnit === 'months'){
+    const dueDate = parseProjectFlowDate(schedule?.dueDate || '');
+    const startDate = getProjectFlowBetaScheduleStartDate(schedule);
+    return dueDate && startDate ? getProjectFlowDayDiff(startDate, dueDate) + 1 : amount * 30;
+  }
+  return amount;
+}
+
+function renderProjectFlowBetaTimelineRow(grid, row, days, context = {}){
+  if (row.type === 'phase'){
+    const phaseCell = createProjectFlowBetaTimelineCell('project-flow-beta-plan-phase is-locked-columns', '');
+    phaseCell.style.gridColumn = '1 / span 4';
+    phaseCell.append(
+      createProjectFlowBetaCaret(context.project, 'phase', row.phase.number, row.phase.title),
+      document.createTextNode(`${row.phase.number} ${row.phase.title}`)
+    );
+    grid.appendChild(phaseCell);
+    const phaseTrack = createProjectFlowBetaTimelineCell('project-flow-beta-plan-phase-track', '');
+    phaseTrack.style.gridColumn = `5 / span ${days.length}`;
+    grid.appendChild(phaseTrack);
+    return;
+  }
+  const task = row.task;
+  const nameCell = createProjectFlowBetaTimelineCell(`project-flow-beta-plan-name is-depth-${row.depth || 0} is-locked-column is-task-column`, '');
+  const indent = document.createElement('span');
+  indent.className = 'project-flow-beta-task-indent';
+  if (task.children?.length){
+    indent.appendChild(createProjectFlowBetaCaret(context.project, 'task', task.number, task.title));
+  }
+  nameCell.appendChild(indent);
+  nameCell.appendChild(createProjectFlowBetaTaskVisual(task, context));
+  nameCell.appendChild(document.createTextNode(`${task.number} ${task.title}`));
+  const subtaskCount = createProjectFlowBetaSubtaskCount(task);
+  if (subtaskCount) nameCell.appendChild(subtaskCount);
+  grid.appendChild(nameCell);
+  const assigneeCell = createProjectFlowBetaTimelineCell('project-flow-beta-plan-meta is-locked-column is-meta-column-1', '');
+  assigneeCell.appendChild(createProjectFlowBetaAssigneeControl(context.project, task));
+  grid.appendChild(assigneeCell);
+  const schedule = getProjectFlowBetaVisualSchedule(context.project, task);
+  const dueCell = createProjectFlowBetaTimelineCell('project-flow-beta-plan-meta is-locked-column is-meta-column-2', '');
+  dueCell.appendChild(createProjectFlowBetaDueControl(context.project, task, 'date'));
+  grid.appendChild(dueCell);
+  const durationDays = schedule.dueDate ? getProjectFlowBetaScheduleDurationDays(schedule) : 0;
+  const durationCell = createProjectFlowBetaTimelineCell('project-flow-beta-plan-meta is-locked-column is-meta-column-3', '');
+  durationCell.appendChild(createProjectFlowBetaDueControl(context.project, task, 'duration'));
+  grid.appendChild(durationCell);
+
+  const dueDate = schedule.dueDate ? parseProjectFlowDate(schedule.dueDate) : null;
+  const startDate = dueDate && durationDays ? getProjectFlowBetaScheduleStartDate(schedule) : null;
+  const visibleTaskDayIndexes = startDate && dueDate
+    ? days.reduce((indexes, day, index)=>{
+      if (day >= startOfDay(startDate) && day <= startOfDay(dueDate)) indexes.push(index);
+      return indexes;
+    }, [])
+    : [];
+  const firstTaskDayIndex = visibleTaskDayIndexes[0] ?? -1;
+  days.forEach((day, index)=>{
+    const dayCell = createProjectFlowBetaTimelineCell('project-flow-beta-plan-day', '');
+    if ([0, 6].includes(day.getDay())) dayCell.classList.add('is-weekend');
+    if (sameCalendarDay(day, new Date())) dayCell.classList.add('is-today');
+    if (index === firstTaskDayIndex){
+      const bar = document.createElement('span');
+      bar.className = 'project-flow-beta-plan-bar';
+      bar.style.width = `${(visibleTaskDayIndexes.length * 46) - 6}px`;
+      dayCell.appendChild(bar);
+    }
+    grid.appendChild(dayCell);
+  });
+}
+
+function renderProjectFlowBetaTimeline(phases, context = {}){
+  const timeline = $('projectFlowBetaTimeline');
+  if (!timeline) return;
+  timeline.innerHTML = '';
+  const { start, days } = getProjectFlowBetaTimelineDays(phases, context.project);
+  const topScrollbar = document.createElement('div');
+  topScrollbar.className = 'project-flow-top-scrollbar project-flow-beta-top-scrollbar';
+  const topScrollbarInner = document.createElement('div');
+  topScrollbarInner.className = 'project-flow-top-scrollbar-inner';
+  topScrollbar.appendChild(topScrollbarInner);
+  const scroller = document.createElement('div');
+  scroller.className = 'project-flow-beta-plan-scroller';
+  const grid = document.createElement('div');
+  grid.className = 'project-flow-beta-plan-grid';
+  grid.style.setProperty('--beta-days', String(days.length));
+
+  appendProjectFlowBetaBlankHeaderRow(grid, 'is-period-header');
+  getProjectFlowBetaMonthSpans(days).forEach(span=>{
+    const cell = createProjectFlowBetaTimelineCell('project-flow-beta-plan-month', span.label);
+    cell.style.gridColumn = `span ${span.days}`;
+    grid.appendChild(cell);
+  });
+
+  appendProjectFlowBetaBlankHeaderRow(grid, 'is-period-header');
+  getProjectFlowWeekSpans(days).forEach(span=>{
+    const cell = createProjectFlowBetaTimelineCell('project-flow-beta-plan-week', `UKE ${span.weekNumber}`);
+    cell.style.gridColumn = `span ${span.days}`;
+    grid.appendChild(cell);
+  });
+
+  ['Oppgaver', 'Ansvarlig', 'Tidsfrist', 'Varighet'].forEach((label, index)=>{
+    const positionClass = index === 0 ? 'is-task-column' : `is-meta-column-${index}`;
+    grid.appendChild(createProjectFlowBetaTimelineCell(`project-flow-beta-plan-header is-locked-column ${positionClass}`, label));
+  });
+  days.forEach(day=>{
+    const cell = createProjectFlowBetaTimelineCell('project-flow-beta-plan-date', String(day.getDate()));
+    if ([0, 6].includes(day.getDay())) cell.classList.add('is-weekend');
+    if (sameCalendarDay(day, new Date())) cell.classList.add('is-today');
+    grid.appendChild(cell);
+  });
+
+  flattenProjectFlowBetaRows(phases, context).forEach(row=>renderProjectFlowBetaTimelineRow(grid, row, days, context));
+  scroller.appendChild(grid);
+  timeline.append(topScrollbar, scroller);
+  topScrollbarInner.style.width = `${Math.max(scroller.clientWidth, grid.scrollWidth)}px`;
+  syncProjectFlowTopScrollbar(scroller, topScrollbar, ()=>{});
+  scrollProjectFlowBetaToCurrentWeek(scroller, start, topScrollbar);
+}
+
+function renderProjectFlowBetaView(){
+  const selectedProject = populateProjectFlowBetaProjectSelect() || getProjectFlowBetaSelectedProject();
+  const phases = getProjectFlowBetaPhases(selectedProject);
+  const context = {
+    project: selectedProject,
+    taskMap: buildProjectFlowBetaTaskMap(phases)
+  };
+  setProjectFlowBetaActiveView(projectFlowBetaState.activeView);
+  renderProjectFlowBetaList(phases, context);
+  renderProjectFlowBetaTimeline(phases, context);
+  updateProjectFlowBetaColumnWidths();
+}
+
 async function initProjectDashboard(){
   loadProjectFlowState();
   resetProjectFolderStatusState();
@@ -9545,6 +10844,9 @@ async function initProjectDashboard(){
   if (hasDashboardUI()){
     showDashboardView({ clearSelection: true });
     applyDashboardQueryContext();
+  }
+  if (dashboardState.activePage === 'project-flow-beta'){
+    renderProjectFlowBetaView();
   }
   updateProjectMetaDisplay();
 }
@@ -10630,6 +11932,228 @@ if (projectFlowProjectSelect){
     renderProjectFlowView();
   });
 }
+
+const projectFlowBetaProjectSelect = $('projectFlowBetaProjectSelect');
+if (projectFlowBetaProjectSelect){
+  projectFlowBetaProjectSelect.addEventListener('change', ()=>{
+    projectFlowBetaState.selectedProjectId = projectFlowBetaProjectSelect.value || '';
+    renderProjectFlowBetaView();
+  });
+}
+
+document.querySelectorAll('[data-project-flow-beta-view]').forEach(button=>{
+  button.addEventListener('click', ()=>{
+    projectFlowBetaState.activeView = button.dataset.projectFlowBetaView === 'timeline' ? 'timeline' : 'list';
+    renderProjectFlowBetaView();
+  });
+});
+
+document.addEventListener('click', evt=>{
+  const scheduleCalendarToggle = evt.target.closest('[data-project-flow-beta-schedule-calendar-toggle]');
+  if (scheduleCalendarToggle){
+    evt.preventDefault();
+    evt.stopPropagation();
+    const menu = scheduleCalendarToggle.closest('.project-flow-beta-schedule-menu');
+    const calendar = menu?.querySelector('[data-project-flow-beta-schedule-calendar]');
+    const shouldOpen = Boolean(calendar?.hidden);
+    setProjectFlowBetaScheduleCalendarVisible(menu, shouldOpen);
+    if (shouldOpen) positionProjectFlowBetaScheduleCalendar(menu, scheduleCalendarToggle);
+    return;
+  }
+  const scheduleSave = evt.target.closest('[data-project-flow-beta-schedule-save]');
+  if (scheduleSave){
+    evt.preventDefault();
+    const menu = scheduleSave.closest('.project-flow-beta-schedule-menu');
+    const project = getProjectFlowBetaSelectedProject();
+    const taskMap = buildProjectFlowBetaTaskMap(getProjectFlowBetaPhases(project));
+    const task = taskMap.get(scheduleSave.dataset.projectFlowBetaScheduleSave);
+    const dateInput = menu?.querySelector('[data-project-flow-beta-schedule-date]');
+    const durationInput = menu?.querySelector('[data-project-flow-beta-schedule-duration]');
+    const unitSelect = menu?.querySelector('[data-project-flow-beta-schedule-unit]');
+    const parsedDate = parseProjectFlowDate(dateInput?.value || '');
+    setProjectFlowBetaVisualSchedule(project, task, {
+      dueDate: parsedDate ? formatProjectFlowDate(parsedDate) : '',
+      durationValue: durationInput?.value || '1',
+      durationUnit: unitSelect?.value || 'days'
+    });
+    return;
+  }
+  const scheduleClear = evt.target.closest('[data-project-flow-beta-schedule-clear]');
+  if (scheduleClear){
+    evt.preventDefault();
+    const project = getProjectFlowBetaSelectedProject();
+    const taskMap = buildProjectFlowBetaTaskMap(getProjectFlowBetaPhases(project));
+    const task = taskMap.get(scheduleClear.dataset.projectFlowBetaScheduleClear);
+    setProjectFlowBetaVisualSchedule(project, task, { dueDate: '' });
+    return;
+  }
+  const scheduleControl = evt.target.closest('[data-project-flow-beta-schedule-task]');
+  if (scheduleControl){
+    evt.preventDefault();
+    const project = getProjectFlowBetaSelectedProject();
+    const taskMap = buildProjectFlowBetaTaskMap(getProjectFlowBetaPhases(project));
+    const task = taskMap.get(scheduleControl.dataset.projectFlowBetaScheduleTask);
+    openProjectFlowBetaScheduleMenu(scheduleControl, project, task);
+    return;
+  }
+  const assigneeOption = evt.target.closest('[data-project-flow-beta-assignee-option]');
+  if (assigneeOption){
+    evt.preventDefault();
+    const project = getProjectFlowBetaSelectedProject();
+    const taskMap = buildProjectFlowBetaTaskMap(getProjectFlowBetaPhases(project));
+    const task = taskMap.get(assigneeOption.dataset.projectFlowBetaAssigneeTask);
+    setProjectFlowBetaVisualAssignee(project, task, assigneeOption.dataset.projectFlowBetaAssigneeOption);
+    return;
+  }
+  const assigneeControl = evt.target.closest('[data-project-flow-beta-assignee-task]');
+  if (assigneeControl){
+    evt.preventDefault();
+    const project = getProjectFlowBetaSelectedProject();
+    const taskMap = buildProjectFlowBetaTaskMap(getProjectFlowBetaPhases(project));
+    const task = taskMap.get(assigneeControl.dataset.projectFlowBetaAssigneeTask);
+    openProjectFlowBetaAssigneeMenu(assigneeControl, project, task);
+    return;
+  }
+  const priorityOption = evt.target.closest('[data-project-flow-beta-priority-option]');
+  if (priorityOption){
+    evt.preventDefault();
+    const project = getProjectFlowBetaSelectedProject();
+    const taskMap = buildProjectFlowBetaTaskMap(getProjectFlowBetaPhases(project));
+    const task = taskMap.get(priorityOption.dataset.projectFlowBetaPriorityTask);
+    setProjectFlowBetaVisualPriority(
+      project,
+      task,
+      priorityOption.dataset.projectFlowBetaPriorityOption
+    );
+    return;
+  }
+  const priorityControl = evt.target.closest('[data-project-flow-beta-priority-task]');
+  if (priorityControl){
+    evt.preventDefault();
+    const project = getProjectFlowBetaSelectedProject();
+    const taskMap = buildProjectFlowBetaTaskMap(getProjectFlowBetaPhases(project));
+    const task = taskMap.get(priorityControl.dataset.projectFlowBetaPriorityTask);
+    openProjectFlowBetaPriorityMenu(priorityControl, project, task);
+    return;
+  }
+  const collapseControl = evt.target.closest('[data-project-flow-beta-collapse-id]');
+  if (collapseControl){
+    evt.preventDefault();
+    evt.stopPropagation();
+    const project = getProjectFlowBetaSelectedProject();
+    const store = getProjectFlowBetaCollapseStore(project);
+    const key = getProjectFlowBetaCollapseKey(
+      collapseControl.dataset.projectFlowBetaCollapseType,
+      collapseControl.dataset.projectFlowBetaCollapseId
+    );
+    store[key] = !store[key];
+    renderProjectFlowBetaView();
+    return;
+  }
+  const decisionOption = evt.target.closest('[data-project-flow-beta-decision-option]');
+  if (decisionOption){
+    evt.preventDefault();
+    const project = getProjectFlowBetaSelectedProject();
+    const phases = getProjectFlowBetaPhases(project);
+    const taskMap = buildProjectFlowBetaTaskMap(phases);
+    const task = taskMap.get(decisionOption.dataset.projectFlowBetaDecisionTask);
+    setProjectFlowBetaVisualDecision(
+      project,
+      task,
+      decisionOption.dataset.projectFlowBetaDecisionOption,
+      taskMap
+    );
+    return;
+  }
+  const decisionControl = evt.target.closest('[data-project-flow-beta-decision-task]');
+  if (decisionControl && !decisionControl.disabled){
+    evt.preventDefault();
+    const project = getProjectFlowBetaSelectedProject();
+    const phases = getProjectFlowBetaPhases(project);
+    const taskMap = buildProjectFlowBetaTaskMap(phases);
+    const task = taskMap.get(decisionControl.dataset.projectFlowBetaDecisionTask);
+    openProjectFlowBetaDecisionMenu(decisionControl, project, task, taskMap);
+    return;
+  }
+  const control = evt.target.closest('[data-project-flow-beta-visual-task]');
+  if (!control || control.disabled) return;
+  evt.preventDefault();
+  closeProjectFlowBetaDecisionMenu();
+  const project = getProjectFlowBetaSelectedProject();
+  const phases = getProjectFlowBetaPhases(project);
+  const taskMap = buildProjectFlowBetaTaskMap(phases);
+  const task = taskMap.get(control.dataset.projectFlowBetaVisualTask);
+  if (!task || !projectFlowBetaTaskUsesCheck(task)) return;
+  const store = getProjectFlowBetaVisualStore(project);
+  const nextChecked = !getProjectFlowBetaVisualChecked(project, task);
+  store[task.number] = nextChecked;
+  if (!nextChecked){
+    resetProjectFlowBetaVisualBlockedTasks(project, task.number, taskMap);
+  }
+  renderProjectFlowBetaView();
+});
+
+document.addEventListener('click', evt=>{
+  if (
+    evt.target.closest('.project-flow-beta-decision-menu')
+    || evt.target.closest('.project-flow-beta-priority-menu')
+    || evt.target.closest('.project-flow-beta-assignee-menu')
+    || evt.target.closest('.project-flow-beta-schedule-menu')
+    || evt.target.closest('[data-project-flow-beta-decision-task]')
+    || evt.target.closest('[data-project-flow-beta-priority-task]')
+    || evt.target.closest('[data-project-flow-beta-assignee-task]')
+    || evt.target.closest('[data-project-flow-beta-schedule-task]')
+  ){
+    return;
+  }
+  closeProjectFlowBetaDecisionMenu();
+  closeProjectFlowBetaPriorityMenu();
+  closeProjectFlowBetaAssigneeMenu();
+  closeProjectFlowBetaScheduleMenu();
+});
+
+document.addEventListener('input', evt=>{
+  const input = evt.target.closest('[data-project-flow-beta-assignee-input]');
+  if (!input) return;
+  const menu = input.closest('.project-flow-beta-assignee-menu');
+  const project = getProjectFlowBetaSelectedProject();
+  const taskMap = buildProjectFlowBetaTaskMap(getProjectFlowBetaPhases(project));
+  const task = taskMap.get(input.dataset.projectFlowBetaAssigneeInput);
+  renderProjectFlowBetaAssigneeSuggestions(menu, project, task, input.value);
+});
+
+document.addEventListener('keydown', evt=>{
+  const input = evt.target.closest('[data-project-flow-beta-assignee-input]');
+  if (!input) return;
+  if (evt.key === 'Escape'){
+    evt.preventDefault();
+    closeProjectFlowBetaAssigneeMenu();
+    return;
+  }
+  if (evt.key === 'Enter'){
+    evt.preventDefault();
+    const project = getProjectFlowBetaSelectedProject();
+    const taskMap = buildProjectFlowBetaTaskMap(getProjectFlowBetaPhases(project));
+    const task = taskMap.get(input.dataset.projectFlowBetaAssigneeInput);
+    setProjectFlowBetaVisualAssignee(project, task, input.value);
+  }
+});
+
+document.addEventListener('keydown', evt=>{
+  const scheduleInput = evt.target.closest('.project-flow-beta-schedule-menu input, .project-flow-beta-schedule-menu select');
+  if (!scheduleInput) return;
+  if (evt.key === 'Escape'){
+    evt.preventDefault();
+    closeProjectFlowBetaScheduleMenu();
+    return;
+  }
+  if (evt.key === 'Enter'){
+    evt.preventDefault();
+    const menu = scheduleInput.closest('.project-flow-beta-schedule-menu');
+    const saveButton = menu?.querySelector('[data-project-flow-beta-schedule-save]');
+    saveButton?.click();
+  }
+});
 
 const projectFlowTaskProjectSelect = $('projectFlowTaskProjectSelect');
 if (projectFlowTaskProjectSelect){
