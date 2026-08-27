@@ -100,16 +100,27 @@ export const PROJECT_STATUS_OPTIONS = Object.freeze([
   { id: 'finished', label: 'Ferdig', tone: 'done' }
 ]);
 export const PROJECT_ARCHIVE_STATUS_IDS = Object.freeze(['lost', 'finished']);
-// betaTarget er kun koblingsmetadata. Prosjektflytene deler foreløpig ingen status eller handlinger.
+// Den eksisterende prosjektflyten bruker disse numrene i visningen.
 export const PROJECT_FLOW_PHASES = Object.freeze([
-  { id: 'request', label: 'Forespørsel', betaTarget: { type: 'task', number: '1.01.0' } },
-  { id: 'offer', label: 'Tilbud', betaTarget: { type: 'task', number: '1.02.0' } },
-  { id: 'order', label: 'Bestilling', betaTarget: { type: 'task', number: '1.03.0' } },
-  { id: 'engineering', label: 'Prosjektering', betaTarget: { type: 'phase', number: '2.00.0' } },
-  { id: 'procurement', label: 'Innkjøp', betaTarget: { type: 'phase', number: '3.00.0' } },
-  { id: 'production', label: 'Bekreftelse fra leverandør', betaTarget: { type: 'task', number: '3.04.0' } },
-  { id: 'delivery', label: 'Leveranse strømskinne', betaTarget: { type: 'task', number: 'X.03.0' } },
-  { id: 'finished', label: 'Fakturert', betaTarget: { type: 'task', number: '1.04.0' } }
+  { id: 'request', label: 'Forespørsel', number: '1.01.0' },
+  { id: 'offer', label: 'Tilbud', number: '1.02.0' },
+  { id: 'order', label: 'Bestilling', number: '1.03.0' },
+  { id: 'engineering', label: 'Prosjektering', number: '2.00.0' },
+  { id: 'procurement', label: 'Innkjøp', number: '3.00.0' },
+  { id: 'production', label: 'Bekreftelse fra leverandør', number: '3.04.0' },
+  { id: 'delivery', label: 'Leveranse strømskinne', number: 'X.03.0' },
+  { id: 'finished', label: 'Fakturert', number: '1.04.0' }
 ]);
+// Beta-koblinger holdes separat slik at Beta ikke endrer den eksisterende flytens datastruktur.
+export const PROJECT_FLOW_BETA_LINKS = Object.freeze({
+  request: { type: 'task', number: '1.01.0' },
+  offer: { type: 'task', number: '1.02.0' },
+  order: { type: 'task', number: '1.03.0' },
+  engineering: { type: 'phase', number: '2.00.0' },
+  procurement: { type: 'phase', number: '3.00.0' },
+  production: { type: 'task', number: '3.04.0' },
+  delivery: { type: 'task', number: 'X.03.0' },
+  finished: { type: 'task', number: '1.04.0' }
+});
 export const PROJECT_FLOW_VISIBLE_WEEK_LEVELS = Object.freeze([5, 4, 3, 2]);
 export const PROJECT_FLOW_DEFAULT_ZOOM_INDEX = 1;

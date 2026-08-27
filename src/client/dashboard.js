@@ -9,6 +9,12 @@ import { readLocalText, writeLocalText } from './storage.js';
 
 export const hasDashboardUI = () => Boolean($('dashboardView') && $('projectList'));
 export const hasCalculatorUI = () => Boolean($('calcBtn') && $('series'));
+const HIDDEN_DASHBOARD_PAGES = new Set(['project-flow-beta']);
+
+function normalizeDashboardPage(page){
+  const normalized = String(page || '').trim();
+  return HIDDEN_DASHBOARD_PAGES.has(normalized) ? 'dashboard' : normalized;
+}
 
 export function buildAppUrl(fileName, params = {}){
   const url = new URL(fileName, window.location.href);
@@ -38,10 +44,10 @@ export function updateMarketTickerVisibility(state){
 function resolveInitialDashboardPage(){
   const shell = $('dashboardShell');
   const configured = String(shell?.dataset?.dashboardActivePage || '').trim();
-  if (configured) return configured;
+  if (configured) return normalizeDashboardPage(configured);
   const params = new URLSearchParams(window.location.search);
   const view = String(params.get('view') || '').trim();
-  if (view) return view;
+  if (view) return normalizeDashboardPage(view);
   return hasCalculatorUI() ? 'calculator' : 'dashboard';
 }
 
@@ -87,7 +93,7 @@ export function setDashboardSidebarCollapsed(state, collapsed, options = {}){
   }
 }
 export function setDashboardPage(state, page, onPageActivated, options = {}){
-  const nextPage = String(page || 'projects');
+  const nextPage = normalizeDashboardPage(page || 'projects');
   const pages = Array.from(document.querySelectorAll('[data-dashboard-page]'));
   if (pages.length){
     const target = pages.find(el=>el.dataset.dashboardPage === nextPage) || pages[0];

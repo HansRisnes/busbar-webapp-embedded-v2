@@ -116,7 +116,8 @@ const app = express();
 app.use(express.json({ limit: '10mb' }));
 
 const DEFAULT_CORS_ALLOWED_ORIGINS = [
-  'https://hansrisnes.github.io'
+  'https://hansrisnes.github.io',
+  'https://webapp.busbar.no'
 ];
 const DEFAULT_LOCAL_ORIGINS = [
   'http://localhost:3000',
@@ -139,7 +140,8 @@ function parseCsvEnv(value) {
 const corsAllowLocalhost = String(process.env.CORS_ALLOW_LOCALHOST || 'true').trim().toLowerCase() !== 'false';
 const configuredCorsOrigins = parseCsvEnv(process.env.CORS_ALLOWED_ORIGINS);
 const corsAllowedOrigins = new Set([
-  ...(configuredCorsOrigins.length ? configuredCorsOrigins : DEFAULT_CORS_ALLOWED_ORIGINS),
+  ...DEFAULT_CORS_ALLOWED_ORIGINS,
+  ...configuredCorsOrigins,
   ...(corsAllowLocalhost ? DEFAULT_LOCAL_ORIGINS : [])
 ]);
 const corsAllowAllOrigins = corsAllowedOrigins.has('*');

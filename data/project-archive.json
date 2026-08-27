@@ -2,7 +2,7 @@
   "users": {
     "hans.jakob.risnes@busbar.no": {
       "email": "hans.jakob.risnes@busbar.no",
-      "updatedAt": "2026-08-27T08:17:31.046Z",
+      "updatedAt": "2026-08-27T08:34:18.574Z",
       "projects": [
         {
           "id": "0cb0f047-8257-4c26-8ae1-afdb9ebaf6cd",
@@ -4010,7 +4010,7 @@
     },
     "hans@busbar.no": {
       "email": "hans@busbar.no",
-      "updatedAt": "2026-08-27T08:17:31.046Z",
+      "updatedAt": "2026-08-27T08:34:18.574Z",
       "projects": []
     }
   },

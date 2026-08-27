@@ -7430,7 +7430,7 @@ function getProjectFlowPhaseDisplayLabel(phaseOrId){
     ? phaseOrId
     : PROJECT_FLOW_PHASES.find(item=>item.id === phaseOrId);
   if (!phase) return PROJECT_FLOW_PHASES[0].label;
-  const number = String(phase.betaTarget?.number || '').trim();
+  const number = String(phase.number || '').trim();
   return number ? `${number} ${phase.label}` : phase.label;
 }
 
@@ -8899,7 +8899,6 @@ function startProjectFlowLinkDrag(evt, handle){
   };
   handle.classList.add('is-linking');
   updateProjectFlowLinkTargetHighlights();
-      onScroll?.();
 }
 
 function updateProjectFlowLinkDrag(evt){
