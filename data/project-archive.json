@@ -2,8 +2,38 @@
   "users": {
     "hans.jakob.risnes@busbar.no": {
       "email": "hans.jakob.risnes@busbar.no",
-      "updatedAt": "2026-05-22T12:14:04.024Z",
+      "updatedAt": "2026-08-27T08:17:31.046Z",
       "projects": [
+        {
+          "id": "0cb0f047-8257-4c26-8ae1-afdb9ebaf6cd",
+          "projectNumber": "2026-1055",
+          "name": "Test",
+          "customer": "Eltel AS",
+          "contactPerson": "Even Kongsvik Lien",
+          "customerAddress": "Jordalsveien 17",
+          "customerPostalPlace": "5105 Eidsvåg i Åsane",
+          "contactPhone": "+47 47688136",
+          "projectResponsible": "Hans Jakob Risnes",
+          "projectOwnerEmail": "hans.jakob.risnes@busbar.no",
+          "projectOwnerName": "Hans Jakob Risnes",
+          "projectFolderName": "",
+          "projectFolderCreated": false,
+          "projectFolderWebUrl": "",
+          "projectStatus": "unresolved",
+          "createdAt": "2026-08-13T12:20:02.759Z",
+          "updatedAt": "2026-08-13T12:20:02.759Z",
+          "selectedAddonConfig": {
+            "includeMontasje": true,
+            "includeEngineering": true,
+            "includeOppheng": true,
+            "showMontasje": false,
+            "showEngineering": false,
+            "showOppheng": false,
+            "includeUnitPrices": false
+          },
+          "lines": [],
+          "todos": []
+        },
         {
           "id": "58506e74-1735-4e5f-ab89-e13dce6a2096",
           "projectNumber": "2026-1054",
@@ -13,17 +43,345 @@
           "customerAddress": "testenes",
           "customerPostalPlace": "123 test",
           "contactPhone": "12345678",
+          "projectResponsible": "Hans Jakob Risnes",
+          "projectOwnerEmail": "hans.jakob.risnes@busbar.no",
+          "projectOwnerName": "Hans Jakob Risnes",
+          "projectFolderName": "2026-1054 - Test",
+          "projectFolderCreated": true,
+          "projectFolderWebUrl": "https://mcselektrotavler.sharepoint.com/sites/BCDokumentarkiv/Delte%20dokumenter/Drift/BUSBAR/Prosjekter/2026/2026-1054%20-%20Test",
+          "projectStatus": "unresolved",
           "createdAt": "2026-05-22T11:57:45.422Z",
-          "updatedAt": "2026-05-22T12:12:25.590Z",
+          "updatedAt": "2026-08-19T11:09:26.347Z",
           "selectedAddonConfig": {
             "includeMontasje": true,
             "includeEngineering": true,
             "includeOppheng": true,
-            "showMontasje": false,
-            "showEngineering": false,
-            "showOppheng": false
+            "showMontasje": true,
+            "showEngineering": true,
+            "showOppheng": true,
+            "includeUnitPrices": false
           },
-          "lines": []
+          "lines": [
+            {
+              "id": "f6e17d8c-c428-4b9f-8948-b34acef5f2a1",
+              "lineNumber": "1",
+              "createdAt": "2026-06-03T09:55:11.489Z",
+              "updatedAt": "2026-08-19T11:09:26.347Z",
+              "inputs": {
+                "series": "XCP-S",
+                "dist": true,
+                "meter": 3,
+                "v90_h": 3,
+                "v90_v": 2,
+                "ampere": 3200,
+                "ledere": "3F+N+PE",
+                "startEl": "board_feed",
+                "sluttEl": "crt_board_feed",
+                "fbQty": 0,
+                "boxQty": 0,
+                "boxSel": "",
+                "boxItems": [
+                  {
+                    "id": "tapoff-1780480505091-1",
+                    "boxSel": "plug_in_box|160",
+                    "boxQty": 4,
+                    "innmatSum": 11111
+                  }
+                ],
+                "expansionYes": false,
+                "freightRate": 0.1,
+                "marginRate": 0.2,
+                "montasjeMarginRate": 0.2,
+                "engineeringMarginRate": 0.2,
+                "opphengMarginRate": 0.2,
+                "tapOffMarginRate": 0.2,
+                "montasjeSettings": {
+                  "hourlyRate": 657.8,
+                  "opphengRate": 800
+                },
+                "engineeringSettings": {
+                  "hourlyRate": 929.9
+                }
+              },
+              "totals": {
+                "lineNumber": "1",
+                "timestamp": "2026-06-03T09:55:07.488Z",
+                "material": 87838.13,
+                "tapOffBoxTotal": 51776.2,
+                "marginRate": 0.2,
+                "marginFactor": 0.8,
+                "margin": 21959.53,
+                "montasjeMarginRate": 0.51,
+                "montasjeMargin": 15404.6,
+                "engineeringMarginRate": 0.2,
+                "engineeringMargin": 244.1,
+                "opphengMarginRate": 0.2,
+                "opphengMargin": 400,
+                "tapOffMarginRate": 0.2,
+                "subtotal": 109797.66,
+                "freightRate": 0.1,
+                "freight": 8783.81,
+                "totalExMontasje": 118581.47,
+                "totalInclMontasje": 30205.1,
+                "totalInclEngineering": 1220.5,
+                "totalInclOppheng": 2000,
+                "montasje": {
+                  "cost": 14800.5,
+                  "meters": 3,
+                  "angles": 5,
+                  "hourlyRate": 657.8,
+                  "totalHours": 22.5,
+                  "profile": {
+                    "maxAmp": null,
+                    "hoursPerMeter": 5,
+                    "hoursPerAngle": 1.5,
+                    "label": "3200–5000A"
+                  },
+                  "hoursPerMeter": 5,
+                  "hoursPerAngle": 1.5,
+                  "amp": 3200
+                },
+                "engineering": {
+                  "cost": 976.4,
+                  "meters": 3,
+                  "angles": 5,
+                  "hourlyRate": 929.9,
+                  "totalHours": 1.05,
+                  "hoursPerMeter": 0.3,
+                  "hoursPerTenAngles": 0.3
+                },
+                "oppheng": {
+                  "cost": 1600,
+                  "meters": 3,
+                  "pieceCount": 2,
+                  "ratePerPiece": 800,
+                  "defaultRate": 800,
+                  "profile": {
+                    "maxAmp": null,
+                    "rate": 800,
+                    "label": "3200–5000A"
+                  },
+                  "isDefaultRate": true,
+                  "amp": 3200
+                },
+                "montasjeDetail": "Montasjegrunnlag (3 200A (3200–5000A)): 3 m × 5,00 t/m + 5 × 1,50 t = 22,50 t × 657,80 kr/t",
+                "engineeringDetail": "Ingeniørgrunnlag: 3 m × 0,30 t/m + (5 / 10) × 0,30 t = 1,05 t × 929,90 kr/t",
+                "opphengDetail": "Opphengsmateriell (3200–5000A): 3 m gir 2 stk × 800,00 kr/stk = 1 600,00 kr",
+                "total": 2000,
+                "bom": [
+                  {
+                    "code": "64391006P",
+                    "type": "board_feed",
+                    "series": "XCP-S",
+                    "ampere": 3200,
+                    "ledere": "3F+N+PE",
+                    "antall": 1,
+                    "enhet": 7803.09,
+                    "sum": 7803.09
+                  },
+                  {
+                    "code": "6439T016P",
+                    "type": "crt_board_feed",
+                    "series": "XCP-S",
+                    "ampere": 3200,
+                    "ledere": "3F+N+PE",
+                    "antall": 1,
+                    "enhet": 13071.25,
+                    "sum": 13071.25
+                  },
+                  {
+                    "code": "64390136P",
+                    "type": "straight_3m_dist",
+                    "series": "XCP-S",
+                    "ampere": 3200,
+                    "ledere": "3F+N+PE",
+                    "antall": 1,
+                    "enhet": 14729.32,
+                    "sum": 14729.32
+                  },
+                  {
+                    "code": "64390316P",
+                    "type": "elbow_horizontal_90",
+                    "series": "XCP-S",
+                    "ampere": 3200,
+                    "ledere": "3F+N+PE",
+                    "antall": 3,
+                    "enhet": 8479.19,
+                    "sum": 25437.57
+                  },
+                  {
+                    "code": "64390426P",
+                    "type": "elbow_vertical_90",
+                    "series": "XCP-S",
+                    "ampere": 3200,
+                    "ledere": "3F+N+PE",
+                    "antall": 2,
+                    "enhet": 13398.45,
+                    "sum": 26796.9
+                  },
+                  {
+                    "code": "50485213",
+                    "type": "plug_in_box",
+                    "series": "XCP-S",
+                    "ampere": 160,
+                    "ledere": "3F+N+PE",
+                    "antall": 4,
+                    "enhet": 1833.050049,
+                    "sum": 7332.2,
+                    "tapOffBoxSel": "plug_in_box|160",
+                    "tapOffInnmatPerUnit": 11111,
+                    "tapOffInnmatTotal": 44444,
+                    "tapOffBaseEnhet": 1833.050049,
+                    "tapOffGroupId": "tapoff-1780480505091-1",
+                    "tapOffIncludesInnmatInSum": false
+                  },
+                  {
+                    "code": "INNMAT-50485213",
+                    "type": "plug_in_box_innmat",
+                    "series": "XCP-S",
+                    "ampere": 160,
+                    "ledere": "3F+N+PE",
+                    "antall": 4,
+                    "enhet": 11111,
+                    "sum": 44444,
+                    "tapOffGroupId": "tapoff-1780480505091-1",
+                    "tapOffParentCode": "50485213",
+                    "tapOffBoxSel": "plug_in_box|160",
+                    "tapOffInnmatLine": true
+                  }
+                ],
+                "tapOffOfferTotal": 64720.25,
+                "selectedAddonTotal": 216727.32,
+                "selectedAddonConfig": {
+                  "includeMontasje": true,
+                  "includeEngineering": true,
+                  "includeOppheng": true,
+                  "showMontasje": true,
+                  "showEngineering": true,
+                  "showOppheng": true,
+                  "includeUnitPrices": false
+                }
+              },
+              "bom": [
+                {
+                  "code": "64391006P",
+                  "type": "board_feed",
+                  "series": "XCP-S",
+                  "ampere": 3200,
+                  "ledere": "3F+N+PE",
+                  "antall": 1,
+                  "enhet": 7803.09,
+                  "sum": 7803.09
+                },
+                {
+                  "code": "6439T016P",
+                  "type": "crt_board_feed",
+                  "series": "XCP-S",
+                  "ampere": 3200,
+                  "ledere": "3F+N+PE",
+                  "antall": 1,
+                  "enhet": 13071.25,
+                  "sum": 13071.25
+                },
+                {
+                  "code": "64390136P",
+                  "type": "straight_3m_dist",
+                  "series": "XCP-S",
+                  "ampere": 3200,
+                  "ledere": "3F+N+PE",
+                  "antall": 1,
+                  "enhet": 14729.32,
+                  "sum": 14729.32
+                },
+                {
+                  "code": "64390316P",
+                  "type": "elbow_horizontal_90",
+                  "series": "XCP-S",
+                  "ampere": 3200,
+                  "ledere": "3F+N+PE",
+                  "antall": 3,
+                  "enhet": 8479.19,
+                  "sum": 25437.57
+                },
+                {
+                  "code": "64390426P",
+                  "type": "elbow_vertical_90",
+                  "series": "XCP-S",
+                  "ampere": 3200,
+                  "ledere": "3F+N+PE",
+                  "antall": 2,
+                  "enhet": 13398.45,
+                  "sum": 26796.9
+                },
+                {
+                  "code": "50485213",
+                  "type": "plug_in_box",
+                  "series": "XCP-S",
+                  "ampere": 160,
+                  "ledere": "3F+N+PE",
+                  "antall": 4,
+                  "enhet": 1833.050049,
+                  "sum": 7332.2,
+                  "tapOffBoxSel": "plug_in_box|160",
+                  "tapOffInnmatPerUnit": 11111,
+                  "tapOffInnmatTotal": 44444,
+                  "tapOffBaseEnhet": 1833.050049,
+                  "tapOffGroupId": "tapoff-1780480505091-1",
+                  "tapOffIncludesInnmatInSum": false
+                },
+                {
+                  "code": "INNMAT-50485213",
+                  "type": "plug_in_box_innmat",
+                  "series": "XCP-S",
+                  "ampere": 160,
+                  "ledere": "3F+N+PE",
+                  "antall": 4,
+                  "enhet": 11111,
+                  "sum": 44444,
+                  "tapOffGroupId": "tapoff-1780480505091-1",
+                  "tapOffParentCode": "50485213",
+                  "tapOffBoxSel": "plug_in_box|160",
+                  "tapOffInnmatLine": true
+                }
+              ],
+              "selectedAddonConfig": {
+                "includeMontasje": true,
+                "includeEngineering": true,
+                "includeOppheng": true,
+                "showMontasje": true,
+                "showEngineering": true,
+                "showOppheng": true,
+                "includeUnitPrices": false
+              },
+              "selectedAddonTotal": 216727.32
+            }
+          ],
+          "todos": [
+            {
+              "id": "1cf46c9d-525e-44af-bb84-4fead2416a18",
+              "title": "test 1",
+              "dueAt": "2026-08-18T11:00:00.000Z",
+              "durationHours": 1,
+              "completed": true,
+              "createdAt": "2026-08-18T10:10:00.478Z",
+              "updatedAt": "2026-08-18T10:10:25.376Z",
+              "completedAt": "2026-08-18T10:10:14.809Z",
+              "calendarEventId": "AAMkAGMwMzUzYWE0LWY3OGEtNDM1OS1iNjVkLTAyZWEwNzg4MGNjYgBGAAAAAABAN5cLnqy-S7W7Z39BrioFBwBUa-92dQSBSoQqfHey-9mxAAAAAAENAABUa-92dQSBSoQqfHey-9mxAAHZXP5lAAA=",
+              "remindedAt": ""
+            },
+            {
+              "id": "ce8cbf78-60cb-4eb8-abc6-26692db5c489",
+              "title": "test",
+              "dueAt": "2026-08-18T11:00:00.000Z",
+              "durationHours": 1,
+              "completed": true,
+              "createdAt": "2026-08-18T10:02:22.007Z",
+              "updatedAt": "2026-08-18T10:03:02.861Z",
+              "completedAt": "2026-08-18T10:02:52.163Z",
+              "calendarEventId": "AAMkAGMwMzUzYWE0LWY3OGEtNDM1OS1iNjVkLTAyZWEwNzg4MGNjYgBGAAAAAABAN5cLnqy-S7W7Z39BrioFBwBUa-92dQSBSoQqfHey-9mxAAAAAAENAABUa-92dQSBSoQqfHey-9mxAAHZXP5kAAA=",
+              "remindedAt": ""
+            }
+          ]
         },
         {
           "id": "02ad2c26-a878-48bc-a2a7-fc5c61b03b77",
@@ -34,15 +392,23 @@
           "customerAddress": "Sandstuveien 70G",
           "customerPostalPlace": "0680 Oslo",
           "contactPhone": "+47 48 19 12 23",
+          "projectResponsible": "Hans Jakob Risnes",
+          "projectOwnerEmail": "hans.jakob.risnes@busbar.no",
+          "projectOwnerName": "Hans Jakob Risnes",
+          "projectFolderName": "2026-1053 - Dronningensgate 13",
+          "projectFolderCreated": true,
+          "projectFolderWebUrl": "https://mcselektrotavler.sharepoint.com/sites/BCDokumentarkiv/Delte%20dokumenter/Drift/BUSBAR/Prosjekter/2026/2026-1053%20-%20Dronningensgate%2013",
+          "projectStatus": "unresolved",
           "createdAt": "2026-05-20T12:48:36.013Z",
-          "updatedAt": "2026-05-22T11:15:43.527Z",
+          "updatedAt": "2026-08-12T10:58:00.031Z",
           "selectedAddonConfig": {
-            "includeMontasje": true,
-            "includeEngineering": true,
-            "includeOppheng": true,
+            "includeMontasje": false,
+            "includeEngineering": false,
+            "includeOppheng": false,
             "showMontasje": false,
             "showEngineering": false,
-            "showOppheng": false
+            "showOppheng": false,
+            "includeUnitPrices": false
           },
           "lines": [
             {
@@ -140,14 +506,15 @@
                 "engineeringDetail": "Ingeniørgrunnlag: 31 m × 0,30 t/m + (4 / 10) × 0,30 t = 9,42 t × 929,90 kr/t",
                 "opphengDetail": "Opphengsmateriell (160–1600A): 31 m gir 16 stk × 400,00 kr/stk = 6 400,00 kr",
                 "total": 8000,
-                "selectedAddonTotal": 108810.71,
+                "selectedAddonTotal": 46211.13,
                 "selectedAddonConfig": {
-                  "includeMontasje": true,
-                  "includeEngineering": true,
-                  "includeOppheng": true,
+                  "includeMontasje": false,
+                  "includeEngineering": false,
+                  "includeOppheng": false,
                   "showMontasje": false,
                   "showEngineering": false,
-                  "showOppheng": false
+                  "showOppheng": false,
+                  "includeUnitPrices": false
                 }
               },
               "bom": [
@@ -213,14 +580,15 @@
                 }
               ],
               "selectedAddonConfig": {
-                "includeMontasje": true,
-                "includeEngineering": true,
-                "includeOppheng": true,
+                "includeMontasje": false,
+                "includeEngineering": false,
+                "includeOppheng": false,
                 "showMontasje": false,
                 "showEngineering": false,
-                "showOppheng": false
+                "showOppheng": false,
+                "includeUnitPrices": false
               },
-              "selectedAddonTotal": 108810.71
+              "selectedAddonTotal": 46211.13
             },
             {
               "id": "baea5318-6c27-4f12-afce-0938180d2cb0",
@@ -317,14 +685,15 @@
                 "engineeringDetail": "Ingeniørgrunnlag: 75 m × 0,30 t/m + (12 / 10) × 0,30 t = 22,86 t × 929,90 kr/t",
                 "opphengDetail": "Opphengsmateriell (160–1600A): 75 m gir 38 stk × 400,00 kr/stk = 15 200,00 kr",
                 "total": 19000,
-                "selectedAddonTotal": 281677.27,
+                "selectedAddonTotal": 129455.38,
                 "selectedAddonConfig": {
-                  "includeMontasje": true,
-                  "includeEngineering": true,
-                  "includeOppheng": true,
+                  "includeMontasje": false,
+                  "includeEngineering": false,
+                  "includeOppheng": false,
                   "showMontasje": false,
                   "showEngineering": false,
-                  "showOppheng": false
+                  "showOppheng": false,
+                  "includeUnitPrices": false
                 }
               },
               "bom": [
@@ -380,14 +749,15 @@
                 }
               ],
               "selectedAddonConfig": {
-                "includeMontasje": true,
-                "includeEngineering": true,
-                "includeOppheng": true,
+                "includeMontasje": false,
+                "includeEngineering": false,
+                "includeOppheng": false,
                 "showMontasje": false,
                 "showEngineering": false,
-                "showOppheng": false
+                "showOppheng": false,
+                "includeUnitPrices": false
               },
-              "selectedAddonTotal": 281677.27
+              "selectedAddonTotal": 129455.38
             },
             {
               "id": "df7feaa3-ace3-4cb7-8ff8-c2eb73ed38a5",
@@ -484,14 +854,15 @@
                 "engineeringDetail": "Ingeniørgrunnlag: 17 m × 0,30 t/m + (0 / 10) × 0,30 t = 5,10 t × 929,90 kr/t",
                 "opphengDetail": "Opphengsmateriell (160–1600A): 17 m gir 9 stk × 400,00 kr/stk = 3 600,00 kr",
                 "total": 4500,
-                "selectedAddonTotal": 54499.17,
+                "selectedAddonTotal": 21121.06,
                 "selectedAddonConfig": {
-                  "includeMontasje": true,
-                  "includeEngineering": true,
-                  "includeOppheng": true,
+                  "includeMontasje": false,
+                  "includeEngineering": false,
+                  "includeOppheng": false,
                   "showMontasje": false,
                   "showEngineering": false,
-                  "showOppheng": false
+                  "showOppheng": false,
+                  "includeUnitPrices": false
                 }
               },
               "bom": [
@@ -537,14 +908,15 @@
                 }
               ],
               "selectedAddonConfig": {
-                "includeMontasje": true,
-                "includeEngineering": true,
-                "includeOppheng": true,
+                "includeMontasje": false,
+                "includeEngineering": false,
+                "includeOppheng": false,
                 "showMontasje": false,
                 "showEngineering": false,
-                "showOppheng": false
+                "showOppheng": false,
+                "includeUnitPrices": false
               },
-              "selectedAddonTotal": 54499.17
+              "selectedAddonTotal": 21121.06
             },
             {
               "id": "2eba45d1-63b3-48d8-aa7a-9a1afb0d42ee",
@@ -641,14 +1013,15 @@
                 "engineeringDetail": "Ingeniørgrunnlag: 12 m × 0,30 t/m + (1 / 10) × 0,30 t = 3,63 t × 929,90 kr/t",
                 "opphengDetail": "Opphengsmateriell (160–1600A): 12 m gir 6 stk × 400,00 kr/stk = 2 400,00 kr",
                 "total": 3000,
-                "selectedAddonTotal": 109851.17,
+                "selectedAddonTotal": 69556.75,
                 "selectedAddonConfig": {
-                  "includeMontasje": true,
-                  "includeEngineering": true,
-                  "includeOppheng": true,
+                  "includeMontasje": false,
+                  "includeEngineering": false,
+                  "includeOppheng": false,
                   "showMontasje": false,
                   "showEngineering": false,
-                  "showOppheng": false
+                  "showOppheng": false,
+                  "includeUnitPrices": false
                 }
               },
               "bom": [
@@ -694,14 +1067,15 @@
                 }
               ],
               "selectedAddonConfig": {
-                "includeMontasje": true,
-                "includeEngineering": true,
-                "includeOppheng": true,
+                "includeMontasje": false,
+                "includeEngineering": false,
+                "includeOppheng": false,
                 "showMontasje": false,
                 "showEngineering": false,
-                "showOppheng": false
+                "showOppheng": false,
+                "includeUnitPrices": false
               },
-              "selectedAddonTotal": 109851.17
+              "selectedAddonTotal": 69556.75
             },
             {
               "id": "250865db-dde4-4c6e-baac-4f76e8d273e2",
@@ -798,14 +1172,15 @@
                 "engineeringDetail": "Ingeniørgrunnlag: 70 m × 0,30 t/m + (10 / 10) × 0,30 t = 21,30 t × 929,90 kr/t",
                 "opphengDetail": "Opphengsmateriell (160–1600A): 70 m gir 35 stk × 400,00 kr/stk = 14 000,00 kr",
                 "total": 17500,
-                "selectedAddonTotal": 487502.65,
+                "selectedAddonTotal": 249494.06,
                 "selectedAddonConfig": {
-                  "includeMontasje": true,
-                  "includeEngineering": true,
-                  "includeOppheng": true,
+                  "includeMontasje": false,
+                  "includeEngineering": false,
+                  "includeOppheng": false,
                   "showMontasje": false,
                   "showEngineering": false,
-                  "showOppheng": false
+                  "showOppheng": false,
+                  "includeUnitPrices": false
                 }
               },
               "bom": [
@@ -871,16 +1246,18 @@
                 }
               ],
               "selectedAddonConfig": {
-                "includeMontasje": true,
-                "includeEngineering": true,
-                "includeOppheng": true,
+                "includeMontasje": false,
+                "includeEngineering": false,
+                "includeOppheng": false,
                 "showMontasje": false,
                 "showEngineering": false,
-                "showOppheng": false
+                "showOppheng": false,
+                "includeUnitPrices": false
               },
-              "selectedAddonTotal": 487502.65
+              "selectedAddonTotal": 249494.06
             }
-          ]
+          ],
+          "todos": []
         },
         {
           "id": "f5df1fdd-1bc2-4a40-884a-10ff2b1f816d",
@@ -891,22 +1268,30 @@
           "customerAddress": "Brobekkveien 80C",
           "customerPostalPlace": "0582 Oslo",
           "contactPhone": "+47 91 53 33 86",
+          "projectResponsible": "Hans Jakob Risnes",
+          "projectOwnerEmail": "hans.jakob.risnes@busbar.no",
+          "projectOwnerName": "Hans Jakob Risnes",
+          "projectFolderName": "",
+          "projectFolderCreated": false,
+          "projectFolderWebUrl": "",
+          "projectStatus": "unresolved",
           "createdAt": "2026-04-14T07:12:04.324Z",
-          "updatedAt": "2026-05-22T11:17:14.761Z",
+          "updatedAt": "2026-08-18T12:01:59.623Z",
           "selectedAddonConfig": {
             "includeMontasje": true,
             "includeEngineering": true,
             "includeOppheng": false,
-            "showMontasje": true,
-            "showEngineering": true,
-            "showOppheng": false
+            "showMontasje": false,
+            "showEngineering": false,
+            "showOppheng": false,
+            "includeUnitPrices": false
           },
           "lines": [
             {
               "id": "fa835640-9f0e-45f4-b4a6-02e89211ec10",
               "lineNumber": "1",
               "createdAt": "2026-04-14T07:14:36.134Z",
-              "updatedAt": "2026-04-14T07:14:36.134Z",
+              "updatedAt": "2026-06-03T09:54:12.012Z",
               "inputs": {
                 "series": "XCP-S",
                 "dist": false,
@@ -1002,9 +1387,10 @@
                   "includeMontasje": true,
                   "includeEngineering": true,
                   "includeOppheng": false,
-                  "showMontasje": true,
-                  "showEngineering": true,
-                  "showOppheng": false
+                  "showMontasje": false,
+                  "showEngineering": false,
+                  "showOppheng": false,
+                  "includeUnitPrices": false
                 }
               },
               "bom": [
@@ -1093,11 +1479,26 @@
                 "includeMontasje": true,
                 "includeEngineering": true,
                 "includeOppheng": false,
-                "showMontasje": true,
-                "showEngineering": true,
-                "showOppheng": false
+                "showMontasje": false,
+                "showEngineering": false,
+                "showOppheng": false,
+                "includeUnitPrices": false
               },
               "selectedAddonTotal": 557616.57
+            }
+          ],
+          "todos": [
+            {
+              "id": "5306a96d-4f94-4075-8f1a-3563f24156ec",
+              "title": "test todo",
+              "dueAt": "2026-08-18T12:00:00.000Z",
+              "durationHours": 1,
+              "completed": true,
+              "createdAt": "2026-08-18T11:38:14.441Z",
+              "updatedAt": "2026-08-18T11:39:29.740Z",
+              "completedAt": "2026-08-18T11:39:19.219Z",
+              "calendarEventId": "AAMkAGMwMzUzYWE0LWY3OGEtNDM1OS1iNjVkLTAyZWEwNzg4MGNjYgBGAAAAAABAN5cLnqy-S7W7Z39BrioFBwBUa-92dQSBSoQqfHey-9mxAAAAAAENAABUa-92dQSBSoQqfHey-9mxAAHZXP5tAAA=",
+              "remindedAt": ""
             }
           ]
         },
@@ -1110,22 +1511,30 @@
           "customerAddress": "Jordalsveien 17",
           "customerPostalPlace": "5105 Eidsvåg i Åsane",
           "contactPhone": "+47 47688136",
+          "projectResponsible": "Hans Jakob Risnes",
+          "projectOwnerEmail": "hans.jakob.risnes@busbar.no",
+          "projectOwnerName": "Hans Jakob Risnes",
+          "projectFolderName": "",
+          "projectFolderCreated": false,
+          "projectFolderWebUrl": "",
+          "projectStatus": "unresolved",
           "createdAt": "2026-04-09T13:11:33.417Z",
-          "updatedAt": "2026-05-22T11:17:19.807Z",
+          "updatedAt": "2026-08-18T11:37:31.223Z",
           "selectedAddonConfig": {
-            "includeMontasje": false,
-            "includeEngineering": false,
+            "includeMontasje": true,
+            "includeEngineering": true,
             "includeOppheng": false,
-            "showMontasje": false,
+            "showMontasje": true,
             "showEngineering": false,
-            "showOppheng": false
+            "showOppheng": false,
+            "includeUnitPrices": false
           },
           "lines": [
             {
               "id": "f83f0b6f-a887-42b8-85d3-aacf007a3e2a",
               "lineNumber": "Skinne over rack",
               "createdAt": "2026-04-09T13:13:53.673Z",
-              "updatedAt": "2026-04-09T13:13:53.673Z",
+              "updatedAt": "2026-06-03T09:54:25.633Z",
               "inputs": {
                 "series": "XCM",
                 "dist": true,
@@ -1216,11 +1625,14 @@
                 "engineeringDetail": "Ingeniørgrunnlag: 9 m × 0,30 t/m + (0 / 10) × 0,30 t = 2,70 t × 929,90 kr/t",
                 "opphengDetail": "Opphengsmateriell (160–1600A): 9 m gir 5 stk × 400,00 kr/stk = 2 000,00 kr",
                 "total": 2500,
-                "selectedAddonTotal": 17283.51,
+                "selectedAddonTotal": 38436.02,
                 "selectedAddonConfig": {
-                  "includeMontasje": false,
-                  "includeEngineering": false,
-                  "includeOppheng": false
+                  "includeMontasje": true,
+                  "includeEngineering": true,
+                  "includeOppheng": false,
+                  "showMontasje": true,
+                  "showEngineering": false,
+                  "showOppheng": false
                 }
               },
               "bom": [
@@ -1266,17 +1678,20 @@
                 }
               ],
               "selectedAddonConfig": {
-                "includeMontasje": false,
-                "includeEngineering": false,
-                "includeOppheng": false
+                "includeMontasje": true,
+                "includeEngineering": true,
+                "includeOppheng": false,
+                "showMontasje": true,
+                "showEngineering": false,
+                "showOppheng": false
               },
-              "selectedAddonTotal": 17283.51
+              "selectedAddonTotal": 38436.02
             },
             {
               "id": "9d82ff6f-905a-4c97-b203-3d630a2d6e11",
               "lineNumber": "Orange tilførsel",
               "createdAt": "2026-04-09T13:15:37.855Z",
-              "updatedAt": "2026-04-09T13:15:37.855Z",
+              "updatedAt": "2026-06-03T09:54:25.633Z",
               "inputs": {
                 "series": "XCP-S",
                 "dist": true,
@@ -1367,11 +1782,14 @@
                 "engineeringDetail": "Ingeniørgrunnlag: 20 m × 0,30 t/m + (3 / 10) × 0,30 t = 6,09 t × 929,90 kr/t",
                 "opphengDetail": "Opphengsmateriell (2000–2500A): 20 m gir 10 stk × 500,00 kr/stk = 5 000,00 kr",
                 "total": 6250,
-                "selectedAddonTotal": 191171.49,
+                "selectedAddonTotal": 274129.95,
                 "selectedAddonConfig": {
-                  "includeMontasje": false,
-                  "includeEngineering": false,
-                  "includeOppheng": false
+                  "includeMontasje": true,
+                  "includeEngineering": true,
+                  "includeOppheng": false,
+                  "showMontasje": true,
+                  "showEngineering": false,
+                  "showOppheng": false
                 }
               },
               "bom": [
@@ -1457,17 +1875,20 @@
                 }
               ],
               "selectedAddonConfig": {
-                "includeMontasje": false,
-                "includeEngineering": false,
-                "includeOppheng": false
+                "includeMontasje": true,
+                "includeEngineering": true,
+                "includeOppheng": false,
+                "showMontasje": true,
+                "showEngineering": false,
+                "showOppheng": false
               },
-              "selectedAddonTotal": 191171.49
+              "selectedAddonTotal": 274129.95
             },
             {
               "id": "22defb7e-ab93-48ba-9fd8-f7f2d85f064e",
               "lineNumber": "Grønn tilførsel",
               "createdAt": "2026-04-09T13:16:16.955Z",
-              "updatedAt": "2026-04-09T13:16:16.955Z",
+              "updatedAt": "2026-06-03T09:54:25.633Z",
               "inputs": {
                 "series": "XCP-S",
                 "dist": true,
@@ -1558,11 +1979,14 @@
                 "engineeringDetail": "Ingeniørgrunnlag: 18 m × 0,30 t/m + (1 / 10) × 0,30 t = 5,43 t × 929,90 kr/t",
                 "opphengDetail": "Opphengsmateriell (2000–2500A): 18 m gir 9 stk × 500,00 kr/stk = 4 500,00 kr",
                 "total": 5625,
-                "selectedAddonTotal": 155777.13,
+                "selectedAddonTotal": 229745.93,
                 "selectedAddonConfig": {
-                  "includeMontasje": false,
-                  "includeEngineering": false,
-                  "includeOppheng": false
+                  "includeMontasje": true,
+                  "includeEngineering": true,
+                  "includeOppheng": false,
+                  "showMontasje": true,
+                  "showEngineering": true,
+                  "showOppheng": false
                 }
               },
               "bom": [
@@ -1628,13 +2052,17 @@
                 }
               ],
               "selectedAddonConfig": {
-                "includeMontasje": false,
-                "includeEngineering": false,
-                "includeOppheng": false
+                "includeMontasje": true,
+                "includeEngineering": true,
+                "includeOppheng": false,
+                "showMontasje": true,
+                "showEngineering": true,
+                "showOppheng": false
               },
-              "selectedAddonTotal": 155777.13
+              "selectedAddonTotal": 229745.93
             }
-          ]
+          ],
+          "todos": []
         },
         {
           "id": "b1066d79-cf0a-49bd-91e9-a91c969f5706",
@@ -1645,15 +2073,23 @@
           "customerAddress": "Gråterudveien 5",
           "customerPostalPlace": "3036 Drammen",
           "contactPhone": "+47 992 01 050",
+          "projectResponsible": "Hans Jakob Risnes",
+          "projectOwnerEmail": "hans.jakob.risnes@busbar.no",
+          "projectOwnerName": "Hans Jakob Risnes",
+          "projectFolderName": "",
+          "projectFolderCreated": false,
+          "projectFolderWebUrl": "",
+          "projectStatus": "unresolved",
           "createdAt": "2026-04-08T12:36:16.648Z",
-          "updatedAt": "2026-05-22T11:17:25.422Z",
+          "updatedAt": "2026-08-18T09:42:33.249Z",
           "selectedAddonConfig": {
             "includeMontasje": false,
             "includeEngineering": false,
             "includeOppheng": false,
             "showMontasje": false,
             "showEngineering": false,
-            "showOppheng": false
+            "showOppheng": false,
+            "includeUnitPrices": false
           },
           "lines": [
             {
@@ -3567,14 +4003,16 @@
               },
               "selectedAddonTotal": 200355.19
             }
-          ]
+          ],
+          "todos": []
         }
       ]
     },
     "hans@busbar.no": {
       "email": "hans@busbar.no",
-      "updatedAt": "2026-05-22T06:49:52.000Z",
+      "updatedAt": "2026-08-27T08:17:31.046Z",
       "projects": []
     }
-  }
+  },
+  "deletedProjectIds": []
 }

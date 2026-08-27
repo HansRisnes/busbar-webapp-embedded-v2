@@ -61,8 +61,8 @@
           <span class="market-label">1 uke</span>
           <span class="market-label">1 MND</span>
           <span class="market-value" id="marketUsdNok">--</span>
-          <span class="market-change-value" id="marketUsdWeek">--</span>
-          <span class="market-change-value" id="marketUsdMonth">--</span>
+          <span class="market-change-value" id="marketUsdWeek"><span class="market-change-rate">--</span><span class="market-change-percent">--</span></span>
+          <span class="market-change-value" id="marketUsdMonth"><span class="market-change-rate">--</span><span class="market-change-percent">--</span></span>
         </div>
         <span class="market-note" id="marketUsdMeta">Henter...</span>
       </div>
@@ -72,8 +72,8 @@
           <span class="market-label">1 uke</span>
           <span class="market-label">1 MND</span>
           <span class="market-value" id="marketEurNok">--</span>
-          <span class="market-change-value" id="marketEurWeek">--</span>
-          <span class="market-change-value" id="marketEurMonth">--</span>
+          <span class="market-change-value" id="marketEurWeek"><span class="market-change-rate">--</span><span class="market-change-percent">--</span></span>
+          <span class="market-change-value" id="marketEurMonth"><span class="market-change-rate">--</span><span class="market-change-percent">--</span></span>
         </div>
         <span class="market-note" id="marketEurMeta">Henter...</span>
       </div>
@@ -142,9 +142,17 @@
                 <h3>Totaler</h3>
                 <p class="muted-text">Summer fra alle beregnede linjer.</p>
               </div>
-              <div class="dashboard-widget-tabs" role="tablist" aria-label="Velg totalvisning">
-                <button id="dashboardBusbarTotalsTab" type="button" class="dashboard-widget-tab is-active" data-dashboard-total-tab="busbar" role="tab" aria-selected="true">Str&oslash;mskinner</button>
-                <button id="dashboardMontasjeTotalsTab" type="button" class="dashboard-widget-tab" data-dashboard-total-tab="montasje" role="tab" aria-selected="false">Montasje</button>
+              <div class="dashboard-total-filters" aria-label="Filtrer totaler">
+                <label class="dashboard-total-filter" for="dashboardTotalsYearFilter">?r
+                  <select id="dashboardTotalsYearFilter">
+                    <option value="all">Alle</option>
+                  </select>
+                </label>
+                <label class="dashboard-total-filter" for="dashboardTotalsMonthFilter">M?ned
+                  <select id="dashboardTotalsMonthFilter">
+                    <option value="all">Alle</option>
+                  </select>
+                </label>
               </div>
             </div>
             <div id="dashboardTotalsContent" class="dashboard-total-content"></div>

@@ -110,5 +110,5 @@ export const PROJECT_FLOW_PHASES = Object.freeze([
   { id: 'delivery', label: 'Levering' },
   { id: 'finished', label: 'Ferdig' }
 ]);
-export const PROJECT_FLOW_VISIBLE_WEEK_LEVELS = Object.freeze([6, 5, 4, 3, 2]);
-export const PROJECT_FLOW_DEFAULT_ZOOM_INDEX = 2;
+export const PROJECT_FLOW_VISIBLE_WEEK_LEVELS = Object.freeze([5, 4, 3, 2]);
+export const PROJECT_FLOW_DEFAULT_ZOOM_INDEX = 1;

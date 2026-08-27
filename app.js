@@ -209,7 +209,9 @@ function resetProjectFolderStatusState(){
 const dashboardState = {
   activePage: 'dashboard',
   sidebarCollapsed: false,
-  totalsTab: 'busbar'
+  totalsTab: 'busbar',
+  totalsYear: 'all',
+  totalsMonth: 'all'
 };
 const dashboardRecommendedActionState = {
   actionsById: new Map()
@@ -1262,7 +1264,19 @@ function setMarketChangeValue(elementId, change){
   if (!el) return;
   const percent = Number(change?.percent);
   const direction = percent > 0 ? 'up' : percent < 0 ? 'down' : 'flat';
-  el.textContent = formatMarketChangeValue(change);
+  const rateEl = el.querySelector('.market-change-rate');
+  const percentEl = el.querySelector('.market-change-percent');
+  if (rateEl && percentEl){
+    const rate = Number(change?.rate);
+    const rateText = Number.isFinite(rate) ? fmtFxNO.format(rate) : '--';
+    const arrow = percent > 0 ? '?' : percent < 0 ? '?' : '?';
+    rateEl.textContent = rateText;
+    percentEl.textContent = Number.isFinite(percent)
+      ? `${arrow} ${fmtMarketPercentNO.format(Math.abs(percent))} %`
+      : '--';
+  } else {
+    el.textContent = formatMarketChangeValue(change);
+  }
   el.classList.toggle('is-up', Number.isFinite(percent) && direction === 'up');
   el.classList.toggle('is-down', Number.isFinite(percent) && direction === 'down');
   el.classList.toggle('is-flat', !Number.isFinite(percent) || direction === 'flat');
@@ -4599,7 +4613,7 @@ async function syncProjectsForCurrentUser(){
     renderMainDashboard();
     updateProjectMetaDisplay();
     const syncedProjects = await pushUserProjectsToServer(email, projectState.projects);
-    projectState.projects = syncedProjects;
+    projectState.projects = filterDeletedProjects(syncedProjects);
     sortProjects();
     updateProjectHistories();
     saveProjectsToStorage({ skipRemoteSync: true });
@@ -6733,6 +6747,24 @@ function getProjectFlowWeekSpans(dates){
   return spans;
 }
 
+function getProjectFlowMonthSpans(dates){
+  const spans = [];
+  dates.forEach(date=>{
+    const key = `${date.getFullYear()}-${date.getMonth()}`;
+    const current = spans[spans.length - 1];
+    if (current && current.key === key){
+      current.days += 1;
+    } else {
+      spans.push({
+        key,
+        label: date.toLocaleDateString('no-NO', { month: 'long' }),
+        days: 1
+      });
+    }
+  });
+  return spans;
+}
+
 function isProjectFlowWeekStart(date, index){
   return index > 0 && date.getDay() === 1;
 }
@@ -7161,7 +7193,7 @@ function scrollProjectFlowToCurrentWeek(scroller, rangeStart, topScrollbar = nul
   const offsetDays = Math.max(0, getProjectFlowDayDiff(rangeStart, currentWeekStart));
   const dayWidth = getProjectFlowDayWidth();
   requestAnimationFrame(()=>{
-    const nextScrollLeft = Math.max(0, (offsetDays * dayWidth) - 12);
+    const nextScrollLeft = Math.max(0, offsetDays * dayWidth);
     scroller.scrollLeft = nextScrollLeft;
     if (topScrollbar) topScrollbar.scrollLeft = nextScrollLeft;
   });
@@ -7302,10 +7334,27 @@ function getProjectFlowDayWidth(){
   if (Number.isFinite(fit) && fit > 0) return fit;
   const visibleWeeks = getProjectFlowVisibleWeekCount();
   const root = $('projectFlowTimeline');
-  const availableWidth = root?.clientWidth || root?.parentElement?.clientWidth || window.innerWidth || 1000;
+  const scroller = root?.querySelector?.('.project-flow-scroller');
+  const availableWidth = scroller?.clientWidth || root?.clientWidth || root?.parentElement?.clientWidth || window.innerWidth || 1000;
   const taskWidth = getProjectFlowTaskColumnWidth();
-  const timelineWidth = Math.max(280, availableWidth - taskWidth - 40);
-  return Math.max(24, Math.floor(timelineWidth / (visibleWeeks * 7)));
+  const timelineWidth = Math.max(1, availableWidth - taskWidth);
+  return Math.max(24, timelineWidth / (visibleWeeks * 7));
+}
+
+function getProjectFlowBarLayout(spanDays, label = ''){
+  const days = Math.max(1, Number(spanDays) || 1);
+  const dayWidth = getProjectFlowDayWidth();
+  const barWidth = Math.max(0, (days * dayWidth) - 12);
+  const showResize = days > 1 && barWidth >= 150;
+  const showDelete = days > 1 && barWidth >= 180;
+  const columnCount = 2 + (showResize ? 2 : 0) + (showDelete ? 1 : 0);
+  const fixedWidth = 16 + 20 + (showResize ? 16 : 0) + (showDelete ? 20 : 0) + Math.max(0, columnCount - 1) * 9;
+  const estimatedTitleWidth = Math.max(42, String(label || '').trim().length * 7.2);
+  return {
+    showResize,
+    showDelete,
+    isTight: days > 1 && estimatedTitleWidth > Math.max(24, barWidth - fixedWidth)
+  };
 }
 
 function getProjectFlowVisibleWeekCount(){
@@ -9155,6 +9204,14 @@ function renderProjectFlowView(options = {}){
   phaseHead.textContent = 'Oppgave';
   grid.appendChild(phaseHead);
 
+  getProjectFlowMonthSpans(dates).forEach(span=>{
+    const month = document.createElement('div');
+    month.className = 'project-flow-month-head';
+    month.style.gridColumn = `span ${span.days}`;
+    month.textContent = span.label;
+    grid.appendChild(month);
+  });
+
   getProjectFlowWeekSpans(dates).forEach(span=>{
     const week = document.createElement('div');
     week.className = 'project-flow-week-head';
@@ -9168,16 +9225,15 @@ function renderProjectFlowView(options = {}){
     day.className = 'project-flow-day-head';
     const dateKey = getProjectFlowDateKey(date);
     if (dateKey === todayKey) day.classList.add('is-today');
+    if ([0, 6].includes(date.getDay())) day.classList.add('is-weekend');
     if (isProjectFlowWeekStart(date, index)) day.classList.add('is-week-start');
     const densityClass = getProjectFlowDateHeaderDensityClass();
     if (densityClass) day.classList.add(densityClass);
     const dateLine = document.createElement('span');
     dateLine.className = 'project-flow-date-line';
-    const month = document.createElement('span');
-    month.textContent = date.toLocaleDateString('no-NO', { month: 'short' }).replace('.', '');
     const dayNumber = document.createElement('strong');
     dayNumber.textContent = String(date.getDate());
-    dateLine.append(month, dayNumber);
+    dateLine.appendChild(dayNumber);
     const weekday = document.createElement('span');
     weekday.className = 'project-flow-weekday';
     weekday.textContent = date.toLocaleDateString('no-NO', { weekday: 'short' }).replace('.', '');
@@ -9208,6 +9264,7 @@ function renderProjectFlowView(options = {}){
         const cell = document.createElement('div');
         cell.className = 'project-flow-project-cell';
         if (getProjectFlowDateKey(date) === todayKey) cell.classList.add('is-today');
+        if ([0, 6].includes(date.getDay())) cell.classList.add('is-weekend');
         if (isProjectFlowWeekStart(date, index)) cell.classList.add('is-week-start');
         grid.appendChild(cell);
       });
@@ -9248,6 +9305,7 @@ function renderProjectFlowView(options = {}){
           cell.dataset.projectId = selectedProject?.id || '';
           cell.dataset.date = dateKey;
           if (dateKey === todayKey) cell.classList.add('is-today');
+          if ([0, 6].includes(date.getDay())) cell.classList.add('is-weekend');
           if (isProjectFlowWeekStart(date, index)) cell.classList.add('is-week-start');
           grid.appendChild(cell);
         });
@@ -9269,6 +9327,7 @@ function renderProjectFlowView(options = {}){
           cell.dataset.projectId = projectId;
           cell.dataset.date = dateKey;
           if (dateKey === todayKey) cell.classList.add('is-today');
+          if ([0, 6].includes(date.getDay())) cell.classList.add('is-weekend');
           if (isProjectFlowWeekStart(date, index)) cell.classList.add('is-week-start');
           grid.appendChild(cell);
         });
@@ -9327,6 +9386,7 @@ function renderProjectFlowView(options = {}){
           cell.dataset.projectFlowRowTask = item.id;
           cell.dataset.date = dateKey;
           if (dateKey === todayKey) cell.classList.add('is-today');
+          if ([0, 6].includes(date.getDay())) cell.classList.add('is-weekend');
           if (isProjectFlowWeekStart(date, index)) cell.classList.add('is-week-start');
           const dateIndex = getProjectFlowDayDiff(start, date);
           const isCovered = dateIndex >= startIndex && dateIndex <= endIndex;
@@ -9341,6 +9401,10 @@ function renderProjectFlowView(options = {}){
             bar.dataset.projectId = item.projectId;
             if (spanDays <= 1) bar.classList.add('is-single-day');
             if (item.completed) bar.classList.add('is-completed');
+            const barLayout = getProjectFlowBarLayout(spanDays, projectRowLabel);
+            if (!barLayout.showResize) bar.classList.add('is-no-resize');
+            if (!barLayout.showDelete) bar.classList.add('is-no-delete');
+            if (barLayout.isTight) bar.classList.add('is-tight');
             bar.style.setProperty('--project-flow-span-days', String(spanDays));
             const resizeStart = document.createElement('span');
             resizeStart.className = 'project-flow-resize-handle is-start';
@@ -9388,7 +9452,12 @@ function renderProjectFlowView(options = {}){
             if (spanDays <= 1){
               bar.append(linkIn, check, linkOut);
             } else {
-              bar.append(linkIn, resizeStart, check, text, remove, resizeEnd, linkOut);
+              bar.append(linkIn);
+              if (barLayout.showResize) bar.append(resizeStart);
+              bar.append(check, text);
+              if (barLayout.showDelete) bar.append(remove);
+              if (barLayout.showResize) bar.append(resizeEnd);
+              bar.append(linkOut);
             }
             cell.appendChild(bar);
           }
@@ -10584,19 +10653,28 @@ if (refreshProjectFlowBtn){
   });
 }
 
-document.querySelectorAll('[data-dashboard-total-tab]').forEach(btn=>{
-  btn.addEventListener('click', ()=>{
-    dashboardState.totalsTab = btn.dataset.dashboardTotalTab === 'montasje' ? 'montasje' : 'busbar';
-    renderDashboardTotalsWidget();
-  });
-});
-
 const dashboardProjectStatusSummary = $('dashboardProjectStatusSummary');
 if (dashboardProjectStatusSummary){
   dashboardProjectStatusSummary.addEventListener('click', evt=>{
     const btn = evt.target?.closest?.('[data-dashboard-project-status]');
     if (!btn) return;
     openDashboardProjectStatusModal(btn.dataset.dashboardProjectStatus || 'all');
+  });
+}
+
+const dashboardTotalsYearFilter = $('dashboardTotalsYearFilter');
+if (dashboardTotalsYearFilter){
+  dashboardTotalsYearFilter.addEventListener('change', ()=>{
+    dashboardState.totalsYear = dashboardTotalsYearFilter.value || 'all';
+    renderDashboardTotalsWidget();
+  });
+}
+
+const dashboardTotalsMonthFilter = $('dashboardTotalsMonthFilter');
+if (dashboardTotalsMonthFilter){
+  dashboardTotalsMonthFilter.addEventListener('change', ()=>{
+    dashboardState.totalsMonth = dashboardTotalsMonthFilter.value || 'all';
+    renderDashboardTotalsWidget();
   });
 }
 
@@ -10743,6 +10821,16 @@ const projectFlowZoomFitBtn = $('projectFlowZoomFitBtn');
 if (projectFlowZoomFitBtn){
   projectFlowZoomFitBtn.addEventListener('click', setProjectFlowZoomToFit);
 }
+
+let projectFlowResizeTimer = 0;
+window.addEventListener('resize', ()=>{
+  window.clearTimeout(projectFlowResizeTimer);
+  projectFlowResizeTimer = window.setTimeout(()=>{
+    if (dashboardState.activePage === 'project-flow'){
+      renderProjectFlowView({ preserveScroll: true });
+    }
+  }, 120);
+});
 
 const projectFlowMilestoneForm = $('projectFlowMilestoneForm');
 if (projectFlowMilestoneForm){
