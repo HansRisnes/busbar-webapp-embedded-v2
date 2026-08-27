@@ -261,11 +261,15 @@ export function createProjectRow(project, options = {}){
   const flowStatus = getProjectFlowStatusForProject(project);
   const titleRow = document.createElement('div');
   titleRow.className = 'project-title-row';
-  const statusBadge = document.createElement('span');
+  const statusBadge = document.createElement('button');
+  statusBadge.type = 'button';
   statusBadge.className = `project-flow-status-badge is-${flowStatus.tone}`;
+  statusBadge.dataset.projectFlowOpen = project.id || '';
   statusBadge.textContent = flowStatus.ageText
     ? `${flowStatus.label} - ${flowStatus.ageText}`
     : flowStatus.label;
+  statusBadge.title = 'Åpne prosjektflyt for dette prosjektet';
+  statusBadge.setAttribute('aria-label', `Åpne prosjektflyt for ${getProjectDisplayTitle(project)}`);
   const projectStatus = getProjectStatusConfig(project);
   const projectStatusBtn = document.createElement('button');
   projectStatusBtn.type = 'button';

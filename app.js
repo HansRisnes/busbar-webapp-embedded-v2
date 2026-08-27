@@ -8131,6 +8131,18 @@ function openProjectFlowProjectFromDashboardStatus(statusLabel, projectId = ''){
   }, 0);
 }
 
+function openProjectFlowForProject(projectId = ''){
+  const id = String(projectId || '').trim();
+  if (!id || !projectState.projects.some(project=>String(project?.id || '') === id)) return;
+  projectFlowState.selectedProjectId = id;
+  projectFlowState.dashboardStatusFilter = '';
+  const select = $('projectFlowProjectSelect');
+  if (select) select.value = id;
+  setDashboardPage('project-flow', { fromNavigation: true });
+  renderProjectFlowView();
+  scrollPageToTop();
+}
+
 function openDashboardProjectStatusModal(statusId){
   openDashboardProjectStatusModalModule(projectState.projects, statusId, {
     compareProjectsForSort,
@@ -11860,6 +11872,10 @@ if (projectListEl){
     }
     if (target.dataset.projectStatusEdit){
       openProjectStatusModal(target.dataset.projectStatusEdit);
+      return;
+    }
+    if (target.dataset.projectFlowOpen){
+      openProjectFlowForProject(target.dataset.projectFlowOpen);
       return;
     }
     if (target.dataset.projectDelete){
