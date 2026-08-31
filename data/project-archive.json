@@ -2,7 +2,7 @@
   "users": {
     "hans.jakob.risnes@busbar.no": {
       "email": "hans.jakob.risnes@busbar.no",
-      "updatedAt": "2026-08-27T08:54:22.258Z",
+      "updatedAt": "2026-08-31T09:52:35.250Z",
       "projects": [
         {
           "id": "0cb0f047-8257-4c26-8ae1-afdb9ebaf6cd",
@@ -51,7 +51,7 @@
           "projectFolderWebUrl": "https://mcselektrotavler.sharepoint.com/sites/BCDokumentarkiv/Delte%20dokumenter/Drift/BUSBAR/Prosjekter/2026/2026-1054%20-%20Test",
           "projectStatus": "unresolved",
           "createdAt": "2026-05-22T11:57:45.422Z",
-          "updatedAt": "2026-08-19T11:09:26.347Z",
+          "updatedAt": "2026-08-28T11:01:21.051Z",
           "selectedAddonConfig": {
             "includeMontasje": true,
             "includeEngineering": true,
@@ -1276,7 +1276,7 @@
           "projectFolderWebUrl": "",
           "projectStatus": "unresolved",
           "createdAt": "2026-04-14T07:12:04.324Z",
-          "updatedAt": "2026-08-18T12:01:59.623Z",
+          "updatedAt": "2026-08-28T11:01:24.470Z",
           "selectedAddonConfig": {
             "includeMontasje": true,
             "includeEngineering": true,
@@ -4010,7 +4010,7 @@
     },
     "hans@busbar.no": {
       "email": "hans@busbar.no",
-      "updatedAt": "2026-08-27T08:54:22.258Z",
+      "updatedAt": "2026-08-31T09:52:35.250Z",
       "projects": []
     }
   },

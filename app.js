@@ -125,6 +125,7 @@ import {
   renderDashboardFlowStatusWidget as renderDashboardFlowStatusWidgetModule,
   renderDashboardProjectStatusWidget as renderDashboardProjectStatusWidgetModule,
   renderDashboardRecommendedActionsWidget as renderDashboardRecommendedActionsWidgetModule,
+  exportDashboardTotalsReport as exportDashboardTotalsReportModule,
   renderDashboardTotalsWidget as renderDashboardTotalsWidgetModule,
   setDashboardPage as setDashboardPageModule,
   updateMarketTickerVisibility as updateMarketTickerVisibilityModule
@@ -12252,6 +12253,17 @@ if (dashboardTotalsMonthFilter){
   dashboardTotalsMonthFilter.addEventListener('change', ()=>{
     dashboardState.totalsMonth = dashboardTotalsMonthFilter.value || 'all';
     renderDashboardTotalsWidget();
+  });
+}
+
+const dashboardTotalsExport = $('dashboardTotalsExport');
+if (dashboardTotalsExport){
+  dashboardTotalsExport.addEventListener('click', ()=>{
+    exportDashboardTotalsReportModule(dashboardState, projectState.projects, {
+      resolveLineSkinMaterialCost,
+      resolveLineDisplayTotal,
+      getProjectStatusConfig
+    });
   });
 }
 

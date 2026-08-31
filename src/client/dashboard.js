@@ -278,6 +278,7 @@ export function getDashboardTotals(projects, resolvers = {}){
       realProfitTotal: finishedOpphengTotal
     },
     allTotal: lineTotal,
+    allCost: lineIncludedCost,
     allMargin: Math.max(0, round2(lineTotal - lineIncludedCost)),
     finishedAllProfit,
     finishedLineTotal
@@ -341,9 +342,14 @@ function prepareDashboardTotalFilters(state, projects){
     { value: 'all', label: 'Alle' },
     ...DASHBOARD_MONTH_NAMES.map((label, index)=>({ value: index + 1, label }))
   ], state.totalsMonth);
+  const canSelectMonth = selectedYear !== 'all';
+  if (monthSelect){
+    monthSelect.disabled = !canSelectMonth;
+    if (!canSelectMonth) monthSelect.value = 'all';
+  }
   state.totalsYear = selectedYear;
-  state.totalsMonth = selectedMonth;
-  return filterDashboardProjectsByCreatedAt(projects, selectedYear, selectedMonth);
+  state.totalsMonth = canSelectMonth ? selectedMonth : 'all';
+  return filterDashboardProjectsByCreatedAt(projects, selectedYear, state.totalsMonth);
 }
 
 function formatDashboardMoney(value){
@@ -356,6 +362,15 @@ function formatDashboardPercent(value, total){
   const base = Number(total);
   if (!Number.isFinite(amount) || !Number.isFinite(base) || base <= 0) return '0,0 %';
   return `${fmtNO.format(round2((amount / base) * 100))} %`;
+}
+
+function createDashboardTotalIcon(source){
+  const icon = document.createElement('img');
+  icon.classList.add('dashboard-total-hero-icon');
+  icon.setAttribute('aria-hidden', 'true');
+  icon.alt = '';
+  icon.src = source;
+  return icon;
 }
 
 function createDashboardMetric(label, value, percent, options = {}){
@@ -382,7 +397,7 @@ function createDashboardMetric(label, value, percent, options = {}){
     item.append(secondaryLabelEl, secondaryValueEl);
     if (options.secondaryPercent){
       const secondaryPercentEl = document.createElement('small');
-      secondaryPercentEl.className = 'dashboard-total-secondary-percent';
+      secondaryPercentEl.className = 'dashboard-total-secondary-percent dashboard-total-percent';
       secondaryPercentEl.textContent = options.secondaryPercent;
       item.appendChild(secondaryPercentEl);
     }
@@ -392,6 +407,7 @@ function createDashboardMetric(label, value, percent, options = {}){
   }
   if (percent || options.reservePercentSpace){
     const percentEl = document.createElement('small');
+    percentEl.className = 'dashboard-total-percent';
     percentEl.textContent = percent || '\u00a0';
     if (!percent) percentEl.setAttribute('aria-hidden', 'true');
     item.appendChild(percentEl);
@@ -409,59 +425,81 @@ export function renderDashboardTotalsWidget(state, projects, resolvers = {}){
   const totals = getDashboardTotals(filteredProjects, resolvers);
   const sections = [
     {
-      totalLabel: 'Total strømskinne',
-      secondaryTotalLabel: 'Total ingeniør',
-      costLabel: 'Materiellkost',
-      secondaryCostLabel: 'Ingeniørkost',
+      totalLabel: 'Salgsverdi strømskinne',
+      secondaryTotalLabel: 'Salgsverdi ingeniør',
+      costLabel: 'Kostpris materiell',
+      secondaryCostLabel: 'Kostpris ingeniør',
       marginLabel: 'Påslag strømskinne',
       secondaryMarginLabel: 'Påslag ingeniør',
-      realProfitLabel: 'Total fortjeneste strømskinne',
-      secondaryRealProfitLabel: 'Total fortjeneste ingeniør',
+      realProfitLabel: 'Fortjeneste strømskinne',
+      secondaryRealProfitLabel: 'Fortjeneste ingeniør',
       values: totals.busbar
     },
     {
-      totalLabel: 'Total montasje',
-      secondaryTotalLabel: 'Total oppheng',
-      costLabel: 'Montasjekost',
-      secondaryCostLabel: 'Opphengskost',
+      totalLabel: 'Salgsverdi montasje',
+      secondaryTotalLabel: 'Salgsverdi oppheng',
+      costLabel: 'Kostpris montasje',
+      secondaryCostLabel: 'Kostpris oppheng',
       marginLabel: 'Påslag montasje',
       secondaryMarginLabel: 'Påslag oppheng',
-      realProfitLabel: 'Total fortjeneste montasje',
-      secondaryRealProfitLabel: 'Total fortjeneste oppheng',
+      realProfitLabel: 'Fortjeneste montasje',
+      secondaryRealProfitLabel: 'Fortjeneste oppheng',
       values: totals.montasje
     }
   ];
   root.innerHTML = '';
   const hero = document.createElement('div');
-  hero.className = 'dashboard-total-hero';
+  hero.className = 'dashboard-total-hero dashboard-total-hero-breakdown dashboard-total-hero-blue';
   hero.style.setProperty('--dashboard-total-hero-rows', '3');
+  hero.appendChild(createDashboardTotalIcon('assets/dashboard-total-offer.png'));
+  const totalGroup = document.createElement('div');
+  totalGroup.className = 'dashboard-total-hero-group dashboard-total-hero-total-group';
   const heroLabel = document.createElement('span');
-  heroLabel.textContent = 'Totalsum inkludert i tilbud';
+  heroLabel.textContent = 'Total tilbudssum';
   const heroValue = document.createElement('strong');
   heroValue.textContent = formatDashboardMoney(totals.allTotal);
+  totalGroup.append(heroLabel, heroValue);
+
+  const costGroup = document.createElement('div');
+  costGroup.className = 'dashboard-total-hero-group dashboard-total-hero-cost-group';
+  const costLabel = document.createElement('span');
+  costLabel.className = 'dashboard-total-hero-secondary-label';
+  costLabel.textContent = 'Totale kostnader';
+  const costValue = document.createElement('strong');
+  costValue.className = 'dashboard-total-hero-secondary-value';
+  costValue.textContent = formatDashboardMoney(totals.allCost);
+  costGroup.append(costLabel, costValue);
+
+  const heroMetaGroup = document.createElement('div');
+  heroMetaGroup.className = 'dashboard-total-hero-group dashboard-total-hero-meta-group';
   const heroMeta = document.createElement('small');
   heroMeta.textContent = `${fmtIntNO.format(totals.projectCount)} prosjekter | ${totals.lineCount} linjer beregnet`;
-  hero.append(heroLabel, heroValue, heroMeta);
+  heroMetaGroup.appendChild(heroMeta);
+  hero.append(totalGroup, heroMetaGroup, costGroup);
 
   const marginHero = document.createElement('div');
-  marginHero.className = 'dashboard-total-hero';
+  marginHero.className = 'dashboard-total-hero dashboard-total-hero-yellow';
   marginHero.style.setProperty('--dashboard-total-hero-rows', '2');
+  marginHero.appendChild(createDashboardTotalIcon('assets/dashboard-total-margin.png'));
   const marginHeroLabel = document.createElement('span');
-  marginHeroLabel.textContent = 'Påslag inkludert i tilbud';
+  marginHeroLabel.textContent = 'Total påslag';
   const marginHeroValue = document.createElement('strong');
   marginHeroValue.textContent = formatDashboardMoney(totals.allMargin);
   const marginHeroMeta = document.createElement('small');
+  marginHeroMeta.className = 'dashboard-total-hero-percent';
   marginHeroMeta.textContent = formatDashboardPercent(totals.allMargin, totals.allTotal);
   marginHero.append(marginHeroLabel, marginHeroValue, marginHeroMeta);
 
   const profitHero = document.createElement('div');
-  profitHero.className = 'dashboard-total-hero';
+  profitHero.className = 'dashboard-total-hero dashboard-total-hero-green';
   profitHero.style.setProperty('--dashboard-total-hero-rows', '2');
+  profitHero.appendChild(createDashboardTotalIcon('assets/dashboard-total-profit.png'));
   const profitHeroLabel = document.createElement('span');
-  profitHeroLabel.textContent = 'Total fortjeneste inkludert i tilbud';
+  profitHeroLabel.textContent = 'Total fortjeneste';
   const profitHeroValue = document.createElement('strong');
   profitHeroValue.textContent = formatDashboardMoney(totals.finishedAllProfit);
   const profitHeroMeta = document.createElement('small');
+  profitHeroMeta.className = 'dashboard-total-hero-percent';
   profitHeroMeta.textContent = formatDashboardPercent(totals.finishedAllProfit, totals.allTotal);
   profitHero.append(profitHeroLabel, profitHeroValue, profitHeroMeta);
 
@@ -511,6 +549,257 @@ export function renderDashboardTotalsWidget(state, projects, resolvers = {}){
   });
   root.append(heroStack, sectionsWrap);
 }
+
+function escapeDashboardReportHtml(value){
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function formatDashboardReportDate(value){
+  const date = value instanceof Date ? value : new Date(value || 0);
+  if (!Number.isFinite(date.getTime())) return '-';
+  return new Intl.DateTimeFormat('no-NO', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric'
+  }).format(date);
+}
+
+function createDashboardReportTable(headers, rows, numericColumns = []){
+  const numericSet = new Set(numericColumns);
+  const head = headers.map(header=>`<th>${escapeDashboardReportHtml(header)}</th>`).join('');
+  const body = rows.map(row=>`<tr>${row.map((value, index)=>{
+    const numeric = numericSet.has(index) && Number.isFinite(Number(value));
+    const content = numeric ? round2(Number(value)).toFixed(2).replace('.', ',') : value;
+    return `<td${numeric ? ' class="number"' : ''}>${escapeDashboardReportHtml(content)}</td>`;
+  }).join('')}</tr>`).join('');
+  return `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+}
+
+function getDashboardReportProjectTotals(project, resolvers){
+  const lines = Array.isArray(project?.lines) ? project.lines : [];
+  const resolveLineDisplayTotal = typeof resolvers.resolveLineDisplayTotal === 'function'
+    ? resolvers.resolveLineDisplayTotal
+    : (()=>0);
+  const resolveLineSkinMaterialCost = typeof resolvers.resolveLineSkinMaterialCost === 'function'
+    ? resolvers.resolveLineSkinMaterialCost
+    : (()=>0);
+  return {
+    lineCount: lines.length,
+    total: sumDashboardLineValue(lines, line=>resolveLineDisplayTotal(line)),
+    cost: sumDashboardLineValue(lines, line=>getDashboardLineIncludedCost(line, resolveLineSkinMaterialCost))
+  };
+}
+
+function escapeDashboardReportXml(value){
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
+function createDashboardSpreadsheetCell(value, options = {}){
+  if (value === null || value === undefined) return '<Cell/>';
+  const type = options.type || (typeof value === 'number' ? 'Number' : 'String');
+  const content = type === 'Number'
+    ? (Number.isFinite(Number(value)) ? String(round2(Number(value))) : '0')
+    : escapeDashboardReportXml(value);
+  const style = options.style ? ` ss:StyleID="${escapeDashboardReportXml(options.style)}"` : '';
+  return `<Cell${style}><Data ss:Type="${type}">${content}</Data></Cell>`;
+}
+
+function createDashboardSpreadsheetRow(cells){
+  return `<Row>${cells.map(cell=>createDashboardSpreadsheetCell(cell.value, cell)).join('')}</Row>`;
+}
+
+function getDashboardReportPeriod(state){
+  const year = String(state.totalsYear || 'all');
+  const month = String(state.totalsMonth || 'all');
+  if (year === 'all') return 'Alle datoer';
+  const yearNumber = Number(year);
+  if (month === 'all' || !Number.isFinite(Number(month))){
+    return `01.01.${String(yearNumber).slice(-2)}-31.12.${String(yearNumber).slice(-2)}`;
+  }
+  const monthNumber = Number(month);
+  const lastDay = new Date(yearNumber, monthNumber, 0).getDate();
+  const twoDigitYear = String(yearNumber).slice(-2);
+  return `01.${String(monthNumber).padStart(2, '0')}.${twoDigitYear}-${String(lastDay).padStart(2, '0')}.${String(monthNumber).padStart(2, '0')}.${twoDigitYear}`;
+}
+
+function getDashboardReportYearToDateProjects(projects, state){
+  const selectedYear = String(state.totalsYear || 'all');
+  const selectedMonth = String(state.totalsMonth || 'all');
+  if (selectedYear === 'all') return Array.isArray(projects) ? projects : [];
+  const monthLimit = selectedMonth === 'all' ? 12 : Number(selectedMonth);
+  return (Array.isArray(projects) ? projects : []).filter(project=>{
+    const createdAt = getDashboardProjectCreatedDate(project);
+    return createdAt
+      && createdAt.getFullYear() === Number(selectedYear)
+      && createdAt.getMonth() + 1 <= monthLimit;
+  });
+}
+
+function createDashboardDatofilterRows(dpTotals, hiaTotals){
+  const missingCurrency = { value: 0, type: 'Number', style: 'MissingCurrency' };
+  const missingPercent = { value: 0, type: 'Number', style: 'MissingPercent' };
+  const currency = value=>({ value: round2(Number(value) || 0), type: 'Number', style: 'Currency' });
+  const percent = value=>({ value: round2((Number(value) || 0) / 100), type: 'Number', style: 'Percent' });
+  const sales = Math.max(0, Number(dpTotals.allTotal) || 0);
+  const hiaSales = Math.max(0, Number(hiaTotals.allTotal) || 0);
+  const marginPercent = (totals, base)=>base > 0 ? ((Number(totals.allMargin) || 0) / base) * 100 : 0;
+  return [
+    [{ value: '10', style: 'Label' }, { value: 'Salgsinntekt', style: 'Label' }, currency(dpTotals.allTotal), percent(100), currency(hiaTotals.allTotal), percent(100)],
+    [{ value: '30', style: 'Label' }, { value: 'Driftsinntekt', style: 'Label' }, currency(dpTotals.allTotal), percent(100), currency(hiaTotals.allTotal), percent(100)],
+    [{ value: '50', style: 'Label' }, { value: 'Varekostnader', style: 'Label' }, currency(-(Number(dpTotals.allCost) || 0)), percent(sales > 0 ? -((Number(dpTotals.allCost) || 0) / sales) * 100 : 0), currency(-(Number(hiaTotals.allCost) || 0)), percent(hiaSales > 0 ? -((Number(hiaTotals.allCost) || 0) / hiaSales) * 100 : 0)],
+    [{ value: '40', style: 'Label' }, { value: 'Bruttofortjeneste', style: 'Label' }, currency(dpTotals.allMargin), percent(marginPercent(dpTotals, sales)), currency(hiaTotals.allMargin), percent(marginPercent(hiaTotals, hiaSales))],
+    [{ value: '70', style: 'Label' }, { value: 'Lønnskostnader', style: 'Label' }, missingCurrency, missingPercent, missingCurrency, missingPercent],
+    [{ value: '90', style: 'Label' }, { value: 'Avskrivninger', style: 'Label' }, missingCurrency, missingPercent, missingCurrency, missingPercent],
+    [{ value: 'ADM', style: 'Label' }, { value: 'ADM', style: 'Label' }, missingCurrency, missingPercent, missingCurrency, missingPercent],
+    [{ value: '110', style: 'Label' }, { value: 'Andre driftskostnader', style: 'Label' }, missingCurrency, missingPercent, missingCurrency, missingPercent],
+    [{ value: '130', style: 'Label' }, { value: 'Driftsresultat', style: 'Label' }, missingCurrency, missingPercent, missingCurrency, missingPercent]
+  ];
+}
+
+export function exportDashboardTotalsReport(state, projects, resolvers = {}){
+  const filteredProjects = prepareDashboardTotalFilters(state, projects);
+  const totals = getDashboardTotals(filteredProjects, resolvers);
+  const getStatusConfig = typeof resolvers.getProjectStatusConfig === 'function'
+    ? resolvers.getProjectStatusConfig
+    : (project=>({ label: project?.projectStatus || '-' }));
+  const yearLabel = state.totalsYear === 'all' ? 'Alle år' : state.totalsYear;
+  const monthLabel = state.totalsMonth === 'all'
+    ? 'Alle måneder'
+    : DASHBOARD_MONTH_NAMES[Number(state.totalsMonth) - 1] || 'Alle måneder';
+  const detailRows = [
+    ['Salgsverdi strømskinne', totals.busbar.total],
+    ['Salgsverdi ingeniør', totals.busbar.secondaryTotal],
+    ['Kostpris materiell', totals.busbar.cost],
+    ['Kostpris ingeniør', totals.busbar.secondaryCost],
+    ['Påslag strømskinne', totals.busbar.margin],
+    ['Påslag ingeniør', totals.busbar.secondaryMargin],
+    ['Fortjeneste strømskinne', totals.busbar.realProfit],
+    ['Fortjeneste ingeniør', totals.busbar.secondaryRealProfit],
+    ['Salgsverdi montasje', totals.montasje.total],
+    ['Salgsverdi oppheng', totals.montasje.secondaryTotal],
+    ['Kostpris montasje', totals.montasje.cost],
+    ['Kostpris oppheng', totals.montasje.secondaryCost],
+    ['Påslag montasje', totals.montasje.margin],
+    ['Påslag oppheng', totals.montasje.secondaryMargin],
+    ['Fortjeneste montasje', totals.montasje.realProfit],
+    ['Fortjeneste oppheng', totals.montasje.secondaryRealProfit]
+  ];
+  const totalRows = [
+    ['Total tilbudssum', totals.allTotal],
+    ['Totale kostnader', totals.allCost],
+    ['Total påslag', totals.allMargin],
+    ['Total fortjeneste', totals.finishedAllProfit],
+    ['Antall prosjekter', totals.projectCount],
+    ['Linjer beregnet', totals.lineCount]
+  ];
+  const projectRows = filteredProjects.map(project=>{
+    const projectTotals = getDashboardReportProjectTotals(project, resolvers);
+    const status = getStatusConfig(project);
+    return [
+      project?.projectNumber || '-',
+      project?.name || 'Uten navn',
+      project?.customer || '-',
+      status?.label || '-',
+      formatDashboardReportDate(project?.createdAt),
+      projectTotals.lineCount,
+      projectTotals.total,
+      projectTotals.cost
+    ];
+  });
+  const hiaProjects = getDashboardReportYearToDateProjects(projects, state);
+  const hiaTotals = getDashboardTotals(hiaProjects, resolvers);
+  const totalSheetRows = [
+    createDashboardSpreadsheetRow([{ value: 'Prosjektstyringsverktøy - totalrapport', style: 'Title', type: 'String' }]),
+    createDashboardSpreadsheetRow([{ value: `Filter: ${yearLabel} / ${monthLabel}`, style: 'Subtitle', type: 'String' }]),
+    createDashboardSpreadsheetRow([{ value: 'Totaloversikt', style: 'Section', type: 'String' }]),
+    createDashboardSpreadsheetRow([{ value: 'Post', style: 'Header' }, { value: 'Sum', style: 'Header' }]),
+    ...totalRows.map((row, index)=>createDashboardSpreadsheetRow([
+      { value: row[0], style: 'Label' },
+      { value: row[1], type: 'Number', style: index >= 4 ? 'Integer' : 'Currency' }
+    ])),
+    createDashboardSpreadsheetRow([{ value: 'Detaljert totaloversikt', style: 'Section', type: 'String' }]),
+    createDashboardSpreadsheetRow([{ value: 'Post', style: 'Header' }, { value: 'Sum', style: 'Header' }]),
+    ...detailRows.map(row=>createDashboardSpreadsheetRow([
+      { value: row[0], style: 'Label' },
+      { value: row[1], type: 'Number', style: 'Currency' }
+    ])),
+    createDashboardSpreadsheetRow([{ value: 'Prosjekter', style: 'Section', type: 'String' }]),
+    createDashboardSpreadsheetRow(['Prosjektnummer', 'Prosjektnavn', 'Kunde', 'Status', 'Opprettet', 'Linjer', 'Tilbudssum', 'Kostnader'].map(value=>({ value, style: 'Header' }))),
+    ...projectRows.map(row=>createDashboardSpreadsheetRow([
+      { value: row[0], style: 'Label' },
+      { value: row[1], style: 'Label' },
+      { value: row[2], style: 'Label' },
+      { value: row[3], style: 'Label' },
+      { value: row[4], style: 'Label' },
+      { value: row[5], type: 'Number', style: 'Integer' },
+      { value: row[6], type: 'Number', style: 'Currency' },
+      { value: row[7], type: 'Number', style: 'Currency' }
+    ]))
+  ].join('');
+  const datofilterRows = createDashboardDatofilterRows(totals, hiaTotals);
+  const datofilterSheetRows = [
+    createDashboardSpreadsheetRow([{ value: 'Datofilter', style: 'Title' }, { value: getDashboardReportPeriod(state), style: 'FilterValue' }]),
+    createDashboardSpreadsheetRow([{ value: 'Avdeling filter', style: 'Label' }, { value: '60', style: 'FilterValue' }, { value: 'BUSBAR', style: 'FilterValue' }]),
+    createDashboardSpreadsheetRow([]),
+    createDashboardSpreadsheetRow([{ value: 'Valuta', style: 'Label' }, { value: 'NOK', style: 'FilterValue' }]),
+    createDashboardSpreadsheetRow([]),
+    createDashboardSpreadsheetRow([
+      { value: '', style: 'Header' },
+      { value: '', style: 'Header' },
+      { value: 'DP', style: 'Header' },
+      { value: '%', style: 'Header' },
+      { value: 'HiA', style: 'Header' },
+      { value: '%', style: 'Header' }
+    ]),
+    ...datofilterRows.map(row=>createDashboardSpreadsheetRow(row))
+  ].join('');
+  const reportXml = `<?xml version="1.0"?>
+<?mso-application progid="Excel.Sheet"?>
+<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet" xmlns:html="http://www.w3.org/TR/REC-html40">
+  <DocumentProperties xmlns="urn:schemas-microsoft-com:office:office"><Author>Prosjektstyringsverktøy</Author><Created>${new Date().toISOString()}</Created></DocumentProperties>
+  <Styles>
+    <Style ss:ID="Default" ss:Name="Normal"><Font ss:FontName="Arial" ss:Size="10"/><Alignment ss:Vertical="Center"/></Style>
+    <Style ss:ID="Title"><Font ss:FontName="Arial" ss:Size="16" ss:Bold="1"/><Alignment ss:Vertical="Center"/></Style>
+    <Style ss:ID="Subtitle"><Font ss:FontName="Arial" ss:Size="10" ss:Italic="1"/></Style>
+    <Style ss:ID="Section"><Font ss:FontName="Arial" ss:Size="12" ss:Bold="1"/><Interior ss:Color="#D9E3F0" ss:Pattern="Solid"/></Style>
+    <Style ss:ID="Header"><Font ss:FontName="Arial" ss:Bold="1"/><Interior ss:Color="#D9E3F0" ss:Pattern="Solid"/><Borders><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#7F8C99"/></Borders></Style>
+    <Style ss:ID="Label"><Alignment ss:Vertical="Center"/></Style>
+    <Style ss:ID="FilterValue"><Font ss:FontName="Arial" ss:Bold="1"/><Interior ss:Color="#D9D9D9" ss:Pattern="Solid"/></Style>
+    <Style ss:ID="Currency"><NumberFormat ss:Format="&quot;kr&quot; #,##0.00;[Red]-&quot;kr&quot; #,##0.00"/><Alignment ss:Horizontal="Right"/></Style>
+    <Style ss:ID="Integer"><NumberFormat ss:Format="0"/><Alignment ss:Horizontal="Right"/></Style>
+    <Style ss:ID="Percent"><NumberFormat ss:Format="0.00\%"/><Alignment ss:Horizontal="Right"/></Style>
+    <Style ss:ID="MissingCurrency"><NumberFormat ss:Format="&quot;kr&quot; #,##0.00;[Red]-&quot;kr&quot; #,##0.00"/><Alignment ss:Horizontal="Right"/><Interior ss:Color="#F4CCCC" ss:Pattern="Solid"/><Font ss:Color="#C00000" ss:Bold="1"/></Style>
+    <Style ss:ID="MissingPercent"><NumberFormat ss:Format="0.00\%"/><Alignment ss:Horizontal="Right"/><Interior ss:Color="#F4CCCC" ss:Pattern="Solid"/><Font ss:Color="#C00000" ss:Bold="1"/></Style>
+  </Styles>
+  <Worksheet ss:Name="Rapport">
+    <Table ss:ExpandedColumnCount="8"><Column ss:Width="110"/><Column ss:Width="190"/><Column ss:Width="150"/><Column ss:Width="100"/><Column ss:Width="90"/><Column ss:Width="65"/><Column ss:Width="105"/><Column ss:Width="105"/>${totalSheetRows}</Table>
+  </Worksheet>
+  <Worksheet ss:Name="Datofilter">
+    <Table ss:ExpandedColumnCount="6"><Column ss:Width="55"/><Column ss:Width="210"/><Column ss:Width="105"/><Column ss:Width="70"/><Column ss:Width="105"/><Column ss:Width="70"/>${datofilterSheetRows}</Table>
+  </Worksheet>
+</Workbook>`;
+  const period = `${state.totalsYear === 'all' ? 'alle-ar' : state.totalsYear}-${state.totalsMonth === 'all' ? 'alle-maneder' : String(state.totalsMonth).padStart(2, '0')}`;
+  const blob = new Blob([`\ufeff${reportXml}`], { type: 'application/vnd.ms-excel;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `totalrapport-${period}.xls`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(()=>URL.revokeObjectURL(url), 1000);
+}
+
 function getDashboardProjectStatusCounts(projects, getProjectStatusConfig){
   const counts = new Map(PROJECT_STATUS_OPTIONS.map(option=>[option.id, 0]));
   const busbarTotals = new Map(PROJECT_STATUS_OPTIONS.map(option=>[option.id, 0]));

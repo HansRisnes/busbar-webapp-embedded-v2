@@ -1,0 +1,29 @@
+/* Global app font. Add the two variable Plus Jakarta Sans .ttf files in assets/fonts/. */
+@font-face{
+  font-family:'Plus Jakarta Sans';
+  src:url('assets/fonts/PlusJakartaSans-VariableFont_wght.ttf') format('truetype');
+  font-style:normal;
+  font-weight:200 800;
+  font-display:swap;
+}
+
+@font-face{
+  font-family:'Plus Jakarta Sans';
+  src:url('assets/fonts/PlusJakartaSans-Italic-VariableFont_wght.ttf') format('truetype');
+  font-style:italic;
+  font-weight:200 800;
+  font-display:swap;
+}
+
+/* Change this one line later to switch the application font. */
+body{
+  font-family:'Plus Jakarta Sans',system-ui,-apple-system,'Segoe UI',Roboto,Arial,sans-serif;
+}
+
+button,
+input,
+select,
+textarea,
+option{
+  font-family:inherit;
+}
