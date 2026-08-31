@@ -716,7 +716,10 @@ export function exportDashboardTotalsReport(state, projects, resolvers = {}){
       projectTotals.cost
     ];
   });
-  const hiaProjects = getDashboardReportYearToDateProjects(projects, state);
+  const isRevenueProject = project=>['won', 'finished'].includes(getStatusConfig(project)?.id);
+  const datofilterProjects = filteredProjects.filter(isRevenueProject);
+  const hiaProjects = getDashboardReportYearToDateProjects(projects, state).filter(isRevenueProject);
+  const datofilterTotals = getDashboardTotals(datofilterProjects, resolvers);
   const hiaTotals = getDashboardTotals(hiaProjects, resolvers);
   const totalSheetRows = [
     createDashboardSpreadsheetRow([{ value: 'Prosjektstyringsverktøy - totalrapport', style: 'Title', type: 'String' }]),
@@ -746,7 +749,7 @@ export function exportDashboardTotalsReport(state, projects, resolvers = {}){
       { value: row[7], type: 'Number', style: 'Currency' }
     ]))
   ].join('');
-  const datofilterRows = createDashboardDatofilterRows(totals, hiaTotals);
+  const datofilterRows = createDashboardDatofilterRows(datofilterTotals, hiaTotals);
   const datofilterSheetRows = [
     createDashboardSpreadsheetRow([{ value: 'Datofilter', style: 'Title' }, { value: getDashboardReportPeriod(state), style: 'FilterValue' }]),
     createDashboardSpreadsheetRow([{ value: 'Avdeling filter', style: 'Label' }, { value: '60', style: 'FilterValue' }, { value: 'BUSBAR', style: 'FilterValue' }]),
