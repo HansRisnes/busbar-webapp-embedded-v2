@@ -2683,10 +2683,6 @@ function buildOfferPlaceholderValues(project, offerNumber, offerDate, revision =
         : NaN
     );
   const inputSummary = collectProjectInputSummary(lines);
-  const offerTemplateTotal = round2(lines.reduce((sum, line)=>{
-    const lineTotal = resolveLineOfferTemplateTotal(line);
-    return sum + (Number.isFinite(lineTotal) ? lineTotal : 0);
-  }, 0));
   const offerDatePlus30 = addDays(offerDate, 30);
   const revisionNumber = Number.isInteger(Number(revision)) ? Number(revision) : 0;
   const tapOffPricePlaceholder = inputSummary.tapOffPriceTexts;
@@ -2822,7 +2818,8 @@ function buildOfferPlaceholderValues(project, offerNumber, offerDate, revision =
     total_ex_montasje_total_nok: formatNoCurrencyWithKr(offerIncludedTotal),
     total_ex_montasje_tilvalg_nok: formatNoCurrencyWithKr(offerVisibleAddonsTotal),
     offer_main_nok: formatNoCurrencyWithKr(offerMainVisibleTotal),
-    offer_total_nok: formatNoCurrencyWithKr(offerTemplateTotal),
+    // This placeholder is rendered per line inside the repeated line block.
+    offer_total_nok: '',
     offer_tilvalg_nok: formatNoCurrencyWithKr(offerVisibleAddonsTotal),
     montasje_nok: formatNoCurrency(totals.montasje),
     montasje_margin_nok: formatNoCurrency(totals.montasjeMargin),
@@ -2964,6 +2961,7 @@ async function buildOfferLinePlaceholderValues(project) {
       line_main_nok: formatNoCurrency(lineOfferAmounts.mainVisibleTotal),
       line_total_nok: formatNoCurrency(lineOfferAmounts.includedTotal),
       line_tilvalg_nok: formatNoCurrency(lineOfferAmounts.visibleAddonsTotal),
+      offer_total_nok: formatNoCurrencyWithKr(resolveLineOfferTemplateTotal(line)),
       tmo: formatNoCurrency(lineTotals.totalInclMontasje),
       tin: formatNoCurrency(lineTotals.totalInclEngineering),
       mtl: showMontasje ? 'Montasje' : '',
