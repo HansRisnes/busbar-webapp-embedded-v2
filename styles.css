@@ -3883,6 +3883,15 @@ button.graph-item{
   border-color:rgba(74,222,128,0.72);
   background:#166534;
 }
+.project-flow-bar.is-external-task{
+  border-color:rgba(245,158,11,0.5);
+  background:rgba(180,120,0,0.52);
+  opacity:0.62;
+}
+.project-flow-bar.is-external-task.is-completed{
+  border-color:rgba(74,222,128,0.5);
+  background:rgba(22,101,52,0.62);
+}
 .project-flow-bar.is-single-day{
   left:50%;
   width:max(calc(var(--project-flow-day-width) - 12px), 44px);

@@ -4050,7 +4050,8 @@ function normalizeProject(raw){
     updatedAt: raw.updatedAt || fallback,
     selectedAddonConfig,
     lines: Array.isArray(raw.lines) ? raw.lines : [],
-    todos: normalizeProjectTodos(raw.todos || raw.toDos || raw.todoItems || [])
+    todos: normalizeProjectTodos(raw.todos || raw.toDos || raw.todoItems || []),
+    projectFlowMilestones: normalizeProjectFlowMilestones(raw.projectFlowMilestones || raw.projectFlowTasks || [])
   };
 }
 
@@ -6617,6 +6618,7 @@ function normalizeProjectFlowMilestones(items){
         dependencyRelation: ['drives', 'drivenBy'].includes(item?.dependencyRelation) ? item.dependencyRelation : '',
         dependencyTaskId: String(item?.dependencyTaskId || '').trim(),
         calendarEventId: String(item?.calendarEventId || '').trim(),
+        calendarOwnerEmail: normalizeUserEmail(item?.calendarOwnerEmail || ''),
         createdAt: String(item?.createdAt || item?.updatedAt || '').trim(),
         updatedAt: String(item?.updatedAt || item?.createdAt || '').trim(),
         completed: Boolean(item?.completed)
@@ -6631,14 +6633,31 @@ function normalizeProjectFlowMilestones(items){
 }
 
 function loadProjectFlowState(){
-  const store = readProjectFlowStore();
+  const legacyStore = readProjectFlowStore();
   const normalized = {};
-  Object.entries(store).forEach(([projectId, items])=>{
-    const key = String(projectId || '').trim();
+  const currentEmail = getCurrentUserEmail();
+  let migratedLegacyTasks = false;
+  projectState.projects.forEach(project=>{
+    const key = String(project?.id || '').trim();
     if (!key) return;
-    normalized[key] = normalizeProjectFlowMilestones(items);
+    const savedTasks = normalizeProjectFlowMilestones(project.projectFlowMilestones);
+    const legacyTasks = normalizeProjectFlowMilestones(legacyStore[key]);
+    const tasks = savedTasks.length ? savedTasks : legacyTasks.map(task=>({
+      ...task,
+      calendarOwnerEmail: task.calendarEventId && !task.calendarOwnerEmail ? currentEmail : task.calendarOwnerEmail
+    }));
+    if (!savedTasks.length && tasks.length){
+      project.projectFlowMilestones = tasks;
+      project.updatedAt = new Date().toISOString();
+      migratedLegacyTasks = true;
+    }
+    normalized[key] = tasks;
   });
   projectFlowState.milestonesByProjectId = normalized;
+  if (migratedLegacyTasks){
+    persistProjectFlowStore();
+    saveProjectsToStorage();
+  }
 }
 
 function getProjectFlowMilestones(projectId){
@@ -6649,7 +6668,14 @@ function getProjectFlowMilestones(projectId){
 function setProjectFlowMilestones(projectId, milestones){
   const key = String(projectId || '').trim();
   if (!key) return;
-  projectFlowState.milestonesByProjectId[key] = normalizeProjectFlowMilestones(milestones);
+  const normalized = normalizeProjectFlowMilestones(milestones);
+  projectFlowState.milestonesByProjectId[key] = normalized;
+  const project = getProjectById(key);
+  if (project){
+    project.projectFlowMilestones = normalized;
+    project.updatedAt = new Date().toISOString();
+    saveProjectsToStorage();
+  }
   persistProjectFlowStore();
 }
 
@@ -7235,6 +7261,31 @@ function getProjectFlowSelectedProject(){
   return projectState.projects.find(project=>project.id === selectedId) || projectState.projects[0] || null;
 }
 
+function getProjectFlowTaskResponsibleEmail(project){
+  return normalizeUserEmail(project?.projectOwnerEmail || '');
+}
+
+function getProjectFlowTaskResponsibleLabel(project){
+  if (!project) return '';
+  const name = getProjectResponsibleName(project);
+  const email = getProjectFlowTaskResponsibleEmail(project);
+  if (name && email && name.toLowerCase() !== email) return `${name} (${email})`;
+  return name || email;
+}
+
+function isProjectFlowTaskOwnedByCurrentUser(project){
+  const responsibleEmail = getProjectFlowTaskResponsibleEmail(project);
+  const currentEmail = getCurrentUserEmail();
+  return !responsibleEmail || !currentEmail || responsibleEmail === currentEmail;
+}
+
+function updateProjectFlowTaskResponsibleInput(projectId = ''){
+  const input = $('projectFlowTaskResponsibleInput');
+  if (!input) return;
+  const project = projectState.projects.find(item=>String(item?.id || '') === String(projectId || '').trim()) || null;
+  input.value = getProjectFlowTaskResponsibleLabel(project);
+}
+
 function updateProjectFlowProjectSelect(){
   const select = $('projectFlowProjectSelect');
   if (!select) return;
@@ -7396,6 +7447,10 @@ function createProjectFlowTaskBar(item, spanDays, label, stackOffset = 0){
   bar.dataset.projectId = item.projectId;
   if (spanDays <= 1) bar.classList.add('is-single-day');
   if (item.completed) bar.classList.add('is-completed');
+  const project = getProjectById(item.projectId);
+  if (!isProjectFlowTaskOwnedByCurrentUser(project)) bar.classList.add('is-external-task');
+  const responsibleLabel = getProjectFlowTaskResponsibleLabel(project);
+  if (responsibleLabel) bar.title = `Ansvarlig: ${responsibleLabel}`;
   const barLayout = getProjectFlowBarLayout(spanDays, label);
   if (!barLayout.showResize) bar.classList.add('is-no-resize');
   if (!barLayout.showDelete) bar.classList.add('is-no-delete');
@@ -8347,6 +8402,7 @@ function openProjectFlowMilestoneForm(milestone = null, options = {}){
   if (endDateInput) endDateInput.value = formatProjectFlowInputDate(fallbackEnd);
   if (durationValueInput) durationValueInput.value = String(milestone?.durationValue || duration.value || 1);
   if (durationUnitSelect) durationUnitSelect.value = milestone?.durationUnit || duration.unit || 'days';
+  updateProjectFlowTaskResponsibleInput($('projectFlowTaskProjectSelect')?.value || selectedProjectId);
   if (fileInput){
     fileInput.value = '';
     fileInput.disabled = true;
@@ -8525,6 +8581,57 @@ async function deleteProjectFlowCalendarEvent(calendarEventId){
   return deleteCalendarEventById(calendarEventId, { statusTarget: 'project-flow' });
 }
 
+async function requestProjectFlowCalendarOwnerSync(project, task, action){
+  const res = await fetch(buildApiUrl('/api/project-flow/calendar-sync'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({
+      projectId: String(project?.id || '').trim(),
+      action,
+      task: {
+        id: String(task?.id || '').trim(),
+        title: String(task?.title || '').trim(),
+        phaseId: String(task?.phaseId || '').trim(),
+        startDate: String(task?.startDate || '').trim(),
+        endDate: String(task?.endDate || '').trim(),
+        calendarEventId: String(task?.calendarEventId || '').trim(),
+        calendarOwnerEmail: normalizeUserEmail(task?.calendarOwnerEmail || '')
+      }
+    })
+  });
+  const payload = await res.json().catch(()=>null);
+  if (!res.ok){
+    throw new Error(String(payload?.error || `Kunne ikke synke kalenderoppgaven (${res.status})`));
+  }
+  return payload || {};
+}
+
+function updateProjectFlowCalendarReference(projectId, milestoneId, calendarEventId, calendarOwnerEmail){
+  const milestones = getProjectFlowMilestones(projectId);
+  const next = milestones.map(item=>item.id === milestoneId
+    ? {
+        ...item,
+        calendarEventId: String(calendarEventId || '').trim(),
+        calendarOwnerEmail: normalizeUserEmail(calendarOwnerEmail || ''),
+        updatedAt: new Date().toISOString()
+      }
+    : item);
+  setProjectFlowMilestones(projectId, next);
+}
+
+async function deleteProjectFlowMilestoneCalendarEvent(project, task){
+  const calendarOwnerEmail = normalizeUserEmail(task?.calendarOwnerEmail || '');
+  const targetEmail = getProjectFlowTaskResponsibleEmail(project);
+  const currentEmail = getCurrentUserEmail();
+  if (!task?.calendarEventId) return true;
+  if (!calendarOwnerEmail || calendarOwnerEmail === currentEmail){
+    return deleteProjectFlowCalendarEvent(task.calendarEventId);
+  }
+  if (!targetEmail) return false;
+  const result = await requestProjectFlowCalendarOwnerSync(project, task, 'delete');
+  return result.deleted === true;
+}
+
 function buildDashboardTodoCalendarPayload(project, todo){
   const startDate = new Date(todo?.dueAt || '');
   if (!project?.id || !todo?.id || Number.isNaN(startDate.getTime())) return null;
@@ -8654,11 +8761,17 @@ async function syncProjectFlowMilestoneCalendar(projectId, milestoneId){
   const project = getProjectById(projectId);
   const task = getProjectFlowMilestones(projectId).find(item=>item.id === milestoneId);
   if (!project?.id || !task?.id || !authState.loggedIn) return;
+  const currentEmail = getCurrentUserEmail();
+  const targetEmail = getProjectFlowTaskResponsibleEmail(project);
+  const calendarOwnerEmail = normalizeUserEmail(task.calendarOwnerEmail || '');
+  const mustUseOwnerCalendarSync = Boolean(
+    targetEmail
+      && (targetEmail !== currentEmail || (calendarOwnerEmail && calendarOwnerEmail !== currentEmail))
+  );
   if (task.completed){
-    const deleted = await deleteProjectFlowCalendarEvent(task.calendarEventId);
+    const deleted = await deleteProjectFlowMilestoneCalendarEvent(project, task);
     if (deleted && task.calendarEventId){
-      const latest = getProjectFlowMilestones(projectId);
-      setProjectFlowMilestones(projectId, latest.map(item=>item.id === task.id ? { ...item, calendarEventId: '' } : item));
+      updateProjectFlowCalendarReference(projectId, task.id, '', '');
       renderProjectFlowView({ preserveScroll: true });
     }
     return;
@@ -8666,6 +8779,21 @@ async function syncProjectFlowMilestoneCalendar(projectId, milestoneId){
   const payload = buildProjectFlowCalendarPayload(project, task);
   if (!payload) return;
   try{
+    if (mustUseOwnerCalendarSync){
+      const result = await requestProjectFlowCalendarOwnerSync(project, task, 'upsert');
+      const eventId = String(result?.calendarEventId || '').trim();
+      const eventOwnerEmail = normalizeUserEmail(result?.calendarOwnerEmail || targetEmail);
+      if (eventId && (eventId !== task.calendarEventId || eventOwnerEmail !== calendarOwnerEmail)){
+        updateProjectFlowCalendarReference(projectId, task.id, eventId, eventOwnerEmail);
+        renderProjectFlowView({ preserveScroll: true });
+      }
+      resetCalendarLoadedRange();
+      if (dashboardState.activePage === 'calendar'){
+        void loadCalendarEvents({ silent: true });
+      }
+      setProjectFlowStatus('Oppgave synket til ansvarlig sin kalender.', 'ok');
+      return;
+    }
     await ensureOutlookProjectCategory();
     let savedEvent = null;
     if (task.calendarEventId){
@@ -8688,9 +8816,8 @@ async function syncProjectFlowMilestoneCalendar(projectId, milestoneId){
       });
     }
     const eventId = String(savedEvent?.id || task.calendarEventId || '').trim();
-    if (eventId && eventId !== task.calendarEventId){
-      const latest = getProjectFlowMilestones(projectId);
-      setProjectFlowMilestones(projectId, latest.map(item=>item.id === task.id ? { ...item, calendarEventId: eventId } : item));
+    if (eventId && (eventId !== task.calendarEventId || calendarOwnerEmail !== currentEmail)){
+      updateProjectFlowCalendarReference(projectId, task.id, eventId, currentEmail);
       renderProjectFlowView({ preserveScroll: true });
     }
     resetCalendarLoadedRange();
@@ -9160,6 +9287,7 @@ function handleProjectFlowMilestoneSave(evt){
     dependencyRelation: drivenByTaskId ? 'drivenBy' : (drivesTaskId ? 'drives' : ''),
     dependencyTaskId: drivenByTaskId || drivesTaskId,
     calendarEventId: existing?.calendarEventId || '',
+    calendarOwnerEmail: existing?.calendarOwnerEmail || '',
     createdAt: existing?.createdAt || now,
     updatedAt: now,
     completed: Boolean(existing?.completed)
@@ -9217,7 +9345,8 @@ function deleteProjectFlowMilestone(projectId, milestoneId){
   if (!window.confirm(`Slette oppgaven "${getProjectFlowPhaseLabel(milestone.phaseId)}"?`)) return;
   clearProjectFlowReciprocalDependency(milestoneId, 'drivenBy', getProjectFlowRelationTaskId(milestone, 'drivenBy'));
   clearProjectFlowReciprocalDependency(milestoneId, 'drives', getProjectFlowRelationTaskId(milestone, 'drives'));
-  void deleteProjectFlowCalendarEvent(milestone.calendarEventId);
+  void deleteProjectFlowMilestoneCalendarEvent(getProjectById(projectId), milestone)
+    .catch(err=>setProjectFlowStatus(err?.message || 'Oppgaven ble slettet, men kalenderavtalen kunne ikke slettes.', 'error'));
   setProjectFlowMilestones(projectId, milestones.filter(item=>item.id !== milestoneId));
   renderProjectFlowView({ preserveScroll: true });
   setProjectFlowStatus('Oppgave slettet.', 'ok');
@@ -12229,6 +12358,7 @@ const projectFlowTaskProjectSelect = $('projectFlowTaskProjectSelect');
 if (projectFlowTaskProjectSelect){
   projectFlowTaskProjectSelect.addEventListener('change', ()=>{
     populateProjectFlowDependencyTaskSelect();
+    updateProjectFlowTaskResponsibleInput(projectFlowTaskProjectSelect.value);
   });
 }
 

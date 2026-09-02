@@ -220,6 +220,10 @@ const MICROSOFT_AUTH_CLIENT_SECRET = safeString(
   process.env.MS_AUTH_CLIENT_SECRET
 );
 const MICROSOFT_GRAPH_SCOPE = 'https://graph.microsoft.com/.default';
+const CALENDAR_PROJECT_EXTENDED_PROPERTY_ID = 'String {4f28b47f-5e6b-4f87-9fcb-4c1a9c0c9d9f} Name BusbarProjectId';
+const CALENDAR_PROJECT_FLOW_TASK_EXTENDED_PROPERTY_ID = 'String {4f28b47f-5e6b-4f87-9fcb-4c1a9c0c9d9f} Name BusbarProjectFlowTaskId';
+const CALENDAR_EVENT_TYPE_EXTENDED_PROPERTY_ID = 'String {4f28b47f-5e6b-4f87-9fcb-4c1a9c0c9d9f} Name BusbarCalendarEventType';
+const OUTLOOK_PROJECT_CATEGORY_NAME = 'Busbar Prosjekt';
 const MICROSOFT_AUTH_ISSUER = `https://login.microsoftonline.com/${MICROSOFT_AUTH_TENANT_ID}/v2.0`;
 const MICROSOFT_AUTH_JWKS_URL = `https://login.microsoftonline.com/${MICROSOFT_AUTH_TENANT_ID}/discovery/v2.0/keys`;
 const MICROSOFT_OWNER_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -662,6 +666,37 @@ async function fetchMicrosoftGraphJson(url) {
     throw new Error(`Microsoft Graph svarte ${res.status}`);
   }
   return res.json();
+}
+
+async function requestMicrosoftGraphAppJson(url, options = {}) {
+  const accessToken = await getMicrosoftGraphAppToken();
+  if (!accessToken) {
+    throw new Error('MICROSOFT_AUTH_CLIENT_SECRET mangler for kalenderintegrasjonen');
+  }
+  const method = safeString(options.method || 'GET').toUpperCase();
+  const headers = {
+    Authorization: `Bearer ${accessToken}`,
+    Accept: 'application/json'
+  };
+  if (options.body !== undefined) headers['Content-Type'] = 'application/json';
+  const res = await fetch(url, {
+    method,
+    headers,
+    body: options.body === undefined ? undefined : JSON.stringify(options.body)
+  });
+  if (!res.ok) {
+    const error = new Error(`Microsoft Graph svarte ${res.status}`);
+    error.status = res.status;
+    throw error;
+  }
+  if (res.status === 204) return null;
+  const raw = await res.text();
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch (_err) {
+    return null;
+  }
 }
 
 async function collectMicrosoftOwnerIdsForCollection(collectionName) {
@@ -1235,6 +1270,35 @@ function normalizeProjectTodoRecord(raw) {
   };
 }
 
+function normalizeProjectFlowMilestoneRecord(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const now = new Date().toISOString();
+  const id = safeString(raw.id);
+  const startDate = safeString(raw.startDate || raw.date);
+  const endDate = safeString(raw.endDate || raw.date || startDate);
+  if (!id || !startDate || !endDate) return null;
+  return {
+    id,
+    phaseId: safeString(raw.phaseId),
+    title: safeString(raw.title),
+    startDate,
+    endDate,
+    date: startDate,
+    durationValue: Math.max(1, Number.parseInt(raw.durationValue, 10) || 1),
+    durationUnit: ['days', 'weeks', 'months'].includes(safeString(raw.durationUnit)) ? safeString(raw.durationUnit) : 'days',
+    fileName: safeString(raw.fileName),
+    drivenByTaskId: safeString(raw.drivenByTaskId || (raw.dependencyRelation === 'drivenBy' ? raw.dependencyTaskId : '')),
+    drivesTaskId: safeString(raw.drivesTaskId || (raw.dependencyRelation === 'drives' ? raw.dependencyTaskId : '')),
+    dependencyRelation: ['drives', 'drivenBy'].includes(safeString(raw.dependencyRelation)) ? safeString(raw.dependencyRelation) : '',
+    dependencyTaskId: safeString(raw.dependencyTaskId),
+    calendarEventId: safeString(raw.calendarEventId),
+    calendarOwnerEmail: normalizeEmail(raw.calendarOwnerEmail),
+    createdAt: toIsoTimestamp(raw.createdAt || raw.updatedAt, now),
+    updatedAt: toIsoTimestamp(raw.updatedAt || raw.createdAt, now),
+    completed: raw.completed === true
+  };
+}
+
 function normalizeProjectRecord(raw) {
   if (!raw || typeof raw !== 'object') return null;
   const now = new Date().toISOString();
@@ -1242,6 +1306,8 @@ function normalizeProjectRecord(raw) {
   const lines = linesRaw.map(normalizeLineRecord).filter(Boolean);
   const todosRaw = Array.isArray(raw.todos) ? raw.todos : [];
   const todos = todosRaw.map(normalizeProjectTodoRecord).filter(Boolean);
+  const projectFlowMilestonesRaw = Array.isArray(raw.projectFlowMilestones) ? raw.projectFlowMilestones : [];
+  const projectFlowMilestones = projectFlowMilestonesRaw.map(normalizeProjectFlowMilestoneRecord).filter(Boolean);
   const selectedAddonConfig = (raw.selectedAddonConfig && typeof raw.selectedAddonConfig === 'object')
     ? safeJsonClone(raw.selectedAddonConfig, {})
     : {};
@@ -1265,7 +1331,8 @@ function normalizeProjectRecord(raw) {
     updatedAt: toIsoTimestamp(raw.updatedAt || raw.createdAt, now),
     selectedAddonConfig,
     lines,
-    todos
+    todos,
+    projectFlowMilestones
   };
 }
 
@@ -2248,7 +2315,9 @@ function resolveSpecialElementLabel(selection) {
   const labels = {
     phase_change: 'Faseendring',
     neutral_change: 'Nøytralendring',
-    epoxy_metal_transition: 'Overgang til epoxy-/metallkapslet'
+    epoxy_metal_transition: 'Overgang til epoxy-/metallkapslet',
+    t_element: 'T-element',
+    double_angle: 'Dobbel vinkel'
   };
   const key = safeString(selection);
   return labels[key] || key;
@@ -4267,6 +4336,141 @@ app.post('/api/user-projects/sync', requireUserAuth, async (req, res) => {
   } catch (err) {
     console.error('Synk av brukerprosjekter feilet', err);
     return res.status(500).json({ error: 'Kunne ikke synkronisere prosjekter' });
+  }
+});
+
+function findProjectFlowCalendarProject(archive, projectId) {
+  const id = safeString(projectId);
+  if (!id) return null;
+  for (const [ownerEmailRaw, user] of Object.entries(archive?.users || {})) {
+    const project = (Array.isArray(user?.projects) ? user.projects : [])
+      .find(item => safeString(item?.id) === id);
+    if (project) {
+      return {
+        project,
+        ownerEmail: normalizeEmail(project.projectOwnerEmail || ownerEmailRaw || user?.email)
+      };
+    }
+  }
+  return null;
+}
+
+function buildProjectFlowCalendarPayloadForOwner(project, task) {
+  const startDate = safeString(task?.startDate);
+  const endDate = safeString(task?.endDate || startDate);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate) || endDate < startDate) {
+    return null;
+  }
+  const end = new Date(`${endDate}T00:00:00Z`);
+  end.setUTCDate(end.getUTCDate() + 1);
+  const exclusiveEnd = end.toISOString().slice(0, 10);
+  const projectLabel = project.projectNumber
+    ? `${project.projectNumber} - ${project.name || 'Uten navn'}`
+    : (project.name || 'Uten navn');
+  const taskLabel = safeString(task?.title || task?.phaseId || 'Oppgave');
+  return {
+    subject: `${projectLabel} - ${taskLabel}`,
+    start: { dateTime: `${startDate}T00:00:00`, timeZone: 'Europe/Oslo' },
+    end: { dateTime: `${exclusiveEnd}T00:00:00`, timeZone: 'Europe/Oslo' },
+    isAllDay: true,
+    showAs: 'busy',
+    categories: [OUTLOOK_PROJECT_CATEGORY_NAME],
+    body: {
+      contentType: 'text',
+      content: [
+        `Prosjekt: ${projectLabel}`,
+        `Oppgave: ${taskLabel}`,
+        `Periode: ${startDate} - ${endDate}`
+      ].join('\n')
+    },
+    singleValueExtendedProperties: [
+      { id: CALENDAR_PROJECT_EXTENDED_PROPERTY_ID, value: safeString(project.id) },
+      { id: CALENDAR_EVENT_TYPE_EXTENDED_PROPERTY_ID, value: 'project-flow' },
+      { id: CALENDAR_PROJECT_FLOW_TASK_EXTENDED_PROPERTY_ID, value: safeString(task?.id) }
+    ]
+  };
+}
+
+async function deleteProjectFlowCalendarEventForOwner(ownerEmail, calendarEventId) {
+  const email = normalizeEmail(ownerEmail);
+  const eventId = safeString(calendarEventId);
+  if (!email || !eventId) return true;
+  try {
+    await requestMicrosoftGraphAppJson(
+      `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(email)}/events/${encodeURIComponent(eventId)}`,
+      { method: 'DELETE' }
+    );
+    return true;
+  } catch (err) {
+    if (err?.status === 404) return true;
+    throw err;
+  }
+}
+
+app.post('/api/project-flow/calendar-sync', requireUserAuth, async (req, res) => {
+  try {
+    const projectId = safeString(req.body?.projectId);
+    const action = safeString(req.body?.action).toLowerCase();
+    const task = req.body?.task && typeof req.body.task === 'object' ? req.body.task : null;
+    if (!projectId || !task || !['upsert', 'delete'].includes(action)) {
+      return res.status(400).json({ error: 'Mangler gyldige kalenderdata for prosjektflyt' });
+    }
+
+    const target = await withProjectArchiveLock(async () => {
+      const archive = await readProjectArchive();
+      return findProjectFlowCalendarProject(archive, projectId);
+    });
+    if (!target?.project || !isValidEmail(target.ownerEmail)) {
+      return res.status(404).json({ error: 'Fant ikke prosjektansvarlig for prosjektet' });
+    }
+    if (req.userAuth.isAdmin !== true && normalizeEmail(req.userAuth.email) !== target.ownerEmail) {
+      return res.status(403).json({ error: 'Ingen tilgang til kalenderen for dette prosjektet' });
+    }
+
+    const calendarEventId = safeString(task.calendarEventId);
+    const previousOwnerEmail = normalizeEmail(task.calendarOwnerEmail || target.ownerEmail);
+    if (action === 'delete') {
+      await deleteProjectFlowCalendarEventForOwner(previousOwnerEmail, calendarEventId);
+      return res.json({ deleted: true, calendarEventId: '', calendarOwnerEmail: '' });
+    }
+
+    const payload = buildProjectFlowCalendarPayloadForOwner(target.project, task);
+    if (!payload || !safeString(task.id)) {
+      return res.status(400).json({ error: 'Oppgaven mangler gyldig dato eller id' });
+    }
+
+    let savedEvent = null;
+    if (calendarEventId && previousOwnerEmail === target.ownerEmail) {
+      try {
+        savedEvent = await requestMicrosoftGraphAppJson(
+          `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(target.ownerEmail)}/events/${encodeURIComponent(calendarEventId)}`,
+          { method: 'PATCH', body: payload }
+        );
+      } catch (err) {
+        if (err?.status !== 404) throw err;
+      }
+    } else if (calendarEventId) {
+      await deleteProjectFlowCalendarEventForOwner(previousOwnerEmail, calendarEventId);
+    }
+    if (!savedEvent) {
+      savedEvent = await requestMicrosoftGraphAppJson(
+        `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(target.ownerEmail)}/events`,
+        { method: 'POST', body: payload }
+      );
+    }
+    const eventId = safeString(savedEvent?.id);
+    if (!eventId) {
+      throw new Error('Microsoft Graph returnerte ingen kalender-id');
+    }
+    return res.json({ calendarEventId: eventId, calendarOwnerEmail: target.ownerEmail });
+  } catch (err) {
+    console.error('Synk av prosjektflyt-kalender feilet', err);
+    if (err?.status === 403) {
+      return res.status(503).json({
+        error: 'Entra-appen mangler applikasjonstillatelsen Calendars.ReadWrite med admin consent for kalendersynkronisering mellom brukere'
+      });
+    }
+    return res.status(500).json({ error: err?.message || 'Kunne ikke synke prosjektflytoppgaven til kalender' });
   }
 });
 
