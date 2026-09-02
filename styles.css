@@ -354,6 +354,16 @@ main.app-views{
   white-space:nowrap;
 }
 
+.dashboard-total-header-meta{
+  display:flex;
+  align-items:center;
+  min-height:var(--control-height);
+  color:var(--muted);
+  font-size:0.8rem;
+  font-weight:700;
+  white-space:nowrap;
+}
+
 .dashboard-total-filter{
   display:flex;
   flex-direction:column;
@@ -478,6 +488,8 @@ main.app-views{
   justify-content:center;
   grid-row:span var(--dashboard-total-hero-rows, 2);
   min-height:0;
+  container-type:inline-size;
+  container-name:dashboard-total-hero;
 }
 
 .dashboard-total-hero-icon{
@@ -494,40 +506,87 @@ main.app-views{
 
 .dashboard-total-hero-breakdown{
   display:grid;
-  grid-template-rows:repeat(12, minmax(0, 1fr));
+  grid-template-rows:repeat(6, minmax(0, 1fr));
   justify-content:initial;
-  gap:0;
+  align-content:stretch;
+  row-gap:8px;
+  padding:8px 12px;
+  padding-right:72px;
 }
 
 .dashboard-total-hero-breakdown .dashboard-total-hero-group{
   min-height:0;
   display:flex;
   flex-direction:column;
-  justify-content:center;
-  gap:6px;
+  justify-content:flex-start;
+  gap:0;
+  grid-row:auto;
+  position:absolute;
+  left:12px;
+  right:72px;
+}
+
+.dashboard-total-hero-breakdown .dashboard-total-hero-group > span{
+  font-size:0.8rem !important;
+}
+
+.dashboard-total-hero-breakdown .dashboard-total-hero-group > small{
+  font-size:0.9rem !important;
+}
+
+.dashboard-total-hero-breakdown .dashboard-total-hero-group > span,
+.dashboard-total-hero-breakdown .dashboard-total-hero-group > strong{
+  line-height:1;
+}
+
+.dashboard-total-hero-breakdown .dashboard-total-hero-group > strong{
+  transform:translateY(2px);
+}
+
+.dashboard-total-hero-breakdown .dashboard-total-hero-secondary-label{
+  margin-top:0;
 }
 
 .dashboard-total-hero-total-group{
-  grid-row:3 / span 2;
+  grid-row:1 / span 2;
 }
 
-.dashboard-total-hero-meta-group{
-  grid-row:6 / span 2;
+.dashboard-total-hero-order-group{
+  grid-row:3;
 }
 
 .dashboard-total-hero-cost-group{
-  grid-row:9 / span 2;
+  grid-row:4 / span 2;
+}
+
+.dashboard-total-hero-order-cost-group{
+  grid-row:6;
+}
+
+.dashboard-total-hero-order-group strong,
+.dashboard-total-hero-order-cost-group strong{
+  font-size:0.9rem !important;
+  color:var(--success) !important;
+}
+
+.dashboard-total-profit-metric > strong,
+.dashboard-total-profit-metric > .dashboard-total-secondary-value,
+.dashboard-total-profit-metric > .dashboard-total-percent,
+.dashboard-total-profit-metric > .dashboard-total-secondary-percent,
+.dashboard-total-hero-profit-value,
+.dashboard-total-hero-profit-percent{
+  color:var(--success) !important;
 }
 
 .dashboard-total-hero span,
 .dashboard-total-metric span{
   color:var(--muted);
-  font-size:0.82rem;
+  font-size:0.8rem;
   font-weight:700;
 }
 
 .dashboard-total-hero strong{
-  font-size:1.65rem;
+  font-size:1.6rem;
   line-height:1.05;
 }
 
@@ -536,14 +595,14 @@ main.app-views{
 }
 
 .dashboard-total-hero-secondary-value{
-  font-size:1.65rem !important;
+  font-size:1.6rem !important;
   line-height:1.05;
 }
 
 .dashboard-total-hero small,
 .dashboard-total-metric small{
   color:var(--warning);
-  font-size:0.8rem;
+  font-size:0.9rem;
   font-weight:700;
 }
 
@@ -591,7 +650,7 @@ main.app-views{
 }
 
 .dashboard-total-metric strong{
-  font-size:0.95rem;
+  font-size:0.9rem;
 }
 
 .dashboard-total-metric.has-secondary-total .dashboard-total-secondary-label,
@@ -622,7 +681,7 @@ main.app-views{
 .dashboard-total-percent,
 .dashboard-total-hero-percent{
   color:var(--warning) !important;
-  font-size:0.95rem !important;
+  font-size:0.9rem !important;
   font-weight:700 !important;
 }
 
@@ -669,6 +728,30 @@ main.app-views{
 
 #dashboardTotalsContent .dashboard-total-secondary-percent{
   font-style:italic;
+}
+
+#dashboardTotalsContent .dashboard-total-hero-order-group > strong,
+#dashboardTotalsContent .dashboard-total-hero-order-cost-group > strong{
+  color:var(--success) !important;
+}
+
+#dashboardTotalsContent .dashboard-total-profit-metric > strong,
+#dashboardTotalsContent .dashboard-total-profit-metric > .dashboard-total-secondary-value,
+#dashboardTotalsContent .dashboard-total-profit-metric > .dashboard-total-percent,
+#dashboardTotalsContent .dashboard-total-profit-metric > .dashboard-total-secondary-percent,
+#dashboardTotalsContent .dashboard-total-hero-profit-value,
+#dashboardTotalsContent .dashboard-total-hero-profit-percent{
+  color:var(--success) !important;
+}
+
+@container dashboard-total-hero (max-width:360px){
+  .dashboard-total-hero-icon{
+    display:none;
+  }
+
+  .dashboard-total-hero-breakdown .dashboard-total-hero-group{
+    right:12px;
+  }
 }
 
 .dashboard-status-summary{
@@ -1888,19 +1971,22 @@ header p{margin:0 0 16px 0;color:var(--muted)}
   color:var(--no-success);
 }
 
-@container (max-width:280px){
+@container (max-width:560px){
   .market-change-value{
-    flex-direction:column;
-    align-items:flex-start;
+    flex-direction:row;
+    align-items:baseline;
     gap:0;
     line-height:1.1;
-    white-space:normal;
+    white-space:nowrap;
   }
 
-  .market-change-rate,
-  .market-change-percent{
-    display:block;
+  .market-change-rate{
+    display:inline;
     white-space:nowrap;
+  }
+
+  .market-change-percent{
+    display:none;
   }
 }
 .market-status.ok{
@@ -4971,6 +5057,18 @@ button.project-flow-beta-control.is-approval.is-na:hover:not(:disabled){
 .offer-row-body p{
   margin:0;
 }
+.offer-detail-label,
+.global-data-detail-label{
+  color:var(--muted);
+  font-size:1rem;
+  font-weight:700;
+}
+.offer-detail-value,
+.global-data-detail-value{
+  color:var(--text);
+  font-size:1rem;
+  font-weight:400;
+}
 .offer-row-actions{
   display:flex;
   justify-content:flex-end;
@@ -5666,6 +5764,14 @@ footer{margin-top:20px;color:var(--muted)}
   gap:14px;
 }
 
+.global-data-card[data-customer-projects]{
+  cursor:pointer;
+}
+
+.global-data-card[data-customer-projects]:hover{
+  background:rgba(43,58,88,0.34);
+}
+
 .global-data-card-body{
   min-width:0;
 }
@@ -5685,9 +5791,7 @@ footer{margin-top:20px;color:var(--muted)}
   gap:4px;
 }
 
-.global-data-meta,
 .global-data-detail{
-  color:var(--muted);
   font-size:1rem;
 }
 

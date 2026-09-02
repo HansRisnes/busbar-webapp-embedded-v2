@@ -368,6 +368,48 @@ function escapeXml(value) {
     .replace(/'/g, '&apos;');
 }
 
+function escapeXmlText(value) {
+  return escapeXml(value).replace(/\r\n|\r|\n/g, '</w:t><w:br/><w:t>');
+}
+
+function alignMultilineWordParagraphsLeft(xml, multilineValues = []) {
+  const firstLineValues = multilineValues
+    .map(value=>String(value).split(/\r\n|\r|\n/)[0])
+    .filter(Boolean)
+    .map(value=>escapeXml(value));
+  return String(xml).replace(/<w:p\b[^>]*>[\s\S]*?<\/w:p>/g, paragraph=>{
+    if (!paragraph.includes('<w:br') || !firstLineValues.some(value=>paragraph.includes(value))) return paragraph;
+    const pPrMatch = paragraph.match(/<w:pPr\b[^>]*>[\s\S]*?<\/w:pPr>/);
+    if (!pPrMatch) {
+      return paragraph.replace(/(<w:p\b[^>]*>)/, '$1<w:pPr><w:jc w:val="left"/></w:pPr>');
+    }
+    const pPr = pPrMatch[0];
+    const alignedPPr = /<w:jc\b/.test(pPr)
+      ? pPr.replace(/<w:jc\b[^>]*(?:\/>|>[\s\S]*?<\/w:jc>)/, '<w:jc w:val="left"/>')
+      : pPr.replace(/(<w:pPr\b[^>]*>)/, '$1<w:jc w:val="left"/>');
+    return paragraph.replace(pPr, alignedPPr);
+  });
+}
+
+function alignWordParagraphsRight(xml, values = []) {
+  const firstLineValues = values
+    .map(value=>String(value).split(/\r\n|\r|\n/)[0])
+    .filter(Boolean)
+    .map(value=>escapeXml(value));
+  return String(xml).replace(/<w:p\b[^>]*>[\s\S]*?<\/w:p>/g, paragraph=>{
+    if (!firstLineValues.some(value=>paragraph.includes(value))) return paragraph;
+    const pPrMatch = paragraph.match(/<w:pPr\b[^>]*>[\s\S]*?<\/w:pPr>/);
+    if (!pPrMatch) {
+      return paragraph.replace(/(<w:p\b[^>]*>)/, '$1<w:pPr><w:jc w:val="right"/></w:pPr>');
+    }
+    const pPr = pPrMatch[0];
+    const alignedPPr = /<w:jc\b/.test(pPr)
+      ? pPr.replace(/<w:jc\b[^>]*(?:\/>|>[\s\S]*?<\/w:jc>)/, '<w:jc w:val="right"/>')
+      : pPr.replace(/(<w:pPr\b[^>]*>)/, '$1<w:jc w:val="right"/>');
+    return paragraph.replace(pPr, alignedPPr);
+  });
+}
+
 function withOfferNumberLock(task) {
   const run = offerNumberLock.then(()=>task());
   offerNumberLock = run.catch(()=>{});
@@ -1578,6 +1620,11 @@ function formatNoCurrencyWithKr(value) {
   return formatted ? `kr. ${formatted}` : '';
 }
 
+function formatWordInlineValue(value) {
+  const text = safeString(value);
+  return text ? `${text} ` : '';
+}
+
 function parseCsvLine(line) {
   const values = [];
   let current = '';
@@ -1830,6 +1877,21 @@ function resolveLineOfferAmounts(line) {
   };
 }
 
+function resolveLineOfferTemplateTotal(line) {
+  const mainVisibleTotal = resolveLineMainVisibleTotal(line);
+  const specialElementTotal = resolveSpecialElementOfferPriceTotal(line, line?.inputs);
+  const specialTotal = Number.isFinite(specialElementTotal) ? specialElementTotal : 0;
+  if (Number.isFinite(mainVisibleTotal)) return round2(mainVisibleTotal + specialTotal);
+
+  // Keep a useful fallback for older lines that do not have totalExMontasje.
+  const includedTotal = resolveLineSelectedAddonTotal(line);
+  const tapOffTotal = resolveTapOffOfferPriceTotal(line, line?.inputs);
+  if (Number.isFinite(includedTotal)) {
+    return round2(includedTotal - (Number.isFinite(tapOffTotal) ? tapOffTotal : 0));
+  }
+  return NaN;
+}
+
 function aggregateProjectOfferTotals(project) {
   const lines = Array.isArray(project?.lines) ? project.lines : [];
   const totals = {
@@ -1935,11 +1997,11 @@ function resolveBoxLabelFromSelection(value) {
   if (!amp && !label) return '';
   if (!amp) return label;
   if (!label) return `${amp}A`;
-  return `${amp}A · ${label}`;
+  return `${amp}A - ${label}`;
 }
 
 function isSeparateTapOffBoxType(value) {
-  return ['plug_in_box', 'tap_off_box'].includes(safeString(value).toLowerCase());
+  return ['plug_in_box', 'tap_off_box', 'bolt_on_box'].includes(safeString(value).toLowerCase());
 }
 
 function isTapOffInnmatType(value) {
@@ -2033,7 +2095,8 @@ function resolveTapOffItemsFromInput(input = {}) {
       if (!boxSel || qty <= 0) return null;
       const ampRaw = toFiniteNumber(boxSel.split('|')[1]);
       const amp = Number.isFinite(ampRaw) && ampRaw > 0 ? Math.round(ampRaw) : null;
-      return { boxSel, qty, amp, innmatSum };
+      const id = safeString(item?.id || item?.tapOffGroupId || item?.groupId);
+      return { id, boxSel, qty, amp, innmatSum };
     })
     .filter(Boolean);
   if (normalizedDirect.length) return normalizedDirect;
@@ -2045,7 +2108,7 @@ function resolveTapOffItemsFromInput(input = {}) {
     const amp = Number.isFinite(ampRaw) && ampRaw > 0 ? Math.round(ampRaw) : null;
     const innmatRaw = toFiniteNumber(input?.boxInnmatSum);
     const innmatSum = Number.isFinite(innmatRaw) ? Math.max(0, innmatRaw) : 0;
-    return [{ boxSel: legacyBoxSel, qty: Math.round(legacyQtyRaw), amp, innmatSum }];
+    return [{ id: '', boxSel: legacyBoxSel, qty: Math.round(legacyQtyRaw), amp, innmatSum }];
   }
 
   return [];
@@ -2081,6 +2144,7 @@ function resolveTapOffItemsFromLine(line, input = {}) {
         ? Math.round(ampRawDirect)
         : (Number.isFinite(ampFromCode) ? Math.round(ampFromCode) : null);
       return {
+        id: safeString(entry?.tapOffGroupId),
         boxSel: amp
           ? `${safeString(entry?.type || entry?.element_type || entry?.elementType).toLowerCase()}|${amp}`
           : safeString(entry?.type || entry?.element_type || entry?.elementType).toLowerCase(),
@@ -2100,8 +2164,8 @@ function buildTapOffOfferText(line, input = {}) {
   return items.map(item=>{
     const label = resolveBoxLabelFromSelection(item.boxSel) || item.code || 'Avtappingsboks';
     const qtyTxt = formatNoInteger(item.qty) || String(item.qty);
-    return `${label} · antall ${qtyTxt}`;
-  }).join(' | ');
+    return `${qtyTxt} stk. ${label}`;
+  }).join('\n');
 }
 
 function formatTapOffOfferPricePlaceholder(value, qty = 0) {
@@ -2110,6 +2174,74 @@ function formatTapOffOfferPricePlaceholder(value, qty = 0) {
   if (!Number.isFinite(amount) || amount <= 0) return '';
   if (Number.isFinite(count) && count <= 0) return '';
   return formatNoCurrencyWithKr(amount);
+}
+
+function resolveTapOffItemCost(line, input, item) {
+  const bom = Array.isArray(line?.bom) ? line.bom : [];
+  const itemId = safeString(item?.id);
+  const itemSelection = safeString(item?.boxSel).toLowerCase();
+  const matchingEntries = bom.filter(entry=>{
+    if (!isSeparateTapOffBoxBomLine(entry)) return false;
+    const entryId = safeString(entry?.tapOffGroupId);
+    if (itemId && entryId) return itemId === entryId;
+    const entrySelection = safeString(entry?.tapOffBoxSel).toLowerCase();
+    if (entrySelection && itemSelection) return entrySelection === itemSelection;
+    const entryType = safeString(entry?.type || entry?.element_type || entry?.elementType).toLowerCase();
+    const itemType = itemSelection.split('|')[0];
+    const entryAmp = toFiniteNumber(entry?.ampere);
+    const itemAmp = toFiniteNumber(item?.amp);
+    return entryType === itemType && (!Number.isFinite(entryAmp) || !Number.isFinite(itemAmp)
+      || Math.round(entryAmp) === Math.round(itemAmp));
+  });
+  const baseEntry = matchingEntries.find(entry=>!isTapOffInnmatBomLine(entry));
+  if (!baseEntry) return 0;
+
+  const baseSum = resolveBomLineSum(baseEntry);
+  if (baseEntry?.tapOffIncludesInnmatInSum === true) return round2(baseSum);
+
+  const innmatEntries = matchingEntries.filter(isTapOffInnmatBomLine);
+  if (innmatEntries.length) {
+    return round2(baseSum + innmatEntries.reduce((sum, entry)=>sum + resolveBomLineSum(entry), 0));
+  }
+
+  const explicitInnmatTotal = toFiniteNumber(baseEntry?.tapOffInnmatTotal);
+  if (Number.isFinite(explicitInnmatTotal) && explicitInnmatTotal > 0) {
+    return round2(baseSum + explicitInnmatTotal);
+  }
+  const innmatPerUnit = toFiniteNumber(item?.innmatSum);
+  return round2(baseSum + (Number.isFinite(innmatPerUnit) ? innmatPerUnit * Number(item?.qty || 0) : 0));
+}
+
+function resolveTapOffItemCosts(line, input = {}, items = resolveTapOffItemsFromLine(line, input)) {
+  const costs = items.map(item=>resolveTapOffItemCost(line, input, item));
+  const knownTotal = costs.reduce((sum, cost)=>sum + (Number.isFinite(cost) ? cost : 0), 0);
+  if (knownTotal > 0 || !items.length) return costs.map(cost=>round2(cost));
+
+  const fallbackTotal = resolveTapOffBoxPriceTotal(line, input);
+  const quantityTotal = items.reduce((sum, item)=>sum + Number(item?.qty || 0), 0);
+  if (!(fallbackTotal > 0) || !(quantityTotal > 0)) return costs.map(cost=>round2(cost));
+  return items.map(item=>round2(fallbackTotal * Number(item?.qty || 0) / quantityTotal));
+}
+
+function resolveOfferPriceItems(line, input, items, costs, totalResolver) {
+  const lineTotals = (line && typeof line === 'object' && line.totals && typeof line.totals === 'object')
+    ? line.totals
+    : {};
+  const explicit = toFiniteNumber(totalResolver(lineTotals));
+  const costTotal = costs.reduce((sum, cost)=>sum + (Number.isFinite(cost) ? cost : 0), 0);
+  if (Number.isFinite(explicit) && costTotal > 0) {
+    return costs.map(cost=>round2(explicit * cost / costTotal));
+  }
+  const rate = lineTotals.tapOffMarginRate ?? input?.tapOffMarginRate ?? lineTotals.marginRate ?? input?.marginRate;
+  return costs.map(cost=>applyDgToCost(cost, rate));
+}
+
+function buildTapOffOfferPriceText(line, input = {}) {
+  const items = resolveTapOffItemsFromLine(line, input);
+  if (!items.length) return '';
+  const costs = resolveTapOffItemCosts(line, input, items);
+  const prices = resolveOfferPriceItems(line, input, items, costs, totals=>totals.tapOffOfferTotal);
+  return prices.map((price, index)=>formatTapOffOfferPricePlaceholder(price, items[index]?.qty)).join('\n');
 }
 
 function resolveSpecialElementLabel(selection) {
@@ -2162,8 +2294,21 @@ function buildSpecialElementOfferText(line, input = {}) {
   if (!items.length) return '';
   return items.map(item=>{
     const qtyTxt = formatNoInteger(item.qty) || String(item.qty);
-    return `${item.label || 'Spesialelement'} · antall ${qtyTxt}`;
-  }).join(' | ');
+    const label = item.label || resolveSpecialElementLabel(item.selection) || 'Spesialelement';
+    return `${qtyTxt} stk. ${label}`;
+  }).join('\n');
+}
+
+function resolveSpecialElementItemCosts(items = []) {
+  return items.map(item=>round2(Number(item?.unitSum || 0) * Number(item?.qty || 0)));
+}
+
+function buildSpecialElementOfferPriceText(line, input = {}) {
+  const items = resolveSpecialElementItemsFromLine(line, input);
+  if (!items.length) return '';
+  const costs = resolveSpecialElementItemCosts(items);
+  const prices = resolveOfferPriceItems(line, input, items, costs, totals=>totals.specialElementOfferTotal);
+  return prices.map((price, index)=>formatTapOffOfferPricePlaceholder(price, items[index]?.qty)).join('\n');
 }
 
 function resolveSpecialElementCostTotal(line, input = {}) {
@@ -2258,7 +2403,7 @@ function buildAggregateUnitPricePlaceholders(linePlaceholderSets) {
     });
   });
 
-  return output;
+  return alignMultilineWordParagraphsLeft(output);
 }
 
 function hasPositiveQuantity(value) {
@@ -2407,8 +2552,9 @@ function buildOfferLineDebugSummary(line, input = {}) {
 function collectProjectInputSummary(lines) {
   const pushUnique = (list, value)=>{
     const normalized = safeString(value);
-    if (!normalized) return;
-    if (!list.includes(normalized)) list.push(normalized);
+    if (!normalized || list.includes(normalized)) return false;
+    list.push(normalized);
+    return true;
   };
 
   const lineNumbers = [];
@@ -2419,7 +2565,9 @@ function collectProjectInputSummary(lines) {
   const sluttElements = [];
   const ipGrades = [];
   const tapOffTexts = [];
+  const tapOffPriceTexts = [];
   const specialElementTexts = [];
+  const specialElementPriceTexts = [];
   let brannElementTotal = 0;
   let tapOffTotal = 0;
   let tapOffPriceTotal = 0;
@@ -2457,11 +2605,19 @@ function collectProjectInputSummary(lines) {
     tapOffTotal += tapOffItems.reduce((sum, item)=>sum + Number(item.qty || 0), 0);
     tapOffPriceTotal += resolveTapOffOfferPriceTotal(line, input);
     const tapOffText = buildTapOffOfferText(line, input);
-    pushUnique(tapOffTexts, tapOffText);
+    if (pushUnique(tapOffTexts, tapOffText)) {
+      pushUnique(tapOffPriceTexts, buildTapOffOfferPriceText(line, input));
+    }
     const specialElementItems = resolveSpecialElementItemsFromLine(line, input);
     specialElementTotal += specialElementItems.reduce((sum, item)=>sum + Number(item.qty || 0), 0);
-    specialElementPriceTotal += resolveSpecialElementOfferPriceTotal(line, input);
-    pushUnique(specialElementTexts, buildSpecialElementOfferText(line, input));
+    const includeUnitPrices = resolveLineSelectedAddonConfig(line, line?.totals).includeUnitPrices;
+    if (includeUnitPrices) {
+      specialElementPriceTotal += resolveSpecialElementOfferPriceTotal(line, input);
+    }
+    const specialElementText = buildSpecialElementOfferText(line, input);
+    if (pushUnique(specialElementTexts, specialElementText) && includeUnitPrices) {
+      pushUnique(specialElementPriceTexts, buildSpecialElementOfferPriceText(line, input));
+    }
     expansionElementTotal += resolveExpansionQtyFromLine(line, input);
 
     const ampNum = toFiniteNumber(input.ampere ?? input.amp);
@@ -2487,10 +2643,12 @@ function collectProjectInputSummary(lines) {
     expansionElementTotal: formatNoInteger(expansionElementTotal),
     tapOffTotal: formatNoInteger(tapOffTotal),
     tapOffPriceTotal: round2(tapOffPriceTotal),
-    tapOffTexts: tapOffTexts.join(' | '),
+    tapOffTexts: tapOffTexts.join('\n'),
+    tapOffPriceTexts: tapOffPriceTexts.join('\n'),
     specialElementTotal: formatNoInteger(specialElementTotal),
     specialElementPriceTotal: round2(specialElementPriceTotal),
-    specialElementTexts: specialElementTexts.join(' | ')
+    specialElementTexts: specialElementTexts.join('\n'),
+    specialElementPriceTexts: specialElementPriceTexts.join('\n')
   };
 }
 
@@ -2525,16 +2683,14 @@ function buildOfferPlaceholderValues(project, offerNumber, offerDate, revision =
         : NaN
     );
   const inputSummary = collectProjectInputSummary(lines);
+  const offerTemplateTotal = round2(lines.reduce((sum, line)=>{
+    const lineTotal = resolveLineOfferTemplateTotal(line);
+    return sum + (Number.isFinite(lineTotal) ? lineTotal : 0);
+  }, 0));
   const offerDatePlus30 = addDays(offerDate, 30);
   const revisionNumber = Number.isInteger(Number(revision)) ? Number(revision) : 0;
-  const tapOffPricePlaceholder = formatTapOffOfferPricePlaceholder(
-    inputSummary.tapOffPriceTotal,
-    inputSummary.tapOffTotal
-  );
-  const specialElementPricePlaceholder = formatTapOffOfferPricePlaceholder(
-    inputSummary.specialElementPriceTotal,
-    inputSummary.specialElementTotal
-  );
+  const tapOffPricePlaceholder = inputSummary.tapOffPriceTexts;
+  const specialElementPricePlaceholder = inputSummary.specialElementPriceTexts;
 
   const placeholders = {
     tilbud_nr: offerNumber,
@@ -2591,8 +2747,8 @@ function buildOfferPlaceholderValues(project, offerNumber, offerDate, revision =
     antall_linjer: String(lines.length),
     lnr: inputSummary.lineNumbers,
     sys: inputSummary.systems,
-    mtr: inputSummary.meterTotal,
-    vvk: inputSummary.verticalAnglesTotal,
+    mtr: formatWordInlineValue(inputSummary.meterTotal),
+    vvk: formatWordInlineValue(inputSummary.verticalAnglesTotal),
     hvk: inputSummary.horizontalAnglesTotal,
     amp: inputSummary.ampereValues,
     led: inputSummary.ledereValues,
@@ -2661,13 +2817,13 @@ function buildOfferPlaceholderValues(project, offerNumber, offerDate, revision =
     subtotal_nok: formatNoCurrency(totals.subtotal),
     frakt_nok: formatNoCurrency(totals.freight),
     freight_nok: formatNoCurrency(totals.freight),
-    total_ex_montasje_nok: formatNoCurrency(offerIncludedTotal),
-    total_ex_montasje_hoved_nok: formatNoCurrency(offerMainVisibleTotal),
-    total_ex_montasje_total_nok: formatNoCurrency(offerIncludedTotal),
-    total_ex_montasje_tilvalg_nok: formatNoCurrency(offerVisibleAddonsTotal),
-    offer_main_nok: formatNoCurrency(offerMainVisibleTotal),
-    offer_total_nok: formatNoCurrency(offerIncludedTotal),
-    offer_tilvalg_nok: formatNoCurrency(offerVisibleAddonsTotal),
+    total_ex_montasje_nok: formatNoCurrencyWithKr(offerIncludedTotal),
+    total_ex_montasje_hoved_nok: formatNoCurrencyWithKr(offerMainVisibleTotal),
+    total_ex_montasje_total_nok: formatNoCurrencyWithKr(offerIncludedTotal),
+    total_ex_montasje_tilvalg_nok: formatNoCurrencyWithKr(offerVisibleAddonsTotal),
+    offer_main_nok: formatNoCurrencyWithKr(offerMainVisibleTotal),
+    offer_total_nok: formatNoCurrencyWithKr(offerTemplateTotal),
+    offer_tilvalg_nok: formatNoCurrencyWithKr(offerVisibleAddonsTotal),
     montasje_nok: formatNoCurrency(totals.montasje),
     montasje_margin_nok: formatNoCurrency(totals.montasjeMargin),
     total_incl_montasje_nok: formatNoCurrency(totals.totalInclMontasje),
@@ -2740,19 +2896,16 @@ async function buildOfferLinePlaceholderValues(project) {
     const engineeringHoursValue = formatNoIntegerUp(lineTotals?.engineering?.totalHours);
     const montasjeHoursLabel = montasjeHoursValue ? `${montasjeHoursValue} timer totalt` : '';
     const engineeringHoursLabel = engineeringHoursValue ? `${engineeringHoursValue} timer totalt` : '';
-    const tapOffItems = resolveTapOffItemsFromLine(line, input);
     const tapOffText = buildTapOffOfferText(line, input);
-    const tapOffTotalQty = tapOffItems.reduce((sum, item)=>sum + Number(item.qty || 0), 0);
-    const tapOffPriceTotal = resolveTapOffOfferPriceTotal(line, input);
-    const tapOffPricePlaceholder = formatTapOffOfferPricePlaceholder(tapOffPriceTotal, tapOffTotalQty);
-    const specialElementItems = resolveSpecialElementItemsFromLine(line, input);
+    const tapOffTotalQty = resolveTapOffItemsFromLine(line, input)
+      .reduce((sum, item)=>sum + Number(item?.qty || 0), 0);
+    const tapOffPricePlaceholder = buildTapOffOfferPriceText(line, input);
     const specialElementText = buildSpecialElementOfferText(line, input);
-    const specialElementTotalQty = specialElementItems.reduce((sum, item)=>sum + Number(item.qty || 0), 0);
-    const specialElementPriceTotal = resolveSpecialElementOfferPriceTotal(line, input);
-    const specialElementPricePlaceholder = formatTapOffOfferPricePlaceholder(
-      specialElementPriceTotal,
-      specialElementTotalQty
-    );
+    const specialElementTotalQty = resolveSpecialElementItemsFromLine(line, input)
+      .reduce((sum, item)=>sum + Number(item?.qty || 0), 0);
+    const specialElementPricePlaceholder = selectedAddonConfig.includeUnitPrices
+      ? buildSpecialElementOfferPriceText(line, input)
+      : '';
     const unitPricePlaceholders = buildUnitPricePlaceholders(line, input, lineTotals, fireBarrierPriceIndex);
 
     linePlaceholderSets.push({
@@ -2760,8 +2913,8 @@ async function buildOfferLinePlaceholderValues(project) {
       lnr: lineNumber,
       linjenummer: lineNumber,
       sys: safeString(input.series),
-      mtr: formatNoInteger(input.meter),
-      vvk: formatNoPositiveInteger(input.v90_v ?? input.v90v),
+      mtr: formatWordInlineValue(formatNoInteger(input.meter)),
+      vvk: formatWordInlineValue(formatNoPositiveInteger(input.v90_v ?? input.v90v)),
       hvk: formatNoPositiveInteger(input.v90_h ?? input.v90h),
       amp,
       led: safeString(input.ledere),
@@ -2803,7 +2956,7 @@ async function buildOfferLinePlaceholderValues(project) {
       exp: expansionText,
       ekspansjonselement: expansionText,
       EXPANSJONSELEMENT: expansionText,
-      total_ex_montasje_nok: formatNoCurrency(lineOfferAmounts.mainVisibleTotal),
+      total_ex_montasje_nok: formatNoCurrencyWithKr(lineOfferAmounts.mainVisibleTotal),
       stv: formatNoCurrency(lineOfferAmounts.mainVisibleTotal),
       stv_hoved: formatNoCurrency(lineOfferAmounts.mainVisibleTotal),
       stv_total: formatNoCurrency(lineOfferAmounts.includedTotal),
@@ -2935,17 +3088,41 @@ function replacePlaceholdersInXml(xml, placeholders) {
   };
 
   let output = String(xml);
+  const multilineValues = Object.values(placeholders)
+    .filter(value=>/\r\n|\r|\n/.test(String(value ?? '')));
   const orderedEntries = Object.entries(placeholders)
     .sort((a, b)=>String(b[0] || '').length - String(a[0] || '').length);
   orderedEntries.forEach(([key, rawValue])=>{
-    const escapedValue = escapeXml(rawValue ?? '');
+    const escapedValue = escapeXmlText(rawValue ?? '');
     const pattern = new RegExp(`\\{\\{\\s*${escapeRegex(key)}\\s*\\}\\}`, 'g');
     output = output.replace(pattern, escapedValue);
     output = replaceDelimiterSplitPlaceholder(output, key, escapedValue);
     output = replaceSplitThreeLetterPlaceholder(output, key, escapedValue);
     output = replaceCharSplitPlaceholder(output, key, escapedValue);
   });
-  return output;
+  const priceValues = [
+    placeholders.avb_pris,
+    placeholders.avb_pris_nok,
+    placeholders.avb_sum,
+    placeholders.avb_sum_nok,
+    placeholders.avtappingsbokser_pris,
+    placeholders.avtappingsbokser_pris_nok,
+    placeholders.AVTAPPINGSBOKSER_PRIS,
+    placeholders.spe_pris,
+    placeholders.spe_pris_nok,
+    placeholders.spe_sum,
+    placeholders.spe_sum_nok,
+    placeholders.spesialelement_pris,
+    placeholders.spesialelement_pris_nok,
+    placeholders.spesialelementer_pris,
+    placeholders.spesialelementer_pris_nok,
+    placeholders.SPESIALELEMENT_PRIS,
+    placeholders.SPESIALELEMENTER_PRIS
+  ].filter(value=>safeString(value));
+  return alignWordParagraphsRight(
+    alignMultilineWordParagraphsLeft(output, multilineValues),
+    priceValues
+  );
 }
 
 function hasUsablePlaceholderValue(placeholders, keys) {

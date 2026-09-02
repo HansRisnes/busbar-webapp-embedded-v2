@@ -16,9 +16,14 @@ export function normalizeOfferSearchText(value){
 function appendOfferDetails(parent, rows){
   rows.forEach(([label, value])=>{
     const line = document.createElement('p');
+    line.className = 'offer-detail';
     const strong = document.createElement('strong');
+    strong.className = 'offer-detail-label';
     strong.textContent = `${label}:`;
-    line.append(strong, ` ${value || '-'}`);
+    const detail = document.createElement('span');
+    detail.className = 'offer-detail-value';
+    detail.textContent = ` ${value || '-'}`;
+    line.append(strong, detail);
     parent.appendChild(line);
   });
 }

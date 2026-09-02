@@ -2,7 +2,7 @@
   "users": {
     "hans.jakob.risnes@busbar.no": {
       "email": "hans.jakob.risnes@busbar.no",
-      "updatedAt": "2026-08-31T09:52:35.250Z",
+      "updatedAt": "2026-09-02T10:20:53.634Z",
       "projects": [
         {
           "id": "0cb0f047-8257-4c26-8ae1-afdb9ebaf6cd",
@@ -16,22 +16,497 @@
           "projectResponsible": "Hans Jakob Risnes",
           "projectOwnerEmail": "hans.jakob.risnes@busbar.no",
           "projectOwnerName": "Hans Jakob Risnes",
-          "projectFolderName": "",
-          "projectFolderCreated": false,
-          "projectFolderWebUrl": "",
+          "projectFolderName": "2026-1055 - Test",
+          "projectFolderCreated": true,
+          "projectFolderWebUrl": "https://mcselektrotavler.sharepoint.com/sites/BCDokumentarkiv/Delte%20dokumenter/Drift/BUSBAR/Prosjekter/2026/2026-1055%20-%20Test",
           "projectStatus": "unresolved",
           "createdAt": "2026-08-13T12:20:02.759Z",
-          "updatedAt": "2026-08-13T12:20:02.759Z",
+          "updatedAt": "2026-09-02T10:18:51.150Z",
           "selectedAddonConfig": {
-            "includeMontasje": true,
-            "includeEngineering": true,
-            "includeOppheng": true,
+            "includeMontasje": false,
+            "includeEngineering": false,
+            "includeOppheng": false,
             "showMontasje": false,
             "showEngineering": false,
             "showOppheng": false,
-            "includeUnitPrices": false
+            "includeUnitPrices": true
           },
-          "lines": [],
+          "lines": [
+            {
+              "id": "10c69867-22cb-43e2-919d-91e5055e4604",
+              "lineNumber": "1",
+              "createdAt": "2026-09-02T07:58:40.239Z",
+              "updatedAt": "2026-09-02T10:00:21.383Z",
+              "inputs": {
+                "series": "XCP-S",
+                "dist": true,
+                "meter": 10,
+                "v90_h": 2,
+                "v90_v": 2,
+                "ampere": 3200,
+                "ledere": "3F+N+PE",
+                "startEl": "board_feed",
+                "sluttEl": "end_cover",
+                "fbQty": 2,
+                "boxQty": 0,
+                "boxSel": "",
+                "boxItems": [
+                  {
+                    "id": "tapoff-1788335909297-1",
+                    "boxSel": "tap_off_box|250",
+                    "boxQty": 5,
+                    "innmatSum": 10000
+                  },
+                  {
+                    "id": "tapoff-1788342036469-1",
+                    "boxSel": "plug_in_box|160",
+                    "boxQty": 7,
+                    "innmatSum": 10000
+                  }
+                ],
+                "specialElementItems": [
+                  {
+                    "id": "special-element-1788335910489-1",
+                    "selection": "neutral_change",
+                    "qty": 1,
+                    "unitSum": 50000
+                  },
+                  {
+                    "id": "special-element-1788340663722-1",
+                    "selection": "phase_change",
+                    "qty": 2,
+                    "unitSum": 10000
+                  }
+                ],
+                "expansionYes": false,
+                "freightRate": 0.1,
+                "marginRate": 0.25,
+                "montasjeMarginRate": 0.2,
+                "engineeringMarginRate": 0.2,
+                "opphengMarginRate": 0.2,
+                "tapOffMarginRate": 0.2,
+                "montasjeSettings": {
+                  "hourlyRate": 700,
+                  "opphengRate": 800
+                },
+                "engineeringSettings": {
+                  "hourlyRate": 929.9
+                }
+              },
+              "totals": {
+                "lineNumber": "1",
+                "timestamp": "2026-09-02T09:40:38.123Z",
+                "material": 114902.77,
+                "tapOffBoxTotal": 151249.25,
+                "specialElementTotal": 70000,
+                "marginRate": 0.25,
+                "marginFactor": 0.75,
+                "margin": 38300.92,
+                "montasjeMarginRate": 0.2,
+                "montasjeMargin": 9800,
+                "engineeringMarginRate": 0.2,
+                "engineeringMargin": 725.32,
+                "opphengMarginRate": 0.2,
+                "opphengMargin": 1000,
+                "tapOffMarginRate": 0.2,
+                "subtotal": 153203.69,
+                "freightRate": 0.1,
+                "freight": 11490.28,
+                "totalExMontasje": 164693.97,
+                "totalInclMontasje": 49000,
+                "totalInclEngineering": 3626.61,
+                "totalInclOppheng": 5000,
+                "montasje": {
+                  "cost": 39200,
+                  "meters": 10,
+                  "angles": 4,
+                  "hourlyRate": 700,
+                  "totalHours": 56,
+                  "profile": {
+                    "maxAmp": null,
+                    "hoursPerMeter": 5,
+                    "hoursPerAngle": 1.5,
+                    "label": "3200–5000A"
+                  },
+                  "hoursPerMeter": 5,
+                  "hoursPerAngle": 1.5,
+                  "amp": 3200
+                },
+                "engineering": {
+                  "cost": 2901.29,
+                  "meters": 10,
+                  "angles": 4,
+                  "hourlyRate": 929.9,
+                  "totalHours": 3.12,
+                  "hoursPerMeter": 0.3,
+                  "hoursPerTenAngles": 0.3
+                },
+                "oppheng": {
+                  "cost": 4000,
+                  "meters": 10,
+                  "pieceCount": 5,
+                  "ratePerPiece": 800,
+                  "defaultRate": 800,
+                  "profile": {
+                    "maxAmp": null,
+                    "rate": 800,
+                    "label": "3200–5000A"
+                  },
+                  "isDefaultRate": true,
+                  "amp": 3200
+                },
+                "montasjeDetail": "Montasjegrunnlag (3 200A (3200–5000A)): 10 m × 5,00 t/m + 4 × 1,50 t = 56,00 t × 700,00 kr/t",
+                "engineeringDetail": "Ingeniørgrunnlag: 10 m × 0,30 t/m + (4 / 10) × 0,30 t = 3,12 t × 929,90 kr/t",
+                "opphengDetail": "Opphengsmateriell (3200–5000A): 10 m gir 5 stk × 800,00 kr/stk = 4 000,00 kr",
+                "total": 5000,
+                "rawUnitPrices": {
+                  "meter": 6680.72,
+                  "vinkel": 13398.45,
+                  "vinkelVertikal": 13398.45,
+                  "vinkelHorisontal": 8479.19,
+                  "tavleelement": 7803.09,
+                  "sluttelement": 919.62,
+                  "brann": 5778.05,
+                  "ekspansjon": 22939.6,
+                  "avtappingsboks": 3683.58
+                },
+                "bom": [
+                  {
+                    "code": "64391006P",
+                    "type": "board_feed",
+                    "series": "XCP-S",
+                    "ampere": 3200,
+                    "ledere": "3F+N+PE",
+                    "antall": 1,
+                    "enhet": 7803.09,
+                    "sum": 7803.09
+                  },
+                  {
+                    "code": "67393105P",
+                    "type": "end_cover",
+                    "series": "XCP-S",
+                    "ampere": 3200,
+                    "ledere": "3F+N+PE",
+                    "antall": 1,
+                    "enhet": 919.62,
+                    "sum": 919.62
+                  },
+                  {
+                    "code": "64390136P",
+                    "type": "straight_3m_dist",
+                    "series": "XCP-S",
+                    "ampere": 3200,
+                    "ledere": "3F+N+PE",
+                    "antall": 3,
+                    "enhet": 14729.32,
+                    "sum": 44187.96
+                  },
+                  {
+                    "code": "64390116P",
+                    "type": "straight_500_1000",
+                    "series": "XCP-S",
+                    "ampere": 3200,
+                    "ledere": "3F+N+PE",
+                    "antall": 1,
+                    "enhet": 6680.72,
+                    "sum": 6680.72
+                  },
+                  {
+                    "code": "64390316P",
+                    "type": "elbow_horizontal_90",
+                    "series": "XCP-S",
+                    "ampere": 3200,
+                    "ledere": "3F+N+PE",
+                    "antall": 2,
+                    "enhet": 8479.19,
+                    "sum": 16958.38
+                  },
+                  {
+                    "code": "64390426P",
+                    "type": "elbow_vertical_90",
+                    "series": "XCP-S",
+                    "ampere": 3200,
+                    "ledere": "3F+N+PE",
+                    "antall": 2,
+                    "enhet": 13398.45,
+                    "sum": 26796.9
+                  },
+                  {
+                    "code": "50484005",
+                    "type": "tap_off_box",
+                    "series": "XCP-S",
+                    "ampere": 250,
+                    "ledere": "3F+N+PE",
+                    "antall": 5,
+                    "enhet": 3683.580078,
+                    "sum": 18417.9,
+                    "tapOffBoxSel": "tap_off_box|250",
+                    "tapOffInnmatPerUnit": 10000,
+                    "tapOffInnmatTotal": 50000,
+                    "tapOffBaseEnhet": 3683.580078,
+                    "tapOffGroupId": "tapoff-1788335909297-1",
+                    "tapOffIncludesInnmatInSum": false
+                  },
+                  {
+                    "code": "INNMAT-50484005",
+                    "type": "tap_off_box_innmat",
+                    "series": "XCP-S",
+                    "ampere": 250,
+                    "ledere": "3F+N+PE",
+                    "antall": 5,
+                    "enhet": 10000,
+                    "sum": 50000,
+                    "tapOffGroupId": "tapoff-1788335909297-1",
+                    "tapOffParentCode": "50484005",
+                    "tapOffBoxSel": "tap_off_box|250",
+                    "tapOffInnmatLine": true
+                  },
+                  {
+                    "code": "50485213",
+                    "type": "plug_in_box",
+                    "series": "XCP-S",
+                    "ampere": 160,
+                    "ledere": "3F+N+PE",
+                    "antall": 7,
+                    "enhet": 1833.050049,
+                    "sum": 12831.35,
+                    "tapOffBoxSel": "plug_in_box|160",
+                    "tapOffInnmatPerUnit": 10000,
+                    "tapOffInnmatTotal": 70000,
+                    "tapOffBaseEnhet": 1833.050049,
+                    "tapOffGroupId": "tapoff-1788342036469-1",
+                    "tapOffIncludesInnmatInSum": false
+                  },
+                  {
+                    "code": "INNMAT-50485213",
+                    "type": "plug_in_box_innmat",
+                    "series": "XCP-S",
+                    "ampere": 160,
+                    "ledere": "3F+N+PE",
+                    "antall": 7,
+                    "enhet": 10000,
+                    "sum": 70000,
+                    "tapOffGroupId": "tapoff-1788342036469-1",
+                    "tapOffParentCode": "50485213",
+                    "tapOffBoxSel": "plug_in_box|160",
+                    "tapOffInnmatLine": true
+                  },
+                  {
+                    "code": "SPECIAL-NEUTRAL-CHANGE",
+                    "type": "Nøytralendring",
+                    "series": "XCP-S",
+                    "ampere": 3200,
+                    "ledere": "3F+N+PE",
+                    "antall": 1,
+                    "enhet": 50000,
+                    "sum": 50000,
+                    "specialElementGroupId": "special-element-1788335910489-1",
+                    "specialElementSelection": "neutral_change"
+                  },
+                  {
+                    "code": "SPECIAL-PHASE-CHANGE",
+                    "type": "Faseendring",
+                    "series": "XCP-S",
+                    "ampere": 3200,
+                    "ledere": "3F+N+PE",
+                    "antall": 2,
+                    "enhet": 10000,
+                    "sum": 20000,
+                    "specialElementGroupId": "special-element-1788340663722-1",
+                    "specialElementSelection": "phase_change"
+                  },
+                  {
+                    "code": "673EFB03",
+                    "type": "fire_barrier_kit",
+                    "series": "XCP-S",
+                    "ampere": 3200,
+                    "ledere": "3F+N+PE",
+                    "antall": 2,
+                    "enhet": 5778.05,
+                    "sum": 11556.1
+                  }
+                ],
+                "tapOffOfferTotal": 189061.56,
+                "specialElementOfferTotal": 87500,
+                "selectedAddonTotal": 498882.14,
+                "selectedAddonConfig": {
+                  "includeMontasje": true,
+                  "includeEngineering": true,
+                  "includeOppheng": true,
+                  "showMontasje": true,
+                  "showEngineering": true,
+                  "showOppheng": true,
+                  "includeUnitPrices": true
+                }
+              },
+              "bom": [
+                {
+                  "code": "64391006P",
+                  "type": "board_feed",
+                  "series": "XCP-S",
+                  "ampere": 3200,
+                  "ledere": "3F+N+PE",
+                  "antall": 1,
+                  "enhet": 7803.09,
+                  "sum": 7803.09
+                },
+                {
+                  "code": "67393105P",
+                  "type": "end_cover",
+                  "series": "XCP-S",
+                  "ampere": 3200,
+                  "ledere": "3F+N+PE",
+                  "antall": 1,
+                  "enhet": 919.62,
+                  "sum": 919.62
+                },
+                {
+                  "code": "64390136P",
+                  "type": "straight_3m_dist",
+                  "series": "XCP-S",
+                  "ampere": 3200,
+                  "ledere": "3F+N+PE",
+                  "antall": 3,
+                  "enhet": 14729.32,
+                  "sum": 44187.96
+                },
+                {
+                  "code": "64390116P",
+                  "type": "straight_500_1000",
+                  "series": "XCP-S",
+                  "ampere": 3200,
+                  "ledere": "3F+N+PE",
+                  "antall": 1,
+                  "enhet": 6680.72,
+                  "sum": 6680.72
+                },
+                {
+                  "code": "64390316P",
+                  "type": "elbow_horizontal_90",
+                  "series": "XCP-S",
+                  "ampere": 3200,
+                  "ledere": "3F+N+PE",
+                  "antall": 2,
+                  "enhet": 8479.19,
+                  "sum": 16958.38
+                },
+                {
+                  "code": "64390426P",
+                  "type": "elbow_vertical_90",
+                  "series": "XCP-S",
+                  "ampere": 3200,
+                  "ledere": "3F+N+PE",
+                  "antall": 2,
+                  "enhet": 13398.45,
+                  "sum": 26796.9
+                },
+                {
+                  "code": "50484005",
+                  "type": "tap_off_box",
+                  "series": "XCP-S",
+                  "ampere": 250,
+                  "ledere": "3F+N+PE",
+                  "antall": 5,
+                  "enhet": 3683.580078,
+                  "sum": 18417.9,
+                  "tapOffBoxSel": "tap_off_box|250",
+                  "tapOffInnmatPerUnit": 10000,
+                  "tapOffInnmatTotal": 50000,
+                  "tapOffBaseEnhet": 3683.580078,
+                  "tapOffGroupId": "tapoff-1788335909297-1",
+                  "tapOffIncludesInnmatInSum": false
+                },
+                {
+                  "code": "INNMAT-50484005",
+                  "type": "tap_off_box_innmat",
+                  "series": "XCP-S",
+                  "ampere": 250,
+                  "ledere": "3F+N+PE",
+                  "antall": 5,
+                  "enhet": 10000,
+                  "sum": 50000,
+                  "tapOffGroupId": "tapoff-1788335909297-1",
+                  "tapOffParentCode": "50484005",
+                  "tapOffBoxSel": "tap_off_box|250",
+                  "tapOffInnmatLine": true
+                },
+                {
+                  "code": "50485213",
+                  "type": "plug_in_box",
+                  "series": "XCP-S",
+                  "ampere": 160,
+                  "ledere": "3F+N+PE",
+                  "antall": 7,
+                  "enhet": 1833.050049,
+                  "sum": 12831.35,
+                  "tapOffBoxSel": "plug_in_box|160",
+                  "tapOffInnmatPerUnit": 10000,
+                  "tapOffInnmatTotal": 70000,
+                  "tapOffBaseEnhet": 1833.050049,
+                  "tapOffGroupId": "tapoff-1788342036469-1",
+                  "tapOffIncludesInnmatInSum": false
+                },
+                {
+                  "code": "INNMAT-50485213",
+                  "type": "plug_in_box_innmat",
+                  "series": "XCP-S",
+                  "ampere": 160,
+                  "ledere": "3F+N+PE",
+                  "antall": 7,
+                  "enhet": 10000,
+                  "sum": 70000,
+                  "tapOffGroupId": "tapoff-1788342036469-1",
+                  "tapOffParentCode": "50485213",
+                  "tapOffBoxSel": "plug_in_box|160",
+                  "tapOffInnmatLine": true
+                },
+                {
+                  "code": "SPECIAL-NEUTRAL-CHANGE",
+                  "type": "Nøytralendring",
+                  "series": "XCP-S",
+                  "ampere": 3200,
+                  "ledere": "3F+N+PE",
+                  "antall": 1,
+                  "enhet": 50000,
+                  "sum": 50000,
+                  "specialElementGroupId": "special-element-1788335910489-1",
+                  "specialElementSelection": "neutral_change"
+                },
+                {
+                  "code": "SPECIAL-PHASE-CHANGE",
+                  "type": "Faseendring",
+                  "series": "XCP-S",
+                  "ampere": 3200,
+                  "ledere": "3F+N+PE",
+                  "antall": 2,
+                  "enhet": 10000,
+                  "sum": 20000,
+                  "specialElementGroupId": "special-element-1788340663722-1",
+                  "specialElementSelection": "phase_change"
+                },
+                {
+                  "code": "673EFB03",
+                  "type": "fire_barrier_kit",
+                  "series": "XCP-S",
+                  "ampere": 3200,
+                  "ledere": "3F+N+PE",
+                  "antall": 2,
+                  "enhet": 5778.05,
+                  "sum": 11556.1
+                }
+              ],
+              "selectedAddonConfig": {
+                "includeMontasje": true,
+                "includeEngineering": true,
+                "includeOppheng": true,
+                "showMontasje": true,
+                "showEngineering": true,
+                "showOppheng": true,
+                "includeUnitPrices": true
+              },
+              "selectedAddonTotal": 498882.14
+            }
+          ],
           "todos": []
         },
         {
@@ -51,7 +526,7 @@
           "projectFolderWebUrl": "https://mcselektrotavler.sharepoint.com/sites/BCDokumentarkiv/Delte%20dokumenter/Drift/BUSBAR/Prosjekter/2026/2026-1054%20-%20Test",
           "projectStatus": "unresolved",
           "createdAt": "2026-05-22T11:57:45.422Z",
-          "updatedAt": "2026-08-28T11:01:21.051Z",
+          "updatedAt": "2026-09-01T07:49:16.544Z",
           "selectedAddonConfig": {
             "includeMontasje": true,
             "includeEngineering": true,
@@ -66,7 +541,7 @@
               "id": "f6e17d8c-c428-4b9f-8948-b34acef5f2a1",
               "lineNumber": "1",
               "createdAt": "2026-06-03T09:55:11.489Z",
-              "updatedAt": "2026-08-19T11:09:26.347Z",
+              "updatedAt": "2026-09-01T07:49:16.544Z",
               "inputs": {
                 "series": "XCP-S",
                 "dist": true,
@@ -82,16 +557,22 @@
                 "boxSel": "",
                 "boxItems": [
                   {
-                    "id": "tapoff-1780480505091-1",
+                    "id": "tapoff-1788248751678-1",
                     "boxSel": "plug_in_box|160",
-                    "boxQty": 4,
-                    "innmatSum": 11111
+                    "boxQty": 2,
+                    "innmatSum": 70
+                  },
+                  {
+                    "id": "tapoff-1788248946966-1",
+                    "boxSel": "tap_off_box|250",
+                    "boxQty": 2,
+                    "innmatSum": 40
                   }
                 ],
                 "expansionYes": false,
                 "freightRate": 0.1,
                 "marginRate": 0.2,
-                "montasjeMarginRate": 0.2,
+                "montasjeMarginRate": 0.51,
                 "engineeringMarginRate": 0.2,
                 "opphengMarginRate": 0.2,
                 "tapOffMarginRate": 0.2,
@@ -101,13 +582,21 @@
                 },
                 "engineeringSettings": {
                   "hourlyRate": 929.9
-                }
+                },
+                "specialElementItems": [
+                  {
+                    "id": "special-element-1788248653773-1",
+                    "selection": "phase_change",
+                    "qty": 4,
+                    "unitSum": 50
+                  }
+                ]
               },
               "totals": {
                 "lineNumber": "1",
                 "timestamp": "2026-06-03T09:55:07.488Z",
                 "material": 87838.13,
-                "tapOffBoxTotal": 51776.2,
+                "tapOffBoxTotal": 11253.26,
                 "marginRate": 0.2,
                 "marginFactor": 0.8,
                 "margin": 21959.53,
@@ -225,14 +714,14 @@
                     "series": "XCP-S",
                     "ampere": 160,
                     "ledere": "3F+N+PE",
-                    "antall": 4,
+                    "antall": 2,
                     "enhet": 1833.050049,
-                    "sum": 7332.2,
+                    "sum": 3666.1,
                     "tapOffBoxSel": "plug_in_box|160",
-                    "tapOffInnmatPerUnit": 11111,
-                    "tapOffInnmatTotal": 44444,
+                    "tapOffInnmatPerUnit": 70,
+                    "tapOffInnmatTotal": 140,
                     "tapOffBaseEnhet": 1833.050049,
-                    "tapOffGroupId": "tapoff-1780480505091-1",
+                    "tapOffGroupId": "tapoff-1788248751678-1",
                     "tapOffIncludesInnmatInSum": false
                   },
                   {
@@ -241,17 +730,59 @@
                     "series": "XCP-S",
                     "ampere": 160,
                     "ledere": "3F+N+PE",
-                    "antall": 4,
-                    "enhet": 11111,
-                    "sum": 44444,
-                    "tapOffGroupId": "tapoff-1780480505091-1",
+                    "antall": 2,
+                    "enhet": 70,
+                    "sum": 140,
+                    "tapOffGroupId": "tapoff-1788248751678-1",
                     "tapOffParentCode": "50485213",
                     "tapOffBoxSel": "plug_in_box|160",
                     "tapOffInnmatLine": true
+                  },
+                  {
+                    "code": "50484005",
+                    "type": "tap_off_box",
+                    "series": "XCP-S",
+                    "ampere": 250,
+                    "ledere": "3F+N+PE",
+                    "antall": 2,
+                    "enhet": 3683.580078,
+                    "sum": 7367.16,
+                    "tapOffBoxSel": "tap_off_box|250",
+                    "tapOffInnmatPerUnit": 40,
+                    "tapOffInnmatTotal": 80,
+                    "tapOffBaseEnhet": 3683.580078,
+                    "tapOffGroupId": "tapoff-1788248946966-1",
+                    "tapOffIncludesInnmatInSum": false
+                  },
+                  {
+                    "code": "INNMAT-50484005",
+                    "type": "tap_off_box_innmat",
+                    "series": "XCP-S",
+                    "ampere": 250,
+                    "ledere": "3F+N+PE",
+                    "antall": 2,
+                    "enhet": 40,
+                    "sum": 80,
+                    "tapOffGroupId": "tapoff-1788248946966-1",
+                    "tapOffParentCode": "50484005",
+                    "tapOffBoxSel": "tap_off_box|250",
+                    "tapOffInnmatLine": true
+                  },
+                  {
+                    "code": "SPECIAL-PHASE-CHANGE",
+                    "type": "Faseendring",
+                    "series": "XCP-S",
+                    "ampere": 3200,
+                    "ledere": "3F+N+PE",
+                    "antall": 4,
+                    "enhet": 50,
+                    "sum": 200,
+                    "specialElementGroupId": "special-element-1788248653773-1",
+                    "specialElementSelection": "phase_change"
                   }
                 ],
-                "tapOffOfferTotal": 64720.25,
-                "selectedAddonTotal": 216727.32,
+                "tapOffOfferTotal": 14066.58,
+                "selectedAddonTotal": 166323.65,
                 "selectedAddonConfig": {
                   "includeMontasje": true,
                   "includeEngineering": true,
@@ -260,6 +791,19 @@
                   "showEngineering": true,
                   "showOppheng": true,
                   "includeUnitPrices": false
+                },
+                "specialElementOfferTotal": 250,
+                "specialElementTotal": 200,
+                "rawUnitPrices": {
+                  "meter": 6680.72,
+                  "vinkel": 13398.45,
+                  "vinkelVertikal": 13398.45,
+                  "vinkelHorisontal": 8479.19,
+                  "tavleelement": 7803.09,
+                  "sluttelement": 13071.25,
+                  "brann": 5778.05,
+                  "ekspansjon": 22939.6,
+                  "avtappingsboks": 1833.05
                 }
               },
               "bom": [
@@ -319,14 +863,14 @@
                   "series": "XCP-S",
                   "ampere": 160,
                   "ledere": "3F+N+PE",
-                  "antall": 4,
+                  "antall": 2,
                   "enhet": 1833.050049,
-                  "sum": 7332.2,
+                  "sum": 3666.1,
                   "tapOffBoxSel": "plug_in_box|160",
-                  "tapOffInnmatPerUnit": 11111,
-                  "tapOffInnmatTotal": 44444,
+                  "tapOffInnmatPerUnit": 70,
+                  "tapOffInnmatTotal": 140,
                   "tapOffBaseEnhet": 1833.050049,
-                  "tapOffGroupId": "tapoff-1780480505091-1",
+                  "tapOffGroupId": "tapoff-1788248751678-1",
                   "tapOffIncludesInnmatInSum": false
                 },
                 {
@@ -335,13 +879,55 @@
                   "series": "XCP-S",
                   "ampere": 160,
                   "ledere": "3F+N+PE",
-                  "antall": 4,
-                  "enhet": 11111,
-                  "sum": 44444,
-                  "tapOffGroupId": "tapoff-1780480505091-1",
+                  "antall": 2,
+                  "enhet": 70,
+                  "sum": 140,
+                  "tapOffGroupId": "tapoff-1788248751678-1",
                   "tapOffParentCode": "50485213",
                   "tapOffBoxSel": "plug_in_box|160",
                   "tapOffInnmatLine": true
+                },
+                {
+                  "code": "50484005",
+                  "type": "tap_off_box",
+                  "series": "XCP-S",
+                  "ampere": 250,
+                  "ledere": "3F+N+PE",
+                  "antall": 2,
+                  "enhet": 3683.580078,
+                  "sum": 7367.16,
+                  "tapOffBoxSel": "tap_off_box|250",
+                  "tapOffInnmatPerUnit": 40,
+                  "tapOffInnmatTotal": 80,
+                  "tapOffBaseEnhet": 3683.580078,
+                  "tapOffGroupId": "tapoff-1788248946966-1",
+                  "tapOffIncludesInnmatInSum": false
+                },
+                {
+                  "code": "INNMAT-50484005",
+                  "type": "tap_off_box_innmat",
+                  "series": "XCP-S",
+                  "ampere": 250,
+                  "ledere": "3F+N+PE",
+                  "antall": 2,
+                  "enhet": 40,
+                  "sum": 80,
+                  "tapOffGroupId": "tapoff-1788248946966-1",
+                  "tapOffParentCode": "50484005",
+                  "tapOffBoxSel": "tap_off_box|250",
+                  "tapOffInnmatLine": true
+                },
+                {
+                  "code": "SPECIAL-PHASE-CHANGE",
+                  "type": "Faseendring",
+                  "series": "XCP-S",
+                  "ampere": 3200,
+                  "ledere": "3F+N+PE",
+                  "antall": 4,
+                  "enhet": 50,
+                  "sum": 200,
+                  "specialElementGroupId": "special-element-1788248653773-1",
+                  "specialElementSelection": "phase_change"
                 }
               ],
               "selectedAddonConfig": {
@@ -353,7 +939,7 @@
                 "showOppheng": true,
                 "includeUnitPrices": false
               },
-              "selectedAddonTotal": 216727.32
+              "selectedAddonTotal": 166323.65
             }
           ],
           "todos": [
@@ -400,7 +986,7 @@
           "projectFolderWebUrl": "https://mcselektrotavler.sharepoint.com/sites/BCDokumentarkiv/Delte%20dokumenter/Drift/BUSBAR/Prosjekter/2026/2026-1053%20-%20Dronningensgate%2013",
           "projectStatus": "unresolved",
           "createdAt": "2026-05-20T12:48:36.013Z",
-          "updatedAt": "2026-08-12T10:58:00.031Z",
+          "updatedAt": "2026-09-01T12:41:07.604Z",
           "selectedAddonConfig": {
             "includeMontasje": false,
             "includeEngineering": false,
@@ -1276,7 +1862,7 @@
           "projectFolderWebUrl": "",
           "projectStatus": "unresolved",
           "createdAt": "2026-04-14T07:12:04.324Z",
-          "updatedAt": "2026-08-28T11:01:24.470Z",
+          "updatedAt": "2026-09-01T12:41:07.604Z",
           "selectedAddonConfig": {
             "includeMontasje": true,
             "includeEngineering": true,
@@ -1519,7 +2105,7 @@
           "projectFolderWebUrl": "",
           "projectStatus": "unresolved",
           "createdAt": "2026-04-09T13:11:33.417Z",
-          "updatedAt": "2026-08-18T11:37:31.223Z",
+          "updatedAt": "2026-09-01T12:41:07.604Z",
           "selectedAddonConfig": {
             "includeMontasje": true,
             "includeEngineering": true,
@@ -4010,7 +4596,7 @@
     },
     "hans@busbar.no": {
       "email": "hans@busbar.no",
-      "updatedAt": "2026-08-31T09:52:35.250Z",
+      "updatedAt": "2026-09-02T10:20:53.634Z",
       "projects": []
     }
   },

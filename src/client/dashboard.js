@@ -377,7 +377,10 @@ function createDashboardMetric(label, value, percent, options = {}){
   const item = document.createElement('div');
   item.className = 'dashboard-total-metric';
   if (options.className){
-    item.classList.add(options.className);
+    options.className
+      .split(/\s+/)
+      .filter(Boolean)
+      .forEach(className=>item.classList.add(className));
   }
   if (options.moduleRows){
     item.style.setProperty('--dashboard-total-metric-rows', String(options.moduleRows));
@@ -418,11 +421,38 @@ function createDashboardMetric(label, value, percent, options = {}){
   return item;
 }
 
+function alignDashboardTotalHeroBreakdown(hero, sectionsWrap, groups){
+  const metrics = Array.from(sectionsWrap.querySelectorAll('.dashboard-total-metric'));
+  if (metrics.length < 2 || groups.length < 4) return;
+  const targets = [
+    metrics[0].querySelector(':scope > span'),
+    metrics[0].querySelector('.dashboard-total-secondary-label'),
+    metrics[1].querySelector(':scope > span'),
+    metrics[1].querySelector('.dashboard-total-secondary-label')
+  ];
+  const heroRect = hero.getBoundingClientRect();
+  targets.forEach((target, index)=>{
+    if (!target) return;
+    groups[index].style.top = `${Math.max(0, target.getBoundingClientRect().top - heroRect.top - 1)}px`;
+  });
+}
+
 export function renderDashboardTotalsWidget(state, projects, resolvers = {}){
   const root = $('dashboardTotalsContent');
   if (!root) return;
   const filteredProjects = prepareDashboardTotalFilters(state, projects);
   const totals = getDashboardTotals(filteredProjects, resolvers);
+  const meta = $('dashboardTotalsMeta');
+  if (meta){
+    meta.textContent = `${fmtIntNO.format(totals.projectCount)} prosjekter | ${totals.lineCount} linjer beregnet`;
+  }
+  const getStatusConfig = typeof resolvers.getProjectStatusConfig === 'function'
+    ? resolvers.getProjectStatusConfig
+    : (project=>({ id: project?.projectStatus || '' }));
+  const orderTotals = getDashboardTotals(
+    filteredProjects.filter(project=>getStatusConfig(project)?.id === 'won'),
+    resolvers
+  );
   const sections = [
     {
       totalLabel: 'Salgsverdi strømskinne',
@@ -460,6 +490,14 @@ export function renderDashboardTotalsWidget(state, projects, resolvers = {}){
   heroValue.textContent = formatDashboardMoney(totals.allTotal);
   totalGroup.append(heroLabel, heroValue);
 
+  const orderGroup = document.createElement('div');
+  orderGroup.className = 'dashboard-total-hero-group dashboard-total-hero-order-group';
+  const orderLabel = document.createElement('span');
+  orderLabel.textContent = 'Ordresum';
+  const orderValue = document.createElement('strong');
+  orderValue.textContent = formatDashboardMoney(orderTotals.allTotal);
+  orderGroup.append(orderLabel, orderValue);
+
   const costGroup = document.createElement('div');
   costGroup.className = 'dashboard-total-hero-group dashboard-total-hero-cost-group';
   const costLabel = document.createElement('span');
@@ -470,12 +508,17 @@ export function renderDashboardTotalsWidget(state, projects, resolvers = {}){
   costValue.textContent = formatDashboardMoney(totals.allCost);
   costGroup.append(costLabel, costValue);
 
-  const heroMetaGroup = document.createElement('div');
-  heroMetaGroup.className = 'dashboard-total-hero-group dashboard-total-hero-meta-group';
-  const heroMeta = document.createElement('small');
-  heroMeta.textContent = `${fmtIntNO.format(totals.projectCount)} prosjekter | ${totals.lineCount} linjer beregnet`;
-  heroMetaGroup.appendChild(heroMeta);
-  hero.append(totalGroup, heroMetaGroup, costGroup);
+  const orderCostGroup = document.createElement('div');
+  orderCostGroup.className = 'dashboard-total-hero-group dashboard-total-hero-order-cost-group';
+  const orderCostLabel = document.createElement('span');
+  orderCostLabel.className = 'dashboard-total-hero-secondary-label';
+  orderCostLabel.textContent = 'Ordrekostnader';
+  const orderCostValue = document.createElement('strong');
+  orderCostValue.className = 'dashboard-total-hero-secondary-value';
+  orderCostValue.textContent = formatDashboardMoney(orderTotals.allCost);
+  orderCostGroup.append(orderCostLabel, orderCostValue);
+
+  hero.append(totalGroup, orderGroup, costGroup, orderCostGroup);
 
   const marginHero = document.createElement('div');
   marginHero.className = 'dashboard-total-hero dashboard-total-hero-yellow';
@@ -497,9 +540,10 @@ export function renderDashboardTotalsWidget(state, projects, resolvers = {}){
   const profitHeroLabel = document.createElement('span');
   profitHeroLabel.textContent = 'Total fortjeneste';
   const profitHeroValue = document.createElement('strong');
+  profitHeroValue.className = 'dashboard-total-hero-profit-value';
   profitHeroValue.textContent = formatDashboardMoney(totals.finishedAllProfit);
   const profitHeroMeta = document.createElement('small');
-  profitHeroMeta.className = 'dashboard-total-hero-percent';
+  profitHeroMeta.className = 'dashboard-total-hero-percent dashboard-total-hero-profit-percent';
   profitHeroMeta.textContent = formatDashboardPercent(totals.finishedAllProfit, totals.allTotal);
   profitHero.append(profitHeroLabel, profitHeroValue, profitHeroMeta);
 
@@ -536,7 +580,7 @@ export function renderDashboardTotalsWidget(state, projects, resolvers = {}){
         secondaryPercent: formatDashboardPercent(data.values.secondaryMargin, data.values.secondaryTotal)
       }),
       createDashboardMetric(data.realProfitLabel, formatDashboardMoney(data.values.realProfit), formatDashboardPercent(data.values.realProfit, data.values.realProfitTotal), {
-        className: 'has-secondary-total',
+        className: 'has-secondary-total dashboard-total-profit-metric',
         moduleRows: 4,
         secondaryAfterPercent: true,
         secondaryLabel: data.secondaryRealProfitLabel,
@@ -548,6 +592,26 @@ export function renderDashboardTotalsWidget(state, projects, resolvers = {}){
     sectionsWrap.appendChild(section);
   });
   root.append(heroStack, sectionsWrap);
+  alignDashboardTotalHeroBreakdown(hero, sectionsWrap, [
+    totalGroup,
+    orderGroup,
+    costGroup,
+    orderCostGroup
+  ]);
+  if (typeof ResizeObserver === 'function'){
+    root._dashboardTotalAlignmentObserver?.disconnect();
+    const alignmentObserver = new ResizeObserver(()=>{
+      alignDashboardTotalHeroBreakdown(hero, sectionsWrap, [
+        totalGroup,
+        orderGroup,
+        costGroup,
+        orderCostGroup
+      ]);
+    });
+    alignmentObserver.observe(hero);
+    alignmentObserver.observe(sectionsWrap);
+    root._dashboardTotalAlignmentObserver = alignmentObserver;
+  }
 }
 
 function escapeDashboardReportHtml(value){
@@ -1022,6 +1086,68 @@ export function renderDashboardProjectStatusList(projects, statusId, helpers = {
       btn.append(titleEl, metaEl, statusEl);
       list.appendChild(btn);
     });
+}
+
+export function openDashboardCustomerProjectsModal(projects, customerName, helpers = {}){
+  const modal = $('dashboardProjectStatusModal');
+  if (!modal) return;
+  const list = $('dashboardProjectStatusList');
+  const title = $('dashboardProjectStatusTitle');
+  const subtitle = $('dashboardProjectStatusSubtitle');
+  const openAllFlowBtn = $('dashboardProjectStatusOpenAllFlow');
+  const getProjectStatusConfig = helpers.getProjectStatusConfig;
+  if (!list || typeof getProjectStatusConfig !== 'function') return;
+  const customer = String(customerName || '').trim();
+  const matchesCustomer = typeof helpers.matchesCustomer === 'function'
+    ? helpers.matchesCustomer
+    : project => String(project?.customer || '').trim().toLowerCase() === customer.toLowerCase();
+  const visibleProjects = (Array.isArray(projects) ? projects : [])
+    .filter(project=>matchesCustomer(project, customer))
+    .slice()
+    .sort((a, b)=>{
+      const compareProjectsForSort = typeof helpers.compareProjectsForSort === 'function'
+        ? helpers.compareProjectsForSort
+        : (()=>0);
+      return compareProjectsForSort(a, b, 'date_newest');
+    });
+  modal.dataset.modalMode = 'customer-projects';
+  delete modal.dataset.statusId;
+  delete modal.dataset.flowStatusLabel;
+  if (title) title.textContent = `Prosjekter: ${customer || 'Ukjent kunde'}`;
+  if (subtitle) subtitle.textContent = `${fmtIntNO.format(visibleProjects.length)} prosjekter`;
+  if (openAllFlowBtn) openAllFlowBtn.hidden = true;
+  list.innerHTML = '';
+  if (!visibleProjects.length){
+    const empty = document.createElement('div');
+    empty.className = 'dashboard-status-project-empty';
+    empty.textContent = 'Ingen prosjekter er registrert på kunden.';
+    list.appendChild(empty);
+    modal.style.display = 'flex';
+    return;
+  }
+  visibleProjects.forEach(project=>{
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'dashboard-status-project-item';
+    button.dataset.dashboardOpenProject = project.id || '';
+    const projectTitle = project.projectNumber
+      ? `${project.projectNumber} - ${project.name || 'Uten navn'}`
+      : (project.name || 'Uten navn');
+    const status = getProjectStatusConfig(project);
+    const lineCount = Array.isArray(project.lines) ? project.lines.length : 0;
+    const titleEl = document.createElement('span');
+    titleEl.className = 'dashboard-status-project-title';
+    titleEl.textContent = projectTitle;
+    const metaEl = document.createElement('span');
+    metaEl.className = 'dashboard-status-project-meta';
+    metaEl.textContent = `${project.contactPerson || 'Uten kontaktperson'} | ${fmtIntNO.format(lineCount)} linjer`;
+    const statusEl = document.createElement('span');
+    statusEl.className = `project-status-badge is-${status.tone}`;
+    statusEl.textContent = status.label;
+    button.append(titleEl, metaEl, statusEl);
+    list.appendChild(button);
+  });
+  modal.style.display = 'flex';
 }
 
 function getProjectsForDashboardFlowStatus(projects, statusLabel, getProjectFlowStatusForProject){

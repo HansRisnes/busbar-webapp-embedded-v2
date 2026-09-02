@@ -58,7 +58,13 @@ function appendGlobalDataDetails(parent, rows) {
   rows.forEach(([label, value]) => {
     const row = document.createElement('p');
     row.className = 'global-data-detail';
-    row.textContent = `${label}: ${String(value || '').trim() || '-'}`;
+    const labelEl = document.createElement('strong');
+    labelEl.className = 'global-data-detail-label';
+    labelEl.textContent = `${label}:`;
+    const valueEl = document.createElement('span');
+    valueEl.className = 'global-data-detail-value';
+    valueEl.textContent = ` ${String(value || '').trim() || '-'}`;
+    row.append(labelEl, valueEl);
     details.appendChild(row);
   });
   parent.appendChild(details);
@@ -104,6 +110,11 @@ export function renderCompanyCardsList(options = {}) {
   filtered.forEach(customer => {
     const item = document.createElement('article');
     item.className = 'global-data-card';
+    item.dataset.customerProjects = customer.name;
+    item.addEventListener('click', event=>{
+      if (event.target instanceof Element && event.target.closest('button')) return;
+      callbacks.openCustomerProjects?.(customer);
+    });
     const body = document.createElement('div');
     body.className = 'global-data-card-body';
     const title = document.createElement('h3');

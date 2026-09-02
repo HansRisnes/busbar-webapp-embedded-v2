@@ -119,6 +119,7 @@ import {
   hasDashboardUI,
   initDashboardShell as initDashboardShellModule,
   closeDashboardProjectStatusModal,
+  openDashboardCustomerProjectsModal as openDashboardCustomerProjectsModalModule,
   openDashboardFlowStatusModal as openDashboardFlowStatusModalModule,
   openDashboardProjectStatusModal as openDashboardProjectStatusModalModule,
   renderDashboardEmailProjectSuggestionsWidget as renderDashboardEmailProjectSuggestionsWidgetModule,
@@ -256,8 +257,8 @@ const projectFlowBetaState = {
   visualTaskStatus: {},
   collapsedItems: {},
   visualPriority: {},
-  visualAssignee: {},
-  visualSchedule: {}
+    visualAssignee: {},
+    visualSchedule: {}
 };
 const offerDetailsWarningState = {
   resolver: null
@@ -1545,7 +1546,12 @@ function updateAuthUI(){
   });
   updateEmailMailboxAccessUi();
   renderGlobalCustomerViews();
-  renderProjectFlowView();
+  if (dashboardState.activePage === 'project-flow'){
+    const projectFlowRoot = $('projectFlowTimeline');
+    if (projectFlowRoot && !projectFlowRoot.children.length){
+      renderProjectFlowView();
+    }
+  }
 }
 
 function authHeaders(){
@@ -4400,7 +4406,8 @@ function renderCompanyCardsList() {
     globalListState,
     callbacks: {
       handleDeleteCompany,
-      openCompanyEditForm
+      openCompanyEditForm,
+      openCustomerProjects
     }
   });
 }
@@ -4414,6 +4421,15 @@ function renderContactPersonsList() {
       handleDeleteContact,
       openContactEditForm
     }
+  });
+}
+
+function openCustomerProjects(customer){
+  if (!customer?.name) return;
+  openDashboardCustomerProjectsModalModule(projectState.projects, customer.name, {
+    compareProjectsForSort: compareProjectsForSortModule,
+    getProjectStatusConfig,
+    matchesCustomer: project => normalizeLookupKey(project?.customer) === normalizeLookupKey(customer.name)
   });
 }
 
