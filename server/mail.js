@@ -1272,9 +1272,11 @@ function applyProjectWonDateOverrides(archive) {
     (Array.isArray(user?.projects) ? user.projects : []).forEach(project => {
       const projectNumber = safeString(project?.projectNumber);
       const wonAt = PROJECT_WON_DATE_OVERRIDES.get(projectNumber);
-      if (!wonAt || project?.projectWonDateOverrideApplied === true) return;
+      if (!wonAt || project?.projectCreatedDateOverrideApplied === true) return;
       project.projectWonAt = wonAt;
+      project.createdAt = wonAt;
       project.projectWonDateOverrideApplied = true;
+      project.projectCreatedDateOverrideApplied = true;
       updated += 1;
     });
   });
@@ -1382,6 +1384,7 @@ function normalizeProjectRecord(raw) {
     projectStatusChangedAt,
     projectWonAt,
     projectWonDateOverrideApplied: raw.projectWonDateOverrideApplied === true,
+    projectCreatedDateOverrideApplied: raw.projectCreatedDateOverrideApplied === true,
     createdAt: toIsoTimestamp(raw.createdAt, now),
     updatedAt: toIsoTimestamp(raw.updatedAt || raw.createdAt, now),
     selectedAddonConfig,

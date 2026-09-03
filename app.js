@@ -4080,6 +4080,7 @@ function normalizeProject(raw){
     projectStatusChangedAt,
     projectWonAt,
     projectWonDateOverrideApplied: raw.projectWonDateOverrideApplied === true,
+    projectCreatedDateOverrideApplied: raw.projectCreatedDateOverrideApplied === true,
     sourceEmailConversationId: String(raw.sourceEmailConversationId || raw.emailConversationId || '').trim(),
     sourceEmailMessageId: String(raw.sourceEmailMessageId || raw.emailMessageId || '').trim(),
     sourceEmailSubject: String(raw.sourceEmailSubject || '').trim(),
