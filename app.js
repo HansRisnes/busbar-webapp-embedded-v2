@@ -551,7 +551,37 @@ function resolveTapOffOfferRows(source = lastCalc){
       group.qty = Number.isFinite(qty) ? qty : group.qty;
     }
   });
+  if (!groups.size){
+    const savedInput = source?.inputs || lastCalcInput || lastEmailPayload?.inputs || {};
+    const savedItems = normalizeBoxItems(
+      savedInput.boxItems,
+      savedInput.boxSel,
+      savedInput.boxQty,
+      savedInput.boxInnmatSum
+    );
+    const totalQty = savedItems.reduce((sum, item)=>sum + Number(item.boxQty || 0), 0);
+    const savedCostTotal = Number(source?.tapOffBoxTotal ?? lastEmailPayload?.totals?.tapOffBoxTotal);
+    const savedOfferTotal = Number(source?.tapOffOfferTotal ?? lastEmailPayload?.totals?.tapOffOfferTotal);
+    savedItems.forEach((item, index)=>{
+      const qty = Number(item.boxQty || 0);
+      const share = totalQty > 0 ? qty / totalQty : 1 / savedItems.length;
+      const cost = Number.isFinite(savedCostTotal) ? round2(savedCostTotal * share) : 0;
+      const pricing = calculateDgPricing(cost, source?.tapOffMarginRate ?? currentTapOffMarginRate);
+      const total = Number.isFinite(savedOfferTotal) ? round2(savedOfferTotal * share) : pricing.totalWithDg;
+      const id = String(item.id || `saved-tapoff-${index}`);
+      groups.set(id, {
+        id,
+        label: boxLabelFromSelection(item.boxSel) || 'Avtappingsboks',
+        cost,
+        qty,
+        dgRate: pricing.dgRate,
+        dg: round2(total - cost),
+        total
+      });
+    });
+  }
   return Array.from(groups.values()).map(group=>{
+    if (Number.isFinite(group.total)) return group;
     const pricing = calculateDgPricing(group.cost, group.dgRate);
     return {
       ...group,
