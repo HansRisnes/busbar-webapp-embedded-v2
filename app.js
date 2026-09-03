@@ -494,11 +494,11 @@ function specialElementLabelFromSelection(value){
 }
 
 function isSeparateTapOffBoxType(value){
-  return ['plug_in_box', 'tap_off_box'].includes(String(value || '').trim().toLowerCase());
+  return ['plug_in_box', 'tap_off_box', 'bolt_on_box'].includes(String(value || '').trim().toLowerCase());
 }
 
 function isTapOffInnmatType(value){
-  return ['plug_in_box_innmat', 'tap_off_box_innmat'].includes(String(value || '').trim().toLowerCase());
+  return ['plug_in_box_innmat', 'tap_off_box_innmat', 'bolt_on_box_innmat'].includes(String(value || '').trim().toLowerCase());
 }
 
 function isSeparateTapOffBoxBomLine(entry){

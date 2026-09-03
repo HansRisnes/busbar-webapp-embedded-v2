@@ -2072,7 +2072,7 @@ function isSeparateTapOffBoxType(value) {
 }
 
 function isTapOffInnmatType(value) {
-  return ['plug_in_box_innmat', 'tap_off_box_innmat'].includes(safeString(value).toLowerCase());
+  return ['plug_in_box_innmat', 'tap_off_box_innmat', 'bolt_on_box_innmat'].includes(safeString(value).toLowerCase());
 }
 
 function isSeparateTapOffBoxBomLine(entry) {
@@ -2143,7 +2143,7 @@ function resolveTapOffOfferPriceTotal(line, input = {}) {
     ? line.totals
     : {};
   const explicit = toFiniteNumber(lineTotals.tapOffOfferTotal);
-  if (Number.isFinite(explicit)) return round2(explicit);
+  if (Number.isFinite(explicit) && explicit > 0) return round2(explicit);
   const cost = resolveTapOffBoxPriceTotal(line, input);
   if (!Number.isFinite(cost)) return NaN;
   const rate = lineTotals.tapOffMarginRate ?? input?.tapOffMarginRate ?? lineTotals.marginRate ?? input?.marginRate;
@@ -2397,7 +2397,7 @@ function resolveSpecialElementOfferPriceTotal(line, input = {}) {
     ? line.totals
     : {};
   const explicit = toFiniteNumber(lineTotals.specialElementOfferTotal);
-  if (Number.isFinite(explicit)) return round2(explicit);
+  if (Number.isFinite(explicit) && explicit > 0) return round2(explicit);
   const cost = resolveSpecialElementCostTotal(line, input);
   if (!Number.isFinite(cost)) return NaN;
   const rate = lineTotals.tapOffMarginRate ?? input?.tapOffMarginRate ?? lineTotals.marginRate ?? input?.marginRate;
@@ -2435,6 +2435,23 @@ function applyMaterialOfferUnitPrice(unitCost, input = {}, lineTotals = {}) {
 function formatMaterialOfferUnitPrice(unitCost, input = {}, lineTotals = {}) {
   const price = applyMaterialOfferUnitPrice(unitCost, input, lineTotals);
   return Number.isFinite(price) ? formatNoCurrencyWithKr(price) : '';
+}
+
+function resolveMeterMaterialUnitCost(line, input = {}, lineTotals = {}) {
+  const meterQty = toFiniteNumber(input?.meter);
+  if (!Number.isFinite(meterQty) || meterQty <= 0) return NaN;
+
+  const bom = Array.isArray(line?.bom) ? line.bom : [];
+  const material = bom.reduce((sum, entry)=>{
+    if (isSeparateTapOffBoxBomLine(entry) || safeString(entry?.specialElementGroupId)) return sum;
+    return sum + resolveBomLineSum(entry);
+  }, 0);
+  if (material > 0) return round2(material / meterQty);
+
+  const storedMaterial = toFiniteNumber(lineTotals?.material);
+  return Number.isFinite(storedMaterial) && storedMaterial > 0
+    ? round2(storedMaterial / meterQty)
+    : NaN;
 }
 
 const UNIT_PRICE_PLACEHOLDER_GROUPS = [
@@ -2503,12 +2520,9 @@ function buildUnitPricePlaceholders(line, input, lineTotals, fireBarrierPriceInd
   const expansionQty = resolveExpansionQtyFromLine(line, input);
   const tapOffQty = resolveTapOffItemsFromLine(line, input).reduce((sum, item)=>sum + (toFiniteNumber(item?.qty) || 0), 0);
   const values = {
-    meter: hasPositiveQuantity(meterQty) ? formatMaterialOfferUnitPrice(rawUnit('meter') || resolveBomUnitByType(line, [
-      'straight_500_1000',
-      'straight_500_1000_dist',
-      'xcm_feeder_600_1500',
-      'xcm_dist_1000_1500'
-    ]), input, lineTotals) : '',
+    meter: hasPositiveQuantity(meterQty)
+      ? formatMaterialOfferUnitPrice(resolveMeterMaterialUnitCost(line, input, lineTotals), input, lineTotals)
+      : '',
     vinkelVertikal: hasPositiveQuantity(verticalAngleQty)
       ? formatMaterialOfferUnitPrice(rawUnit('vinkelVertikal') || rawUnit('vinkel') || resolveBomUnitByType(line, 'elbow_vertical_90'), input, lineTotals)
       : '',
