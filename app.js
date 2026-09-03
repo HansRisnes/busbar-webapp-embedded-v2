@@ -4055,6 +4055,11 @@ function normalizeProjectTodos(items){
 function normalizeProject(raw){
   if (!raw) return null;
   const fallback = new Date().toISOString();
+  const projectStatus = normalizeProjectStatus(raw.projectStatus || raw.status);
+  const projectStatusChangedAt = raw.projectStatusChangedAt || raw.statusChangedAt || raw.updatedAt || raw.createdAt || fallback;
+  const projectWonAt = raw.projectWonAt || raw.wonAt || (
+    ['won', 'finished'].includes(projectStatus) ? projectStatusChangedAt : ''
+  );
   const selectedAddonConfig = normalizeSelectedAddonConfig(raw.selectedAddonConfig || null, null);
   return {
     id: raw.id || generateProjectId(),
@@ -4071,7 +4076,9 @@ function normalizeProject(raw){
     projectFolderName: String(raw.projectFolderName || '').trim(),
     projectFolderCreated: raw.projectFolderCreated === true,
     projectFolderWebUrl: String(raw.projectFolderWebUrl || '').trim(),
-    projectStatus: normalizeProjectStatus(raw.projectStatus || raw.status),
+    projectStatus,
+    projectStatusChangedAt,
+    projectWonAt,
     sourceEmailConversationId: String(raw.sourceEmailConversationId || raw.emailConversationId || '').trim(),
     sourceEmailMessageId: String(raw.sourceEmailMessageId || raw.emailMessageId || '').trim(),
     sourceEmailSubject: String(raw.sourceEmailSubject || '').trim(),
@@ -5797,8 +5804,18 @@ function setProjectStatus(projectId, status){
   const project = getProjectById(projectId);
   if (!project) return;
   const nextStatus = normalizeProjectStatus(status);
+  const currentStatus = normalizeProjectStatus(project.projectStatus);
+  const changedAt = new Date().toISOString();
   project.projectStatus = nextStatus;
-  project.updatedAt = new Date().toISOString();
+  project.projectStatusChangedAt = changedAt;
+  if (nextStatus === 'won'){
+    project.projectWonAt = changedAt;
+  } else if (nextStatus === 'finished' && !project.projectWonAt){
+    project.projectWonAt = changedAt;
+  } else if (!['won', 'finished'].includes(nextStatus) && ['won', 'finished'].includes(currentStatus)){
+    project.projectWonAt = '';
+  }
+  project.updatedAt = changedAt;
   saveProjectsToStorage();
   sortProjects();
   if (projectIsArchived(project)){

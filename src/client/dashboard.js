@@ -295,6 +295,23 @@ function getDashboardProjectCreatedDate(project){
   return Number.isFinite(timestamp) ? new Date(timestamp) : null;
 }
 
+function getDashboardProjectWonDate(project){
+  const timestamp = new Date(
+    project?.projectWonAt
+      || project?.wonAt
+      || project?.projectStatusChangedAt
+      || project?.statusChangedAt
+      || ''
+  ).getTime();
+  return Number.isFinite(timestamp) ? new Date(timestamp) : null;
+}
+
+function formatDashboardDate(value){
+  const date = value instanceof Date ? value : new Date(value || '');
+  if (Number.isNaN(date.getTime())) return 'Ikke registrert';
+  return date.toLocaleDateString('nb-NO');
+}
+
 function setDashboardSelectOptions(select, options, selectedValue){
   if (!select) return selectedValue;
   const normalizedSelected = String(selectedValue || 'all');
@@ -323,12 +340,25 @@ function filterDashboardProjectsByCreatedAt(projects, year, month){
   });
 }
 
+function filterDashboardProjectsByWonAt(projects, year, month){
+  const selectedYear = String(year || 'all');
+  const selectedMonth = String(month || 'all');
+  return (Array.isArray(projects) ? projects : []).filter(project=>{
+    if (selectedYear === 'all' && selectedMonth === 'all') return true;
+    const wonAt = getDashboardProjectWonDate(project);
+    if (!wonAt) return false;
+    if (selectedYear !== 'all' && String(wonAt.getFullYear()) !== selectedYear) return false;
+    if (selectedMonth !== 'all' && String(wonAt.getMonth() + 1) !== selectedMonth) return false;
+    return true;
+  });
+}
+
 function prepareDashboardTotalFilters(state, projects){
   const yearSelect = $('dashboardTotalsYearFilter');
   const monthSelect = $('dashboardTotalsMonthFilter');
   const years = Array.from(new Set(
     (Array.isArray(projects) ? projects : [])
-      .map(getDashboardProjectCreatedDate)
+      .flatMap(project=>[getDashboardProjectCreatedDate(project), getDashboardProjectWonDate(project)])
       .filter(Boolean)
       .map(date=>date.getFullYear())
   ))
@@ -450,9 +480,14 @@ export function renderDashboardTotalsWidget(state, projects, resolvers = {}){
     ? resolvers.getProjectStatusConfig
     : (project=>({ id: project?.projectStatus || '' }));
   const orderTotals = getDashboardTotals(
-    filteredProjects.filter(project=>getStatusConfig(project)?.id === 'won'),
+    filterDashboardProjectsByWonAt(
+      (Array.isArray(projects) ? projects : []).filter(project=>['won', 'finished'].includes(getStatusConfig(project)?.id)),
+      state.totalsYear,
+      state.totalsMonth
+    ),
     resolvers
   );
+  const orderProfit = round2(orderTotals.allTotal - orderTotals.allCost);
   const sections = [
     {
       totalLabel: 'Salgsverdi strømskinne',
@@ -541,10 +576,10 @@ export function renderDashboardTotalsWidget(state, projects, resolvers = {}){
   profitHeroLabel.textContent = 'Total fortjeneste';
   const profitHeroValue = document.createElement('strong');
   profitHeroValue.className = 'dashboard-total-hero-profit-value';
-  profitHeroValue.textContent = formatDashboardMoney(totals.finishedAllProfit);
+  profitHeroValue.textContent = formatDashboardMoney(orderProfit);
   const profitHeroMeta = document.createElement('small');
   profitHeroMeta.className = 'dashboard-total-hero-percent dashboard-total-hero-profit-percent';
-  profitHeroMeta.textContent = formatDashboardPercent(totals.finishedAllProfit, totals.allTotal);
+  profitHeroMeta.textContent = formatDashboardPercent(orderProfit, orderTotals.allTotal);
   profitHero.append(profitHeroLabel, profitHeroValue, profitHeroMeta);
 
   const heroStack = document.createElement('div');
@@ -1079,7 +1114,7 @@ export function renderDashboardProjectStatusList(projects, statusId, helpers = {
       titleEl.textContent = title;
       const metaEl = document.createElement('span');
       metaEl.className = 'dashboard-status-project-meta';
-      metaEl.textContent = `${project.customer || 'Uten kunde'} | ${fmtIntNO.format(lineCount)} linjer`;
+      metaEl.textContent = `${project.customer || 'Uten kunde'} | ${fmtIntNO.format(lineCount)} linjer | Status satt: ${formatDashboardDate(project?.projectStatusChangedAt || project?.statusChangedAt || project?.updatedAt)}`;
       const statusEl = document.createElement('span');
       statusEl.className = `project-status-badge is-${status.tone}`;
       statusEl.textContent = status.label;

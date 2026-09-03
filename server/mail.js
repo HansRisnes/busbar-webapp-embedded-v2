@@ -1302,6 +1302,17 @@ function normalizeProjectFlowMilestoneRecord(raw) {
 function normalizeProjectRecord(raw) {
   if (!raw || typeof raw !== 'object') return null;
   const now = new Date().toISOString();
+  const projectStatus = normalizeProjectStatusRecord(raw.projectStatus || raw.status);
+  const projectStatusChangedAt = toIsoTimestamp(
+    raw.projectStatusChangedAt || raw.statusChangedAt || raw.updatedAt || raw.createdAt,
+    now
+  );
+  const projectWonAt = toIsoTimestamp(
+    raw.projectWonAt || raw.wonAt || (
+      ['won', 'finished'].includes(projectStatus) ? projectStatusChangedAt : ''
+    ),
+    ''
+  );
   const linesRaw = Array.isArray(raw.lines) ? raw.lines : [];
   const lines = linesRaw.map(normalizeLineRecord).filter(Boolean);
   const todosRaw = Array.isArray(raw.todos) ? raw.todos : [];
@@ -1326,7 +1337,9 @@ function normalizeProjectRecord(raw) {
     projectFolderName: safeString(raw.projectFolderName),
     projectFolderCreated: raw.projectFolderCreated === true,
     projectFolderWebUrl: safeString(raw.projectFolderWebUrl),
-    projectStatus: normalizeProjectStatusRecord(raw.projectStatus || raw.status),
+    projectStatus,
+    projectStatusChangedAt,
+    projectWonAt,
     createdAt: toIsoTimestamp(raw.createdAt, now),
     updatedAt: toIsoTimestamp(raw.updatedAt || raw.createdAt, now),
     selectedAddonConfig,
