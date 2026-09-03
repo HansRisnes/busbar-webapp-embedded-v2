@@ -116,6 +116,13 @@
           <label for="adminUserPosition">Stilling
             <input id="adminUserPosition" type="text" autocomplete="organization-title">
           </label>
+          <label for="adminUserRole">Rolle
+            <select id="adminUserRole">
+              <option value="standard">Standard</option>
+              <option value="administrator">Administrator</option>
+              <option value="insight">Innsyn</option>
+            </select>
+          </label>
         </div>
         <div class="actions">
           <button id="adminUserClearBtn" type="button" class="btn alt">Avbryt</button>
@@ -135,6 +142,7 @@
               <th><button type="button" class="admin-col-sort-btn" data-table="users" data-key="projectCount" data-type="number">Prosjekter <span class="sort-indicator">â†•</span></button></th>
               <th><button type="button" class="admin-col-sort-btn" data-table="users" data-key="lineCount" data-type="number">Linjer <span class="sort-indicator">â†•</span></button></th>
               <th><button type="button" class="admin-col-sort-btn" data-table="users" data-key="loginStatus" data-type="text">Innlogging <span class="sort-indicator">â†•</span></button></th>
+              <th>Rolle</th>
               <th>Handling</th>
             </tr>
           </thead>

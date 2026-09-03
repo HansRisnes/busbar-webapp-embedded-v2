@@ -471,6 +471,14 @@ function buildUserRows(users){
     const microsoftLinked = user?.microsoftLinked === true;
     const hasPassword = user?.hasPassword === true;
     const isAdmin = user?.isAdmin === true;
+    const appRole = String(user?.appRole || 'standard').trim().toLowerCase();
+    const role = user?.isEntraOwner === true
+      ? 'Entra Owner'
+      : appRole === 'administrator'
+        ? 'Administrator'
+        : appRole === 'insight'
+          ? 'Innsyn'
+          : 'Standard';
     const loginParts = [
       registered ? 'Registrert' : 'Kun prosjekt',
       microsoftLinked ? 'Microsoft' : '',
@@ -483,6 +491,8 @@ function buildUserRows(users){
       phone: profile.phone || '-',
       company: profile.company || '-',
       position: profile.position || '-',
+      role,
+      rawAppRole: appRole,
       projectCount: Number(user?.projectCount || 0),
       lineCount: Number(user?.lineCount || 0),
       loginStatus: loginParts.join(' / ') || '-',
@@ -622,7 +632,7 @@ function renderUsersTable(rowsInput){
 
   if (!rows.length){
     const tr = document.createElement('tr');
-    tr.innerHTML = '<td colspan="9">Ingen brukere er registrert enna.</td>';
+    tr.innerHTML = '<td colspan="10">Ingen brukere er registrert enna.</td>';
     tbody.appendChild(tr);
     return;
   }
@@ -638,6 +648,7 @@ function renderUsersTable(rowsInput){
       <td>${escapeHtml(String(row.projectCount))}</td>
       <td>${escapeHtml(String(row.lineCount))}</td>
       <td>${escapeHtml(row.loginStatus)}</td>
+      <td>${escapeHtml(row.role)}</td>
       <td class="admin-row-actions">
         <button type="button" class="btn alt btn-small" data-user-edit="true" data-email="${escapeHtml(row.email)}">Endre</button>
         <button type="button" class="btn danger btn-small" data-user-delete="true" data-email="${escapeHtml(row.email)}">Slett</button>
@@ -842,7 +853,8 @@ function fillUserForm(row){
     adminUserName: row?.rawProfile?.name || (row?.name === '-' ? '' : row?.name || ''),
     adminUserPhone: row?.rawProfile?.phone || (row?.phone === '-' ? '' : row?.phone || ''),
     adminUserCompany: row?.rawProfile?.company || (row?.company === '-' ? '' : row?.company || ''),
-    adminUserPosition: row?.rawProfile?.position || (row?.position === '-' ? '' : row?.position || '')
+    adminUserPosition: row?.rawProfile?.position || (row?.position === '-' ? '' : row?.position || ''),
+    adminUserRole: row?.rawAppRole || 'standard'
   };
   Object.entries(values).forEach(([id, value])=>{
     const el = $(id);
@@ -853,7 +865,7 @@ function fillUserForm(row){
 }
 
 function clearUserForm(){
-  ['adminUserOriginalEmail','adminUserEmail','adminUserName','adminUserPhone','adminUserCompany','adminUserPosition'].forEach(id=>{
+  ['adminUserOriginalEmail','adminUserEmail','adminUserName','adminUserPhone','adminUserCompany','adminUserPosition','adminUserRole'].forEach(id=>{
     const el = $(id);
     if (el) el.value = '';
   });
@@ -870,7 +882,8 @@ function getUserFormPayload(){
       phone: String($('adminUserPhone')?.value || '').trim(),
       company: String($('adminUserCompany')?.value || '').trim(),
       position: String($('adminUserPosition')?.value || '').trim()
-    }
+    },
+    appRole: String($('adminUserRole')?.value || 'standard').trim()
   };
 }
 

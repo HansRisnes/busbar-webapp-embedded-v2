@@ -563,29 +563,56 @@ function isFallbackAdminEmail(email) {
   return ADMIN_OWNER_EMAILS.has(normalizeEmail(email));
 }
 
+const APP_ROLE_STANDARD = 'standard';
+const APP_ROLE_ADMINISTRATOR = 'administrator';
+const APP_ROLE_INSIGHT = 'insight';
+const APP_ROLE_VALUES = new Set([
+  APP_ROLE_STANDARD,
+  APP_ROLE_ADMINISTRATOR,
+  APP_ROLE_INSIGHT
+]);
+
+function normalizeAppRole(value) {
+  const role = safeString(value).toLowerCase();
+  return APP_ROLE_VALUES.has(role) ? role : APP_ROLE_STANDARD;
+}
+
 function isStoredMicrosoftOwner(userRecord) {
   return Boolean(userRecord?.microsoft?.isOwner);
 }
 
-function resolveUserIsAdmin(userRecord) {
-  return isFallbackAdminEmail(userRecord?.email) || isStoredMicrosoftOwner(userRecord);
+function resolveUserAccess(userRecord) {
+  const appRole = normalizeAppRole(userRecord?.appRole);
+  const isEntraOwner = isFallbackAdminEmail(userRecord?.email) || isStoredMicrosoftOwner(userRecord);
+  const isAdmin = isEntraOwner || appRole === APP_ROLE_ADMINISTRATOR;
+  return {
+    appRole,
+    isEntraOwner,
+    isAdmin,
+    canViewAllProjects: isAdmin || appRole === APP_ROLE_INSIGHT,
+    canEditAllProjects: isAdmin
+  };
 }
 
-async function resolveUserIsAdminFresh(email) {
+function resolveUserIsAdmin(userRecord) {
+  return resolveUserAccess(userRecord).isAdmin;
+}
+
+async function resolveUserAccessFresh(email) {
   const normalizedEmail = normalizeEmail(email);
-  if (!isValidEmail(normalizedEmail)) return false;
-  if (isFallbackAdminEmail(normalizedEmail)) return true;
+  if (!isValidEmail(normalizedEmail)) return resolveUserAccess({ email: '' });
 
   return withUserAuthLock(async () => {
     const store = await readUserAuthStore();
     const userRecord = store.users[normalizedEmail] || { email: normalizedEmail };
-    if (resolveUserIsAdmin(userRecord)) return true;
+    const currentAccess = resolveUserAccess(userRecord);
+    if (currentAccess.isEntraOwner || currentAccess.appRole === APP_ROLE_ADMINISTRATOR) return currentAccess;
 
     const microsoftOid = safeString(userRecord?.microsoft?.oid);
-    if (!microsoftOid) return false;
+    if (!microsoftOid) return currentAccess;
 
     const isOwner = await isMicrosoftAppOwner(microsoftOid);
-    if (!isOwner) return false;
+    if (!isOwner) return currentAccess;
 
     store.users[normalizedEmail] = {
       ...userRecord,
@@ -598,8 +625,13 @@ async function resolveUserIsAdminFresh(email) {
       updatedAt: new Date().toISOString()
     };
     await writeUserAuthStore(store);
-    return true;
+    return resolveUserAccess(store.users[normalizedEmail]);
   });
+}
+
+async function resolveUserIsAdminFresh(email) {
+  const access = await resolveUserAccessFresh(email);
+  return access.isAdmin;
 }
 
 function createAuthToken(email, options = {}) {
@@ -607,6 +639,9 @@ function createAuthToken(email, options = {}) {
   const payload = {
     email,
     isAdmin: Boolean(options.isAdmin),
+    appRole: normalizeAppRole(options.appRole),
+    canViewAllProjects: Boolean(options.canViewAllProjects),
+    canEditAllProjects: Boolean(options.canEditAllProjects),
     iat: now,
     exp: now + AUTH_TOKEN_TTL_SECONDS
   };
@@ -630,7 +665,14 @@ function verifyAuthToken(token) {
     const exp = Number(payload?.exp);
     if (!isValidEmail(email) || !Number.isFinite(exp)) return null;
     if (exp < Math.floor(Date.now() / 1000)) return null;
-    return { email, isAdmin: payload?.isAdmin === true };
+    const appRole = normalizeAppRole(payload?.appRole);
+    return {
+      email,
+      isAdmin: payload?.isAdmin === true,
+      appRole,
+      canViewAllProjects: payload?.canViewAllProjects === true,
+      canEditAllProjects: payload?.canEditAllProjects === true
+    };
   } catch (_err) {
     return null;
   }
@@ -866,13 +908,11 @@ async function requireUserAuth(req, res, next) {
   if (!auth) {
     return res.status(401).json({ error: 'Logg inn for å hente prosjekter' });
   }
-  if (auth.isAdmin !== true) {
-    try {
-      auth.isAdmin = await resolveUserIsAdminFresh(auth.email);
-    } catch (err) {
-      console.warn('[auth] Kunne ikke oppdatere adminstatus fra brukerregister', err?.message || err);
-      auth.isAdmin = isFallbackAdminEmail(auth.email);
-    }
+  try {
+    Object.assign(auth, await resolveUserAccessFresh(auth.email));
+  } catch (err) {
+    console.warn('[auth] Kunne ikke oppdatere tilgang fra brukerregister', err?.message || err);
+    Object.assign(auth, resolveUserAccess({ email: auth.email, appRole: auth.appRole }));
   }
   req.userAuth = auth;
   return next();
@@ -914,6 +954,7 @@ function normalizeUserAuthRecord(email, raw) {
     : null;
   return {
     email,
+    appRole: normalizeAppRole(raw?.appRole),
     profile: normalizeUserProfile(raw?.profile || raw),
     passwordHash: safeString(raw?.passwordHash),
     ...(microsoft?.oid ? { microsoft } : {}),
@@ -1415,7 +1456,7 @@ function buildVisibleProjectsForAuth(archive, auth, authStore = { users: {} }) {
   const email = normalizeEmail(auth?.email);
   const deletedProjectIds = new Set(Array.isArray(archive?.deletedProjectIds) ? archive.deletedProjectIds.map(safeString).filter(Boolean) : []);
   const isDeletedProject = project => deletedProjectIds.has(safeString(project?.id));
-  if (!auth?.isAdmin) {
+  if (!auth?.canViewAllProjects) {
     const user = archive.users[email] || { email, updatedAt: null, projects: [] };
     return {
       email,
@@ -4162,13 +4203,13 @@ app.post('/api/auth/microsoft/session', async (req, res) => {
       await writeUserAuthStore(store);
       return store.users[microsoftUser.email];
     });
-    const isAdmin = resolveUserIsAdmin(userRecord);
+    const access = resolveUserAccess(userRecord);
 
     return res.json({
       email: userRecord.email,
       profile: userRecord.profile,
-      isAdmin,
-      token: createAuthToken(userRecord.email, { isAdmin })
+      ...access,
+      token: createAuthToken(userRecord.email, access)
     });
   } catch (err) {
     console.error('Microsoft-innlogging feilet', err);
@@ -4214,11 +4255,12 @@ app.post('/api/auth/register', async (req, res) => {
       return store.users[email];
     });
 
+    const access = resolveUserAccess(userRecord);
     return res.status(201).json({
       email: userRecord.email,
       profile: userRecord.profile,
-      isAdmin: resolveUserIsAdmin(userRecord),
-      token: createAuthToken(userRecord.email, { isAdmin: resolveUserIsAdmin(userRecord) })
+      ...access,
+      token: createAuthToken(userRecord.email, access)
     });
   } catch (err) {
     if (err?.statusCode === 409) {
@@ -4243,12 +4285,12 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(401).json({ error: 'Feil e-post eller passord' });
     }
 
-    const isAdmin = resolveUserIsAdmin(userRecord);
+    const access = resolveUserAccess(userRecord);
     return res.json({
       email: userRecord.email,
       profile: userRecord.profile,
-      isAdmin,
-      token: createAuthToken(userRecord.email, { isAdmin })
+      ...access,
+      token: createAuthToken(userRecord.email, access)
     });
   } catch (err) {
     console.error('Innlogging feilet', err);
@@ -4262,7 +4304,7 @@ app.get('/api/user-projects', requireUserAuth, async (req, res) => {
     if (!isValidEmail(email)) {
       return res.status(400).json({ error: 'Ugyldig e-post' });
     }
-    if (email !== req.userAuth.email && req.userAuth.isAdmin !== true) {
+    if (email !== req.userAuth.email && req.userAuth.canViewAllProjects !== true) {
       return res.status(403).json({ error: 'Ingen tilgang til denne brukeren' });
     }
     const visibleRecord = await withOfferNumberLock(async ()=>{
@@ -4292,6 +4334,9 @@ app.get('/api/user-projects', requireUserAuth, async (req, res) => {
       ownerEmails: visibleRecord.ownerEmails,
       deletedProjectIds: visibleRecord.deletedProjectIds,
       isAdmin: req.userAuth.isAdmin === true,
+      appRole: req.userAuth.appRole,
+      canViewAllProjects: req.userAuth.canViewAllProjects === true,
+      canEditAllProjects: req.userAuth.canEditAllProjects === true,
       projects: visibleRecord.projects
     });
   } catch (err) {
@@ -4306,7 +4351,7 @@ app.post('/api/user-projects/sync', requireUserAuth, async (req, res) => {
     if (!isValidEmail(email)) {
       return res.status(400).json({ error: 'Ugyldig e-post' });
     }
-    if (email !== req.userAuth.email && req.userAuth.isAdmin !== true) {
+    if (email !== req.userAuth.email && req.userAuth.canEditAllProjects !== true) {
       return res.status(403).json({ error: 'Ingen tilgang til denne brukeren' });
     }
     if (!Array.isArray(req.body?.projects)) {
@@ -4336,8 +4381,41 @@ app.post('/api/user-projects/sync', requireUserAuth, async (req, res) => {
         : {};
       const record = await withProjectArchiveLock(async () => {
         const archive = await readProjectArchive();
+        const canEditAllProjects = req.userAuth.canEditAllProjects === true;
+        const currentUserProjects = Array.isArray(archive.users?.[email]?.projects)
+          ? archive.users[email].projects
+          : [];
+        const currentUserProjectIds = new Set(currentUserProjects.map(project => safeString(project?.id)).filter(Boolean));
+        const projectOwnerById = new Map();
+        Object.entries(archive.users || {}).forEach(([ownerEmailRaw, user]) => {
+          const ownerEmail = normalizeEmail(ownerEmailRaw || user?.email);
+          (Array.isArray(user?.projects) ? user.projects : []).forEach(project => {
+            const projectId = safeString(project?.id);
+            if (projectId && isValidEmail(ownerEmail)) projectOwnerById.set(projectId, ownerEmail);
+          });
+        });
+        if (!canEditAllProjects) {
+          const invalidProject = normalizedProjects.find(project => {
+            const projectId = safeString(project?.id);
+            const requestedOwner = normalizeEmail(project?.projectOwnerEmail || project?.ownerEmail);
+            const storedOwner = projectOwnerById.get(projectId);
+            return (requestedOwner && requestedOwner !== email) || (storedOwner && storedOwner !== email);
+          });
+          const invalidDeletion = requestedDeletedProjectIds.find(projectId => {
+            const storedOwner = projectOwnerById.get(projectId);
+            return storedOwner && storedOwner !== email;
+          });
+          if (invalidProject || invalidDeletion) {
+            const err = new Error('Ingen tilgang til å endre andres prosjekter');
+            err.statusCode = 403;
+            throw err;
+          }
+        }
+
         const deletedProjectIds = new Set(Array.isArray(archive.deletedProjectIds) ? archive.deletedProjectIds.map(safeString).filter(Boolean) : []);
-        requestedDeletedProjectIds.forEach(id => deletedProjectIds.add(id));
+        requestedDeletedProjectIds.forEach(id => {
+          if (canEditAllProjects || currentUserProjectIds.has(id)) deletedProjectIds.add(id);
+        });
         if (requestedDeletedProjectIds.length) {
           Object.values(archive.users || {}).forEach(user => {
             if (!user || !Array.isArray(user.projects)) return;
@@ -4348,7 +4426,7 @@ app.post('/api/user-projects/sync', requireUserAuth, async (req, res) => {
         normalizedProjects.forEach(project=>{
           ensureProjectNumber(project, projectNumbers, counterState);
         });
-        if (req.userAuth.isAdmin === true) {
+        if (canEditAllProjects) {
           const grouped = new Map();
           normalizedProjects.forEach(project => {
             const ownerEmail = isValidEmail(project.projectOwnerEmail) ? project.projectOwnerEmail : email;
@@ -4403,11 +4481,14 @@ app.post('/api/user-projects/sync', requireUserAuth, async (req, res) => {
       ownerEmails: nextUserRecord.ownerEmails,
       deletedProjectIds: nextUserRecord.deletedProjectIds,
       isAdmin: req.userAuth.isAdmin === true,
+      appRole: req.userAuth.appRole,
+      canViewAllProjects: req.userAuth.canViewAllProjects === true,
+      canEditAllProjects: req.userAuth.canEditAllProjects === true,
       projects: nextUserRecord.projects
     });
   } catch (err) {
     console.error('Synk av brukerprosjekter feilet', err);
-    return res.status(500).json({ error: 'Kunne ikke synkronisere prosjekter' });
+    return res.status(err?.statusCode || 500).json({ error: err?.message || 'Kunne ikke synkronisere prosjekter' });
   }
 });
 
@@ -4943,13 +5024,16 @@ app.get('/api/admin/project-overview', requireAdminAuth, async (req, res) => {
       const lineCount = projectsWithCounts.reduce((sum, project) => {
         return sum + Number(project.lineCount || 0);
       }, 0);
+      const access = resolveUserAccess(authRecord || { email });
       return {
         email: user.email,
         profile: authRecord?.profile || null,
         registered: Boolean(authRecord),
         hasPassword: Boolean(authRecord?.passwordHash),
         microsoftLinked: Boolean(authRecord?.microsoft?.oid),
-        isAdmin: resolveUserIsAdmin(authRecord || { email }),
+        isAdmin: access.isAdmin,
+        isEntraOwner: access.isEntraOwner,
+        appRole: access.appRole,
         authUpdatedAt: authRecord?.updatedAt || null,
         updatedAt: user.updatedAt,
         projectCount: projectsWithCounts.length,
@@ -4986,6 +5070,10 @@ app.post('/api/admin/users/profile', requireAdminAuth, async (req, res) => {
   try {
     const email = normalizeEmail(req.body?.email);
     const profile = normalizeUserProfile(req.body?.profile || req.body);
+    const requestedAppRole = safeString(req.body?.appRole).toLowerCase();
+    if (requestedAppRole && !APP_ROLE_VALUES.has(requestedAppRole)) {
+      return res.status(400).json({ error: 'Ugyldig brukerrolle' });
+    }
     if (!isValidEmail(email)) {
       return res.status(400).json({ error: 'Ugyldig e-post' });
     }
@@ -4997,6 +5085,7 @@ app.post('/api/admin/users/profile', requireAdminAuth, async (req, res) => {
       store.users[email] = {
         ...existing,
         email,
+        appRole: requestedAppRole ? normalizeAppRole(requestedAppRole) : normalizeAppRole(existing.appRole),
         profile,
         passwordHash: safeString(existing.passwordHash),
         ...(existing.microsoft?.oid ? { microsoft: existing.microsoft } : {}),
@@ -5010,6 +5099,7 @@ app.post('/api/admin/users/profile', requireAdminAuth, async (req, res) => {
     return res.json({
       email: userRecord.email,
       profile: userRecord.profile,
+      appRole: normalizeAppRole(userRecord.appRole),
       updatedAt: userRecord.updatedAt
     });
   } catch (err) {

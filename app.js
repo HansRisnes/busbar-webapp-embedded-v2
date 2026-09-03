@@ -180,7 +180,16 @@ const marketDataState = { snapshot: null };
 const marketTickerState = { timerId: null };
 let lastCalc = null; // delsummer for live frakt-oppdatering
 let lastCalcInput = null;
-let authState = { loggedIn: false, username: '', token: '', profile: null, isAdmin: false };
+let authState = {
+  loggedIn: false,
+  username: '',
+  token: '',
+  profile: null,
+  isAdmin: false,
+  appRole: 'standard',
+  canViewAllProjects: false,
+  canEditAllProjects: false
+};
 const LEGACY_PROJECTS_STORAGE_KEY = 'busbar.projects.v1';
 const projectSyncState = {
   timerId: null,
@@ -1453,7 +1462,16 @@ function loadAuthFromSession(){
     const isAdmin = parsed.isAdmin === true || ADMIN_NAV_ALLOWED_EMAILS.includes(username);
     if (!hasValidUserEmail(username)) return;
     if (!token) return;
-    authState = { loggedIn: true, username, token, profile, isAdmin };
+    authState = {
+      loggedIn: true,
+      username,
+      token,
+      profile,
+      isAdmin,
+      appRole: normalizeAppRole(parsed.appRole),
+      canViewAllProjects: parsed.canViewAllProjects === true || isAdmin,
+      canEditAllProjects: parsed.canEditAllProjects === true || isAdmin
+    };
   }catch(err){
     console.warn('Kunne ikke lese innloggingsstatus', err);
   }
@@ -1467,7 +1485,10 @@ function persistAuthToSession(){
         username: authState.username || '',
         token: authState.token || '',
         profile: authState.profile || null,
-        isAdmin: authState.isAdmin === true
+        isAdmin: authState.isAdmin === true,
+        appRole: authState.appRole || 'standard',
+        canViewAllProjects: authState.canViewAllProjects === true,
+        canEditAllProjects: authState.canEditAllProjects === true
       });
       return;
     }
@@ -1480,6 +1501,35 @@ function persistAuthToSession(){
 function canEditGlobalCustomerData(){
   if (!authState.loggedIn) return false;
   return authState.isAdmin === true || ADMIN_NAV_ALLOWED_EMAILS.includes(normalizeUserEmail(authState.username));
+}
+
+function normalizeAppRole(value){
+  const role = String(value || '').trim().toLowerCase();
+  return ['standard', 'administrator', 'insight'].includes(role) ? role : 'standard';
+}
+
+function getAuthAccessFromPayload(payload, username){
+  const isAdmin = payload?.isAdmin === true || ADMIN_NAV_ALLOWED_EMAILS.includes(username);
+  const appRole = normalizeAppRole(payload?.appRole);
+  return {
+    isAdmin,
+    appRole,
+    canViewAllProjects: payload?.canViewAllProjects === true || isAdmin,
+    canEditAllProjects: payload?.canEditAllProjects === true || isAdmin
+  };
+}
+
+function applyAuthAccessFromPayload(payload){
+  if (!authState.loggedIn) return;
+  const access = getAuthAccessFromPayload(payload, normalizeUserEmail(authState.username));
+  const changed = authState.isAdmin !== access.isAdmin
+    || authState.appRole !== access.appRole
+    || authState.canViewAllProjects !== access.canViewAllProjects
+    || authState.canEditAllProjects !== access.canEditAllProjects;
+  if (!changed) return;
+  Object.assign(authState, access);
+  persistAuthToSession();
+  updateAuthUI();
 }
 
 function canAccessProjectMailbox(){
@@ -1680,7 +1730,12 @@ async function exchangeMicrosoftToken(idToken){
   if (!hasValidUserEmail(username) || !token){
     throw new Error('Serveren returnerte ugyldig Microsoft-innlogging.');
   }
-  return { username, token, profile: normalizeProfilePayload(payload?.profile), isAdmin: payload?.isAdmin === true };
+  return {
+    username,
+    token,
+    profile: normalizeProfilePayload(payload?.profile),
+    ...getAuthAccessFromPayload(payload, username)
+  };
 }
 
 async function getMicrosoftAccountForGraph(){
@@ -3040,6 +3095,10 @@ async function findLatestProjectOfferFile(project){
 async function createProjectFolderFromTemplate(projectId, triggerBtn){
   const project = getProjectById(projectId);
   if (!project) return;
+  if (!canEditProjectRecord(project)){
+    window.alert('Du har kun lesetilgang til dette prosjektet.');
+    return;
+  }
   if (!authState.loggedIn){
     showLoginModal();
     return;
@@ -3309,7 +3368,16 @@ async function handleMicrosoftLogin(){
 }
 
 function clearAuthSession(){
-  authState = { loggedIn: false, username: '', token: '', profile: null, isAdmin: false };
+  authState = {
+    loggedIn: false,
+    username: '',
+    token: '',
+    profile: null,
+    isAdmin: false,
+    appRole: 'standard',
+    canViewAllProjects: false,
+    canEditAllProjects: false
+  };
   resetProjectFolderStatusState();
   emailProjectSuggestionState.dismissedLoaded = false;
   emailProjectSuggestionState.dismissedLoading = false;
@@ -3354,7 +3422,12 @@ async function submitAuthRequest(mode, email, password, options = {}){
   if (!hasValidUserEmail(username) || !token){
     throw new Error('Serveren returnerte ugyldig innloggingsdata.');
   }
-  return { username, token, profile: normalizeProfilePayload(payload?.profile), isAdmin: payload?.isAdmin === true };
+  return {
+    username,
+    token,
+    profile: normalizeProfilePayload(payload?.profile),
+    ...getAuthAccessFromPayload(payload, username)
+  };
 }
 
 function showLoginModal(){
@@ -3419,7 +3492,7 @@ async function completeAuth(auth, statusMessage){
     username,
     token: auth.token,
     profile: auth.profile || null,
-    isAdmin: auth.isAdmin === true || ADMIN_NAV_ALLOWED_EMAILS.includes(username)
+    ...getAuthAccessFromPayload(auth, username)
   };
   emailProjectSuggestionState.dismissedLoaded = false;
   emailProjectSuggestionState.dismissedLoading = false;
@@ -4117,6 +4190,19 @@ function getCurrentUserEmail(){
   return email;
 }
 
+function canEditProjectRecord(project){
+  if (!authState.loggedIn) return false;
+  if (authState.canEditAllProjects === true || authState.isAdmin === true) return true;
+  const projectOwner = normalizeUserEmail(project?.projectOwnerEmail || project?.ownerEmail || '');
+  return Boolean(projectOwner && projectOwner === getCurrentUserEmail());
+}
+
+function getProjectsForPersonalPages(){
+  const projects = Array.isArray(projectState.projects) ? projectState.projects : [];
+  if (authState.appRole !== 'insight' || authState.canEditAllProjects === true) return projects;
+  return projects.filter(canEditProjectRecord);
+}
+
 function getProjectsStorageKeyForEmail(email){
   const normalized = normalizeUserEmail(email);
   if (!hasValidUserEmail(normalized)) return '';
@@ -4249,14 +4335,13 @@ async function fetchUserProjectsFromServer(email){
   }
   const payload = await res.json();
   const projects = Array.isArray(payload?.projects) ? payload.projects : [];
-  if (payload?.isAdmin === true && authState.isAdmin !== true){
-    authState.isAdmin = true;
-    persistAuthToSession();
-    updateAuthUI();
-  }
+  applyAuthAccessFromPayload(payload);
   return {
     updatedAt: typeof payload?.updatedAt === 'string' ? payload.updatedAt : null,
     isAdmin: payload?.isAdmin === true,
+    appRole: normalizeAppRole(payload?.appRole),
+    canViewAllProjects: payload?.canViewAllProjects === true,
+    canEditAllProjects: payload?.canEditAllProjects === true,
     deletedProjectIds: Array.isArray(payload?.deletedProjectIds) ? payload.deletedProjectIds.map(String).filter(Boolean) : [],
     ownerEmails: Array.isArray(payload?.ownerEmails) ? payload.ownerEmails.map(normalizeUserEmail).filter(hasValidUserEmail) : [],
     projects: projects.map(normalizeProject).filter(Boolean)
@@ -4265,14 +4350,17 @@ async function fetchUserProjectsFromServer(email){
 
 async function pushUserProjectsToServer(email, projects){
   const deletedProjectIds = Array.from(projectSyncState.deletedProjectIds).filter(Boolean);
+  const projectsForSync = authState.canEditAllProjects === true
+    ? (Array.isArray(projects) ? projects : [])
+    : (Array.isArray(projects) ? projects : []).filter(canEditProjectRecord);
   const res = await fetch(buildApiUrl('/api/user-projects/sync'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify({
       email,
-      ownerEmails: authState.isAdmin === true ? projectState.projectOwnerEmails : undefined,
+      ownerEmails: authState.canEditAllProjects === true ? projectState.projectOwnerEmails : undefined,
       deletedProjectIds,
-      projects: Array.isArray(projects) ? projects : []
+      projects: projectsForSync
     })
   });
   if (res.status === 401 || res.status === 403){
@@ -4290,11 +4378,7 @@ async function pushUserProjectsToServer(email, projects){
     throw new Error(appendApiBaseHint(message, res.status));
   }
   const payload = await res.json();
-  if (payload?.isAdmin === true && authState.isAdmin !== true){
-    authState.isAdmin = true;
-    persistAuthToSession();
-    updateAuthUI();
-  }
+  applyAuthAccessFromPayload(payload);
   const syncedProjects = Array.isArray(payload?.projects) ? payload.projects : [];
   if (Array.isArray(payload?.deletedProjectIds)){
     payload.deletedProjectIds.map(String).filter(Boolean).forEach(id=>projectSyncState.deletedProjectIds.add(id));
@@ -4654,10 +4738,7 @@ async function syncProjectsForCurrentUser(){
   if (!email) return;
   try{
     const remoteSnapshot = await fetchUserProjectsFromServer(email);
-    if (remoteSnapshot?.isAdmin === true && authState.isAdmin !== true){
-      authState.isAdmin = true;
-      persistAuthToSession();
-    }
+    applyAuthAccessFromPayload(remoteSnapshot);
     const remoteProjects = Array.isArray(remoteSnapshot?.projects) ? remoteSnapshot.projects : [];
     if (Array.isArray(remoteSnapshot?.deletedProjectIds)){
       remoteSnapshot.deletedProjectIds.forEach(id=>projectSyncState.deletedProjectIds.add(id));
@@ -6396,7 +6477,7 @@ function renderOffersList(){
   renderOffersPage({
     authState,
     offerListState,
-    projects: projectState.projects,
+    projects: getProjectsForPersonalPages(),
     helpers: {
       formatProjectTimestamp,
       getProjectResponsibleName
@@ -6578,6 +6659,10 @@ function confirmGenerateOfferWithMissingDetails(missingFields){
 async function requestGenerateProjectOffer(projectId, triggerBtn){
   const project = getProjectById(projectId);
   if (!project) return;
+  if (!canEditProjectRecord(project)){
+    window.alert('Du har kun lesetilgang til dette prosjektet.');
+    return;
+  }
   const missingDetails = getMissingOfferDetails(project);
   if (missingDetails.length){
     const shouldContinue = await confirmGenerateOfferWithMissingDetails(missingDetails);
@@ -6874,7 +6959,7 @@ function isProjectFlowWeekStart(date, index){
 }
 
 function getProjectFlowVisibleProjects(){
-  const activeProjects = projectState.projects.filter(project=>!projectIsArchived(project));
+  const activeProjects = getProjectsForPersonalPages().filter(project=>!projectIsArchived(project));
   const selectedId = String(projectFlowState.selectedProjectId || PROJECT_FLOW_ALL_PROJECTS).trim();
   if (selectedId && selectedId !== PROJECT_FLOW_ALL_PROJECTS){
     const project = activeProjects.find(item=>item.id === selectedId);
@@ -6888,7 +6973,7 @@ function getProjectFlowVisibleProjects(){
 }
 
 function getProjectFlowAllTasks(){
-  return projectState.projects.filter(project=>!projectIsArchived(project)).flatMap(project=>{
+  return getProjectsForPersonalPages().filter(project=>!projectIsArchived(project)).flatMap(project=>{
     return getProjectFlowMilestones(project.id).map(task=>({
       ...task,
       projectId: project.id,
@@ -9766,6 +9851,7 @@ function renderProjectDashboard(){
     authState,
     projectState,
     callbacks: {
+      canEditProject: canEditProjectRecord,
       ensureProjectFolderStatusesLoaded,
       loadProjectFlowState,
       projectMatchesSearch,
@@ -11172,6 +11258,10 @@ function selectProjectDetail(projectId){
 function startNewLineForProject(projectId){
   const project = getProjectById(projectId);
   if (!project) return;
+  if (!canEditProjectRecord(project)){
+    window.alert('Du har kun lesetilgang til dette prosjektet.');
+    return;
+  }
   if (!hasCalculatorUI()){
     goToCalculator({ project: project.id, newLine: '1' });
     return;

@@ -223,6 +223,7 @@ export function createProjectRow(project, options = {}){
   const archiveMode = options.archiveMode === true;
   const expanded = options.expanded === true;
   const isLoggedIn = options.isLoggedIn === true;
+  const canEditProject = options.canEditProject !== false;
   const helpers = options.helpers || {};
   const projectLines = Array.isArray(project?.lines) ? project.lines : [];
   const projectTotals = calculateProjectTotals(project, {
@@ -276,6 +277,7 @@ export function createProjectRow(project, options = {}){
   projectStatusBtn.className = `project-status-badge is-${projectStatus.tone}`;
   projectStatusBtn.dataset.projectStatusEdit = project.id;
   projectStatusBtn.textContent = projectStatus.label;
+  projectStatusBtn.disabled = !canEditProject;
   projectStatusBtn.title = archiveMode
     ? 'Endre prosjektstatus for å flytte prosjektet tilbake til prosjektoversikten.'
     : 'Endre prosjektstatus';
@@ -306,7 +308,7 @@ export function createProjectRow(project, options = {}){
   setMarginBtn.className = 'btn alt project-margin-btn';
   setMarginBtn.dataset.projectSetMargin = project.id;
   setMarginBtn.textContent = 'Endre';
-  setMarginBtn.disabled = archiveMode || !projectLines.length;
+  setMarginBtn.disabled = archiveMode || !canEditProject || !projectLines.length;
 
   const marginRow = document.createElement('div');
   marginRow.className = 'project-margin-row';
@@ -317,7 +319,7 @@ export function createProjectRow(project, options = {}){
   const actions = document.createElement('div');
   actions.className = 'project-row-actions';
   const hasProjectFolder = projectHasConfirmedFolder(project);
-  const disableProjectActions = archiveMode;
+  const disableProjectActions = archiveMode || !canEditProject;
 
   const safeProjectId = String(project.id || '').replace(/[^A-Za-z0-9_-]/g,'');
   const detailId = `project-detail-${safeProjectId || Math.random().toString(36).slice(2)}`;
@@ -421,7 +423,7 @@ export function createProjectRow(project, options = {}){
       projectId: project.id,
       groups: [group]
     }));
-    if (archiveMode){
+    if (archiveMode || !canEditProject){
       controlRow.querySelectorAll('input, button, select, textarea').forEach(control=>{
         control.disabled = true;
       });
@@ -466,7 +468,7 @@ export function createProjectRow(project, options = {}){
       lineBtn.className = 'project-line-row';
       lineBtn.dataset.lineEdit = line.id;
       lineBtn.dataset.projectId = project.id;
-      lineBtn.disabled = archiveMode;
+      lineBtn.disabled = archiveMode || !canEditProject;
 
       const nameSpan = document.createElement('span');
       nameSpan.className = 'line-name';
@@ -500,7 +502,7 @@ export function createProjectRow(project, options = {}){
           lineId: line.id
         }
       );
-      if (archiveMode){
+      if (archiveMode || !canEditProject){
         lineAddonControl.querySelectorAll('input, button, select, textarea').forEach(control=>{
           control.disabled = true;
         });
@@ -515,7 +517,7 @@ export function createProjectRow(project, options = {}){
       lineAdjustBtn.dataset.linePriceAdjust = line.id;
       lineAdjustBtn.dataset.projectId = project.id;
       lineAdjustBtn.textContent = 'Juster priser';
-      lineAdjustBtn.disabled = archiveMode;
+      lineAdjustBtn.disabled = archiveMode || !canEditProject;
 
       const lineEditBtn = document.createElement('button');
       lineEditBtn.type = 'button';
@@ -523,7 +525,7 @@ export function createProjectRow(project, options = {}){
       lineEditBtn.dataset.lineEdit = line.id;
       lineEditBtn.dataset.projectId = project.id;
       lineEditBtn.textContent = 'Endre';
-      lineEditBtn.disabled = archiveMode;
+      lineEditBtn.disabled = archiveMode || !canEditProject;
 
       const lineDeleteBtn = document.createElement('button');
       lineDeleteBtn.type = 'button';
@@ -531,7 +533,7 @@ export function createProjectRow(project, options = {}){
       lineDeleteBtn.dataset.lineDelete = line.id;
       lineDeleteBtn.dataset.projectId = project.id;
       lineDeleteBtn.textContent = 'Slett';
-      lineDeleteBtn.disabled = archiveMode;
+      lineDeleteBtn.disabled = archiveMode || !canEditProject;
 
       lineMain.append(lineBtn, lineAddonControl);
       lineWrap.appendChild(lineMain);
@@ -592,6 +594,7 @@ export function renderProjectsPage(options = {}){
       archiveMode,
       expanded: projectState.expandedProjectId === project.id,
       isLoggedIn: authState.loggedIn === true,
+      canEditProject: callbacks.canEditProject?.(project) !== false,
       lineSort: projectState.lineSort,
       helpers: rowHelpers
     }));
