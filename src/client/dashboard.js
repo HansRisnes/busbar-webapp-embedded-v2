@@ -1109,12 +1109,16 @@ export function renderDashboardProjectStatusList(projects, statusId, helpers = {
         : (project.name || 'Uten navn');
       const status = getProjectStatusConfig(project);
       const lineCount = Array.isArray(project.lines) ? project.lines.length : 0;
+      const usesWonDate = ['won', 'finished'].includes(status.id);
+      const statusDate = usesWonDate
+        ? project?.projectWonAt
+        : (project?.projectStatusChangedAt || project?.statusChangedAt || project?.updatedAt);
       const titleEl = document.createElement('span');
       titleEl.className = 'dashboard-status-project-title';
       titleEl.textContent = title;
       const metaEl = document.createElement('span');
       metaEl.className = 'dashboard-status-project-meta';
-      metaEl.textContent = `${project.customer || 'Uten kunde'} | ${fmtIntNO.format(lineCount)} linjer | Status satt: ${formatDashboardDate(project?.projectStatusChangedAt || project?.statusChangedAt || project?.updatedAt)}`;
+      metaEl.textContent = `${project.customer || 'Uten kunde'} | ${fmtIntNO.format(lineCount)} linjer | ${usesWonDate ? 'Vunnet' : 'Status satt'}: ${formatDashboardDate(statusDate)}`;
       const statusEl = document.createElement('span');
       statusEl.className = `project-status-badge is-${status.tone}`;
       statusEl.textContent = status.label;

@@ -1115,6 +1115,23 @@ async function removeOfferMetadataForProjects(projects) {
 
 const PROJECT_TRANSFER_SOURCE_EMAIL = 'hans.jakob.risnes@mcselektrotavler.no';
 const PROJECT_TRANSFER_TARGET_EMAIL = 'hans.jakob.risnes@busbar.no';
+const PROJECT_WON_DATE_OVERRIDES = new Map([
+  ['2026-1015', '2026-06-08T12:00:00.000Z'],
+  ['2026-1010', '2026-06-08T12:00:00.000Z'],
+  ['2026-1007', '2026-07-08T12:00:00.000Z'],
+  ['2026-1036', '2026-09-02T12:00:00.000Z'],
+  ['2026-1043', '2026-04-08T12:00:00.000Z'],
+  ['2026-1044', '2026-05-08T12:00:00.000Z'],
+  ['2026-1045', '2026-09-08T12:00:00.000Z'],
+  ['2026-1052', '2026-03-08T12:00:00.000Z'],
+  ['2026-1042', '2026-05-12T12:00:00.000Z'],
+  ['2026-1046', '2026-02-12T12:00:00.000Z'],
+  ['2026-1047', '2026-04-12T12:00:00.000Z'],
+  ['2026-1048', '2026-01-12T12:00:00.000Z'],
+  ['2026-1049', '2026-02-12T12:00:00.000Z'],
+  ['2026-1050', '2026-06-12T12:00:00.000Z'],
+  ['2026-1051', '2026-01-12T12:00:00.000Z']
+]);
 
 async function migrateProjectsBetweenUsersOnStartup(
   sourceEmail = PROJECT_TRANSFER_SOURCE_EMAIL,
@@ -1249,6 +1266,30 @@ function normalizeProjectStatusRecord(value) {
   return mapped[raw] || 'unresolved';
 }
 
+function applyProjectWonDateOverrides(archive) {
+  let updated = 0;
+  Object.values(archive?.users || {}).forEach(user => {
+    (Array.isArray(user?.projects) ? user.projects : []).forEach(project => {
+      const projectNumber = safeString(project?.projectNumber);
+      const wonAt = PROJECT_WON_DATE_OVERRIDES.get(projectNumber);
+      if (!wonAt || project?.projectWonDateOverrideApplied === true) return;
+      project.projectWonAt = wonAt;
+      project.projectWonDateOverrideApplied = true;
+      updated += 1;
+    });
+  });
+  return updated;
+}
+
+async function migrateProjectWonDatesOnStartup() {
+  return withProjectArchiveLock(async () => {
+    const archive = await readProjectArchive();
+    const updated = applyProjectWonDateOverrides(archive);
+    if (updated) await writeProjectArchive(archive);
+    return updated;
+  });
+}
+
 function normalizeProjectTodoRecord(raw) {
   if (!raw || typeof raw !== 'object') return null;
   const now = new Date().toISOString();
@@ -1340,6 +1381,7 @@ function normalizeProjectRecord(raw) {
     projectStatus,
     projectStatusChangedAt,
     projectWonAt,
+    projectWonDateOverrideApplied: raw.projectWonDateOverrideApplied === true,
     createdAt: toIsoTimestamp(raw.createdAt, now),
     updatedAt: toIsoTimestamp(raw.updatedAt || raw.createdAt, now),
     selectedAddonConfig,
@@ -5211,6 +5253,13 @@ app.listen(port, host, () => {
     })
     .catch(err=>{
       console.error('[project-transfer] Feilet', err);
+    });
+  migrateProjectWonDatesOnStartup()
+    .then(updated=>{
+      if (updated) console.log(`[project-won-date-migration] Oppdaterte ${updated} prosjekt(er)`);
+    })
+    .catch(err=>{
+      console.error('[project-won-date-migration] Feilet', err);
     });
   initializeMarketDataAutomation().catch(err=>{
     console.error('[market-data] Init feilet', err);
