@@ -126,6 +126,7 @@ import {
   renderDashboardFlowStatusWidget as renderDashboardFlowStatusWidgetModule,
   renderDashboardProjectStatusWidget as renderDashboardProjectStatusWidgetModule,
   renderDashboardRecommendedActionsWidget as renderDashboardRecommendedActionsWidgetModule,
+  renderDashboardRecommendedActionsModal as renderDashboardRecommendedActionsModalModule,
   exportDashboardTotalsReport as exportDashboardTotalsReportModule,
   renderDashboardTotalsWidget as renderDashboardTotalsWidgetModule,
   setDashboardPage as setDashboardPageModule,
@@ -225,7 +226,9 @@ const dashboardState = {
   totalsMonth: 'all'
 };
 const dashboardRecommendedActionState = {
-  actionsById: new Map()
+  actionsById: new Map(),
+  actions: [],
+  category: ''
 };
 const projectState = {
   currentProjectId: null,
@@ -7753,6 +7756,16 @@ function getDashboardActionTimestamp(value, fallback = Date.now()){
   return Number.isFinite(time) && time > 0 ? time : fallback;
 }
 
+function formatDashboardRecommendedActionDate(value){
+  const time = Number(value) || 0;
+  if (!time) return 'Ukjent dato';
+  return new Intl.DateTimeFormat('no-NO', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric'
+  }).format(new Date(time));
+}
+
 function buildDashboardRecommendedActions(){
   const actions = [];
   const activeProjects = projectState.projects.filter(project=>!projectIsArchived(project));
@@ -7764,6 +7777,7 @@ function buildDashboardRecommendedActions(){
       actions.push({
         id: `create-folder:${project.id}`,
         type: 'create-folder',
+        category: 'projects',
         projectId: project.id,
         actionableAt: projectActionTime,
         tone: 'warning',
@@ -7776,6 +7790,7 @@ function buildDashboardRecommendedActions(){
       actions.push({
         id: `add-line:${project.id}`,
         type: 'add-line',
+        category: 'projects',
         projectId: project.id,
         actionableAt: projectActionTime,
         tone: 'idle',
@@ -7789,6 +7804,7 @@ function buildDashboardRecommendedActions(){
       actions.push({
         id: `follow-up:${project.id}`,
         type: 'follow-up',
+        category: 'project-flow',
         projectId: project.id,
         flowStatus: flowStatus.label,
         actionableAt: Number(flowStatus.actionableAt) || getDashboardActionTimestamp(project.updatedAt || project.createdAt),
@@ -7801,13 +7817,13 @@ function buildDashboardRecommendedActions(){
   });
   (Array.isArray(emailViewState.messages) ? emailViewState.messages : [])
     .filter(message=>message && message.id && message.isRead === false)
-    .slice(0, 5)
     .forEach(message=>{
       const subject = message.subject || '(Uten emne)';
       const from = message.from?.emailAddress?.name || message.from?.emailAddress?.address || 'Ukjent avsender';
       actions.push({
         id: `email:${message.id}`,
         type: 'email',
+        category: 'email',
         messageId: message.id,
         actionableAt: getDashboardActionTimestamp(message.receivedDateTime),
         tone: 'warning',
@@ -7817,12 +7833,16 @@ function buildDashboardRecommendedActions(){
       });
     });
   return actions
-    .sort((a, b)=>(Number(a.actionableAt) || 0) - (Number(b.actionableAt) || 0))
-    .slice(0, 12);
+    .map(action=>({
+      ...action,
+      actionableDateText: `Aktuell fra ${formatDashboardRecommendedActionDate(action.actionableAt)}`
+    }))
+    .sort((a, b)=>(Number(a.actionableAt) || 0) - (Number(b.actionableAt) || 0));
 }
 
 function renderDashboardRecommendedActionsWidget(){
   const actions = buildDashboardRecommendedActions();
+  dashboardRecommendedActionState.actions = actions;
   dashboardRecommendedActionState.actionsById = new Map(actions.map(action=>[action.id, action]));
   renderDashboardRecommendedActionsWidgetModule(actions);
 }
@@ -8322,21 +8342,68 @@ function handleDashboardRecommendedAction(actionId, triggerBtn = null){
   const action = dashboardRecommendedActionState.actionsById.get(String(actionId || ''));
   if (!action) return;
   if (action.type === 'create-folder'){
+    closeDashboardRecommendedActionsModal();
     void createProjectFolderFromTemplate(action.projectId, triggerBtn).finally(()=>renderMainDashboard());
     return;
   }
   if (action.type === 'add-line'){
+    closeDashboardRecommendedActionsModal();
     startNewLineForProject(action.projectId);
     return;
   }
   if (action.type === 'follow-up'){
+    closeDashboardRecommendedActionsModal();
     openProjectFlowProjectFromDashboardStatus(action.flowStatus || getProjectFlowStatusForProject(getProjectById(action.projectId)).label, action.projectId);
     return;
   }
   if (action.type === 'email'){
+    closeDashboardRecommendedActionsModal();
     setDashboardPage('email', { fromNavigation: true });
     window.setTimeout(()=>selectEmailMessage(action.messageId), 0);
   }
+}
+
+function getDashboardRecommendedCategoryLabel(category){
+  return ({
+    projects: 'Prosjekter',
+    'project-flow': 'Prosjektflyt',
+    email: 'E-post'
+  })[String(category || '')] || 'Anbefalte handlinger';
+}
+
+function renderDashboardRecommendedActionsModal(){
+  const modal = $('dashboardRecommendedActionsModal');
+  if (!modal || modal.style.display !== 'flex') return;
+  const category = dashboardRecommendedActionState.category;
+  const searchInput = $('dashboardRecommendedActionsSearch');
+  const title = $('dashboardRecommendedActionsTitle');
+  const subtitle = $('dashboardRecommendedActionsSubtitle');
+  const query = String(searchInput?.value || '').trim();
+  const actions = dashboardRecommendedActionState.actions.filter(action=>action.category === category);
+  if (title) title.textContent = `Anbefalte handlinger: ${getDashboardRecommendedCategoryLabel(category)}`;
+  if (subtitle) subtitle.textContent = `${actions.length} ${actions.length === 1 ? 'oppgave' : 'oppgaver'} sortert fra eldst til nyest.`;
+  renderDashboardRecommendedActionsModalModule(actions, query);
+}
+
+function openDashboardRecommendedActionsModal(category){
+  const modal = $('dashboardRecommendedActionsModal');
+  if (!modal) return;
+  const normalized = String(category || '').trim();
+  if (!normalized) return;
+  renderDashboardRecommendedActionsWidget();
+  dashboardRecommendedActionState.category = normalized;
+  const searchInput = $('dashboardRecommendedActionsSearch');
+  if (searchInput) searchInput.value = '';
+  modal.style.display = 'flex';
+  renderDashboardRecommendedActionsModal();
+  window.setTimeout(()=>searchInput?.focus(), 0);
+}
+
+function closeDashboardRecommendedActionsModal(){
+  const modal = $('dashboardRecommendedActionsModal');
+  if (!modal) return;
+  modal.style.display = 'none';
+  dashboardRecommendedActionState.category = '';
 }
 
 function openProjectModalFromEmailSuggestion(suggestionId){
@@ -12596,10 +12663,38 @@ if (dashboardFlowStatusSummary){
 const dashboardRecommendedActions = $('dashboardRecommendedActions');
 if (dashboardRecommendedActions){
   dashboardRecommendedActions.addEventListener('click', evt=>{
+    const showAllBtn = evt.target?.closest?.('[data-dashboard-recommended-show-all]');
+    if (showAllBtn){
+      openDashboardRecommendedActionsModal(showAllBtn.dataset.dashboardRecommendedShowAll || '');
+      return;
+    }
     const btn = evt.target?.closest?.('[data-dashboard-recommended-action]');
     if (!btn) return;
     handleDashboardRecommendedAction(btn.dataset.dashboardRecommendedAction || '', btn);
   });
+}
+
+const dashboardRecommendedActionsModal = $('dashboardRecommendedActionsModal');
+if (dashboardRecommendedActionsModal){
+  dashboardRecommendedActionsModal.addEventListener('click', evt=>{
+    if (evt.target === dashboardRecommendedActionsModal){
+      closeDashboardRecommendedActionsModal();
+      return;
+    }
+    const closeBtn = evt.target?.closest?.('#dashboardRecommendedActionsClose');
+    if (closeBtn){
+      closeDashboardRecommendedActionsModal();
+      return;
+    }
+    const btn = evt.target?.closest?.('[data-dashboard-recommended-action]');
+    if (!btn) return;
+    handleDashboardRecommendedAction(btn.dataset.dashboardRecommendedAction || '', btn);
+  });
+}
+
+const dashboardRecommendedActionsSearch = $('dashboardRecommendedActionsSearch');
+if (dashboardRecommendedActionsSearch){
+  dashboardRecommendedActionsSearch.addEventListener('input', renderDashboardRecommendedActionsModal);
 }
 
 const dashboardNewTodoBtn = $('dashboardNewTodoBtn');
@@ -13271,6 +13366,11 @@ document.addEventListener('keydown', evt=>{
     const dashboardProjectStatusModalEl = $('dashboardProjectStatusModal');
     if (dashboardProjectStatusModalEl && dashboardProjectStatusModalEl.style.display === 'flex'){
       closeDashboardProjectStatusModal();
+      return;
+    }
+    const dashboardRecommendedActionsModalEl = $('dashboardRecommendedActionsModal');
+    if (dashboardRecommendedActionsModalEl && dashboardRecommendedActionsModalEl.style.display === 'flex'){
+      closeDashboardRecommendedActionsModal();
       return;
     }
     const registerModalEl = $('registerModal');

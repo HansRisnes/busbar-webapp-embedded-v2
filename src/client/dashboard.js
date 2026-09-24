@@ -978,10 +978,90 @@ export function renderDashboardFlowStatusWidget(projects, getProjectFlowStatusFo
   root.appendChild(list);
 }
 
+const DASHBOARD_RECOMMENDED_CATEGORIES = Object.freeze([
+  { id: 'projects', label: 'Prosjekter' },
+  { id: 'project-flow', label: 'Prosjektflyt' },
+  { id: 'email', label: 'E-post' }
+]);
+
+function createDashboardRecommendedActionItem(action){
+  const item = document.createElement('article');
+  item.className = `dashboard-recommended-action is-${action.tone || 'idle'}`;
+  const body = document.createElement('div');
+  body.className = 'dashboard-recommended-action-body';
+  const title = document.createElement('strong');
+  title.textContent = action.title || 'Anbefalt handling';
+  const meta = document.createElement('span');
+  meta.textContent = action.meta || '';
+  const date = document.createElement('small');
+  date.className = 'dashboard-recommended-action-date';
+  date.textContent = action.actionableDateText || '';
+  body.append(title, meta, date);
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'btn alt btn-small';
+  btn.dataset.dashboardRecommendedAction = action.id || '';
+  btn.textContent = action.buttonText || 'Behandle';
+  item.append(body, btn);
+  return item;
+}
+
+function renderDashboardRecommendedActionList(root, actions, options = {}){
+  if (!root) return;
+  root.innerHTML = '';
+  const source = Array.isArray(actions) ? actions : [];
+  if (!source.length){
+    const empty = document.createElement('div');
+    empty.className = 'dashboard-status-project-empty';
+    empty.textContent = options.emptyText || 'Ingen anbefalte handlinger akkurat nÃƒÂ¥.';
+    root.appendChild(empty);
+    return;
+  }
+  const list = document.createElement('div');
+  list.className = options.modal ? 'dashboard-recommended-action-list is-modal' : 'dashboard-recommended-action-list';
+  source.forEach(action=>list.appendChild(createDashboardRecommendedActionItem(action)));
+  root.appendChild(list);
+}
+
 export function renderDashboardRecommendedActionsWidget(actions = []){
   const root = $('dashboardRecommendedActions');
   if (!root) return;
   root.innerHTML = '';
+  {
+    const source = Array.isArray(actions) ? actions : [];
+    if (!source.length){
+      renderDashboardRecommendedActionList(root, source);
+      return;
+    }
+    const groups = document.createElement('div');
+    groups.className = 'dashboard-recommended-action-groups';
+    DASHBOARD_RECOMMENDED_CATEGORIES.forEach(category=>{
+      const categoryActions = source.filter(action=>action.category === category.id);
+      if (!categoryActions.length) return;
+      const section = document.createElement('section');
+      section.className = 'dashboard-recommended-action-category';
+      const header = document.createElement('div');
+      header.className = 'dashboard-recommended-action-category-header';
+      const heading = document.createElement('h4');
+      heading.textContent = `${category.label} (${categoryActions.length})`;
+      header.appendChild(heading);
+      if (categoryActions.length > 3){
+        const showAll = document.createElement('button');
+        showAll.type = 'button';
+        showAll.className = 'btn alt btn-small';
+        showAll.dataset.dashboardRecommendedShowAll = category.id;
+        showAll.textContent = `Vis alle (${categoryActions.length})`;
+        header.appendChild(showAll);
+      }
+      const list = document.createElement('div');
+      list.className = 'dashboard-recommended-action-list is-category';
+      categoryActions.slice(0, 3).forEach(action=>list.appendChild(createDashboardRecommendedActionItem(action)));
+      section.append(header, list);
+      groups.appendChild(section);
+    });
+    root.appendChild(groups);
+    return;
+  }
   const list = document.createElement('div');
   list.className = 'dashboard-recommended-action-list';
   const source = Array.isArray(actions) ? actions : [];
@@ -1011,6 +1091,21 @@ export function renderDashboardRecommendedActionsWidget(actions = []){
     list.appendChild(item);
   });
   root.appendChild(list);
+}
+
+export function renderDashboardRecommendedActionsModal(actions = [], searchTerm = ''){
+  const root = $('dashboardRecommendedActionsModalList');
+  if (!root) return;
+  const query = String(searchTerm || '').trim().toLocaleLowerCase('nb-NO');
+  const source = (Array.isArray(actions) ? actions : []).filter(action=>{
+    if (!query) return true;
+    return [action.title, action.meta, action.buttonText, action.actionableDateText]
+      .some(value=>String(value || '').toLocaleLowerCase('nb-NO').includes(query));
+  });
+  renderDashboardRecommendedActionList(root, source, {
+    modal: true,
+    emptyText: query ? 'Ingen anbefalte handlinger samsvarer med søket.' : 'Ingen anbefalte handlinger akkurat nÃƒÂ¥.'
+  });
 }
 
 export function renderDashboardEmailProjectSuggestionsWidget(suggestions = []){

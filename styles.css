@@ -875,6 +875,33 @@ main.app-views{
   min-height:0;
 }
 
+.dashboard-recommended-action-groups{
+  display:grid;
+  gap:12px;
+  max-height:100%;
+  overflow-y:auto;
+  padding-right:0;
+  scrollbar-gutter:stable;
+}
+
+.dashboard-recommended-action-category{
+  display:grid;
+  gap:8px;
+}
+
+.dashboard-recommended-action-category-header{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+}
+
+.dashboard-recommended-action-category-header h4{
+  margin:0;
+  color:var(--text);
+  font-size:0.9rem;
+}
+
 .dashboard-recommended-action-list{
   display:grid;
   gap:8px;
@@ -897,6 +924,15 @@ main.app-views{
   border:3px solid rgba(8,23,46,0.42);
   border-radius:999px;
   background:rgba(67,90,127,0.86);
+}
+
+.dashboard-recommended-action-list.is-category{
+  overflow:visible;
+  max-height:none;
+}
+
+.dashboard-recommended-action-list.is-modal{
+  max-height:min(52vh, 560px);
 }
 
 .dashboard-recommended-action{
@@ -935,6 +971,38 @@ main.app-views{
   color:var(--muted);
   font-size:0.82rem;
   line-height:1.25;
+}
+
+.dashboard-recommended-action-date{
+  color:var(--muted);
+  font-size:0.76rem;
+  line-height:1.25;
+}
+
+.dashboard-recommended-actions-modal{
+  width:min(900px, calc(100vw - 32px));
+}
+
+.dashboard-recommended-actions-search{
+  display:grid;
+  gap:6px;
+  margin-top:14px;
+  color:var(--muted);
+  font-size:0.84rem;
+  font-weight:700;
+}
+
+.dashboard-recommended-actions-search input{
+  width:100%;
+}
+
+.dashboard-recommended-actions-modal-list{
+  min-height:80px;
+  margin-top:14px;
+}
+
+.dashboard-recommended-actions-modal .actions{
+  margin-top:18px;
 }
 
 .dashboard-todo-widget{

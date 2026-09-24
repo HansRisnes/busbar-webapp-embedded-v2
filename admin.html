@@ -5,7 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="busbar-api-base" content="https://busbar-webapp-embedded-v2.onrender.com">
   <title>Busbar Adminoversikt</title>
-  <link rel="icon" type="image/png" href="assets/Busbar_lyn_fylt.png">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -35,9 +34,9 @@
         <button type="button" class="sidebar-collapse-btn" id="dashboardSidebarToggle" aria-label="Minimer meny" aria-expanded="true">
           <span class="sidebar-collapse-icon" aria-hidden="true"></span>
         </button>
-        <a class="sidebar-brand" href="https://busbar.no" aria-label="G&aring; til busbar.no">
+        <div class="sidebar-brand">
           <div class="logo-mask" role="img" aria-label="Logo"></div>
-        </a>
+        </div>
       </div>
       <nav class="sidebar-nav">
         <div class="sidebar-nav-section">
@@ -116,13 +115,6 @@
           <label for="adminUserPosition">Stilling
             <input id="adminUserPosition" type="text" autocomplete="organization-title">
           </label>
-          <label for="adminUserRole">Rolle
-            <select id="adminUserRole">
-              <option value="standard">Standard</option>
-              <option value="administrator">Administrator</option>
-              <option value="insight">Innsyn</option>
-            </select>
-          </label>
         </div>
         <div class="actions">
           <button id="adminUserClearBtn" type="button" class="btn alt">Avbryt</button>
@@ -142,7 +134,6 @@
               <th><button type="button" class="admin-col-sort-btn" data-table="users" data-key="projectCount" data-type="number">Prosjekter <span class="sort-indicator">â†•</span></button></th>
               <th><button type="button" class="admin-col-sort-btn" data-table="users" data-key="lineCount" data-type="number">Linjer <span class="sort-indicator">â†•</span></button></th>
               <th><button type="button" class="admin-col-sort-btn" data-table="users" data-key="loginStatus" data-type="text">Innlogging <span class="sort-indicator">â†•</span></button></th>
-              <th>Rolle</th>
               <th>Handling</th>
             </tr>
           </thead>
