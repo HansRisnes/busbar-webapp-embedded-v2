@@ -444,6 +444,10 @@ export function createProjectRow(project, options = {}){
   detail.className = 'project-detail';
   detail.id = detailId;
   detail.hidden = !expanded;
+  if (!expanded){
+    row.appendChild(detail);
+    return row;
+  }
 
   const linesWrapper = document.createElement('div');
   linesWrapper.className = 'project-detail-lines';
@@ -552,13 +556,16 @@ export function renderProjectsPage(options = {}){
     authState = {},
     callbacks = {},
     projectState = {},
-    rowHelpers = {}
+    rowHelpers = {},
+    searchOnly = false
   } = options;
   const listEl = $('projectList');
   if (!listEl) return { rendered: false };
-  callbacks.renderMainDashboard?.();
-  callbacks.loadProjectFlowState?.();
-  callbacks.updateProjectArchiveUi?.();
+  if (!searchOnly){
+    callbacks.renderMainDashboard?.();
+    callbacks.loadProjectFlowState?.();
+    callbacks.updateProjectArchiveUi?.();
+  }
   listEl.innerHTML = '';
   const projects = Array.isArray(projectState.projects) ? projectState.projects : [];
   const archiveMode = projectState.showArchive === true;
@@ -569,8 +576,10 @@ export function renderProjectsPage(options = {}){
       showCreateButton: true
     }));
     projectState.expandedProjectId = null;
-    callbacks.renderOffersList?.();
-    callbacks.renderProjectFlowView?.();
+    if (!searchOnly){
+      callbacks.renderOffersList?.();
+      callbacks.renderProjectFlowView?.();
+    }
     return { rendered: true, visibleCount: 0 };
   }
   const projectsForView = projects.filter(project=>archiveMode ? projectIsArchived(project) : !projectIsArchived(project));
@@ -578,14 +587,16 @@ export function renderProjectsPage(options = {}){
     ? callbacks.projectMatchesSearch
     : (()=>true);
   const visibleProjects = projectsForView.filter(project=>projectMatchesSearch(project));
-  callbacks.ensureProjectFolderStatusesLoaded?.();
+  if (!searchOnly) callbacks.ensureProjectFolderStatusesLoaded?.();
   if (!visibleProjects.length){
     const message = !projectsForView.length
       ? (archiveMode ? 'Ingen prosjekter i arkivet.' : 'Ingen aktive prosjekter.')
       : 'Ingen prosjekter matcher søket.';
     listEl.appendChild(createProjectEmptyState(message));
-    callbacks.renderOffersList?.();
-    callbacks.renderProjectFlowView?.();
+    if (!searchOnly){
+      callbacks.renderOffersList?.();
+      callbacks.renderProjectFlowView?.();
+    }
     return { rendered: true, visibleCount: 0 };
   }
   const frag = document.createDocumentFragment();
@@ -600,7 +611,9 @@ export function renderProjectsPage(options = {}){
     }));
   });
   listEl.appendChild(frag);
-  callbacks.renderOffersList?.();
-  callbacks.renderProjectFlowView?.();
+  if (!searchOnly){
+    callbacks.renderOffersList?.();
+    callbacks.renderProjectFlowView?.();
+  }
   return { rendered: true, visibleCount: visibleProjects.length };
 }

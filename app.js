@@ -31,6 +31,7 @@ import {
   OUTLOOK_TODO_CATEGORY_COLOR,
   OUTLOOK_TODO_CATEGORY_NAME,
   PROJECT_FLOW_ALL_PROJECTS,
+  PROJECT_FLOW_CALENDAR_QUEUE_STORAGE_KEY,
   PROJECT_FLOW_DEFAULT_ZOOM_INDEX,
   PROJECT_FLOW_PHASES,
   PROJECT_FLOW_STORAGE_KEY,
@@ -331,7 +332,12 @@ const projectFlowState = {
   drag: null,
   linkDrag: null,
   taskColumnWidth: 260,
-  suppressClickUntil: 0
+  suppressClickUntil: 0,
+  renderedRangeStart: '',
+  renderedRangeEnd: '',
+  renderedDayWidth: 0,
+  pendingViewport: null,
+  pageActive: false
 };
 
 // --- CSV ---
@@ -373,6 +379,9 @@ function setDashboardPage(page, options = {}){
 }
 
 function handleDashboardPageActivated(page, options = {}){
+  const leavingProjectFlow = projectFlowState.pageActive && page !== 'project-flow';
+  projectFlowState.pageActive = page === 'project-flow';
+  if (leavingProjectFlow) void flushProjectFlowCalendarQueue();
   const forceRefresh = options.fromNavigation === true;
   if (page === 'dashboard'){
     window.setTimeout(renderMainDashboard, 0);
@@ -3512,6 +3521,11 @@ async function completeAuth(auth, statusMessage){
   const statusEl = $('status');
   if (statusEl) statusEl.textContent = statusMessage || 'Henter prosjekter fra server...';
   await syncProjectsForCurrentUser();
+  loadProjectFlowState();
+  void flushProjectFlowCalendarQueue();
+  if (dashboardState.activePage === 'project-flow'){
+    renderProjectFlowView();
+  }
   if (statusEl) statusEl.textContent = '';
 }
 
@@ -3632,7 +3646,8 @@ if (loginBtn){
 }
 const logoutBtn = $('logoutBtn');
 if (logoutBtn){
-  logoutBtn.addEventListener('click', ()=>{
+  logoutBtn.addEventListener('click', async ()=>{
+    await flushProjectFlowCalendarQueue();
     if (projectSyncState.timerId){
       clearTimeout(projectSyncState.timerId);
       projectSyncState.timerId = null;
@@ -3689,18 +3704,19 @@ async function refreshProjectFlowView(options = {}){
   const btn = $('refreshProjectFlowBtn');
   if (btn) btn.disabled = true;
   if (!options.silent) setProjectFlowStatus('Oppdaterer prosjektflyt...');
+  renderProjectFlowView();
   try{
     if (authState.loggedIn){
       await syncProjectsForCurrentUser();
     }
     loadProjectFlowState();
-    renderProjectFlowView();
+    renderProjectFlowView({ preserveScroll: true });
     if (!options.silent) setProjectFlowStatus('Oppdatert.', 'ok');
   }catch(err){
     console.warn('Prosjektflyt-oppdatering feilet', err);
     setProjectFlowStatus(err?.message || 'Kunne ikke oppdatere prosjektflyt.', 'error');
     loadProjectFlowState();
-    renderProjectFlowView();
+    renderProjectFlowView({ preserveScroll: true });
   }finally{
     if (btn) btn.disabled = false;
   }
@@ -4829,7 +4845,7 @@ function setProjectSearchTerm(value, options = {}){
     input.value = value || '';
   }
   if (options.render !== false){
-    renderProjectDashboard();
+    renderProjectDashboard({ searchOnly: true });
   }
 }
 const registerModal = $('registerModal');
@@ -8564,6 +8580,7 @@ function setProjectFlowZoomToFit(){
 function openProjectFlowMilestoneForm(milestone = null, options = {}){
   const form = $('projectFlowMilestoneForm');
   if (!form) return;
+  projectFlowState.pendingViewport = captureProjectFlowViewport($('projectFlowTimeline'));
   populateProjectFlowPhaseSelect();
   const selectedProjectId = options.projectId || milestone?.projectId || '';
   populateProjectFlowTaskProjectSelect(selectedProjectId, {
@@ -8636,7 +8653,7 @@ function updateProjectFlowDurationFromEndDate(){
   unitSelect.value = 'days';
 }
 
-function closeProjectFlowMilestoneForm(){
+function closeProjectFlowMilestoneForm(options = {}){
   const form = $('projectFlowMilestoneForm');
   if (!form) return;
   closeProjectFlowDatePickerPopover();
@@ -8644,6 +8661,9 @@ function closeProjectFlowMilestoneForm(){
   form.reset();
   projectFlowState.editingMilestoneId = '';
   projectFlowState.editingProjectId = '';
+  if (!options.preserveViewport){
+    projectFlowState.pendingViewport = null;
+  }
 }
 
 function findProjectFlowTaskLocation(taskId){
@@ -8961,7 +8981,7 @@ function syncDashboardTodoCalendarSoon(projectId, todoId){
 async function syncProjectFlowMilestoneCalendar(projectId, milestoneId){
   const project = getProjectById(projectId);
   const task = getProjectFlowMilestones(projectId).find(item=>item.id === milestoneId);
-  if (!project?.id || !task?.id || !authState.loggedIn) return;
+  if (!project?.id || !task?.id || !authState.loggedIn) return false;
   const currentEmail = getCurrentUserEmail();
   const targetEmail = getProjectFlowTaskResponsibleEmail(project);
   const calendarOwnerEmail = normalizeUserEmail(task.calendarOwnerEmail || '');
@@ -8970,15 +8990,20 @@ async function syncProjectFlowMilestoneCalendar(projectId, milestoneId){
       && (targetEmail !== currentEmail || (calendarOwnerEmail && calendarOwnerEmail !== currentEmail))
   );
   if (task.completed){
-    const deleted = await deleteProjectFlowMilestoneCalendarEvent(project, task);
-    if (deleted && task.calendarEventId){
-      updateProjectFlowCalendarReference(projectId, task.id, '', '');
-      renderProjectFlowView({ preserveScroll: true });
+    try{
+      const deleted = await deleteProjectFlowMilestoneCalendarEvent(project, task);
+      if (deleted && task.calendarEventId){
+        updateProjectFlowCalendarReference(projectId, task.id, '', '');
+      }
+      return deleted;
+    }catch(err){
+      console.warn('Kunne ikke fjerne fullført prosjektflytoppgave fra kalender', err);
+      setProjectFlowStatus(err?.message || 'Kalenderavtalen kunne ikke slettes.', 'error');
+      return false;
     }
-    return;
   }
   const payload = buildProjectFlowCalendarPayload(project, task);
-  if (!payload) return;
+  if (!payload) return false;
   try{
     if (mustUseOwnerCalendarSync){
       const result = await requestProjectFlowCalendarOwnerSync(project, task, 'upsert');
@@ -8986,14 +9011,13 @@ async function syncProjectFlowMilestoneCalendar(projectId, milestoneId){
       const eventOwnerEmail = normalizeUserEmail(result?.calendarOwnerEmail || targetEmail);
       if (eventId && (eventId !== task.calendarEventId || eventOwnerEmail !== calendarOwnerEmail)){
         updateProjectFlowCalendarReference(projectId, task.id, eventId, eventOwnerEmail);
-        renderProjectFlowView({ preserveScroll: true });
       }
       resetCalendarLoadedRange();
       if (dashboardState.activePage === 'calendar'){
         void loadCalendarEvents({ silent: true });
       }
       setProjectFlowStatus('Oppgave synket til ansvarlig sin kalender.', 'ok');
-      return;
+      return eventId ? { eventId, ownerEmail: eventOwnerEmail } : false;
     }
     await ensureOutlookProjectCategory();
     let savedEvent = null;
@@ -9019,21 +9043,116 @@ async function syncProjectFlowMilestoneCalendar(projectId, milestoneId){
     const eventId = String(savedEvent?.id || task.calendarEventId || '').trim();
     if (eventId && (eventId !== task.calendarEventId || calendarOwnerEmail !== currentEmail)){
       updateProjectFlowCalendarReference(projectId, task.id, eventId, currentEmail);
-      renderProjectFlowView({ preserveScroll: true });
     }
     resetCalendarLoadedRange();
     if (dashboardState.activePage === 'calendar'){
       void loadCalendarEvents({ silent: true });
     }
     setProjectFlowStatus('Oppgave synket til kalender.', 'ok');
+    return eventId ? { eventId, ownerEmail: currentEmail } : false;
   }catch(err){
     console.warn('Kunne ikke synke prosjektflytoppgave til kalender', err);
     setProjectFlowStatus(err?.message || 'Oppgaven ble lagret, men kunne ikke synkes til kalender.', 'error');
+    return false;
   }
 }
 
+function getProjectFlowCalendarQueueKey(){
+  const email = getCurrentUserEmail();
+  return email ? `${PROJECT_FLOW_CALENDAR_QUEUE_STORAGE_KEY}.${email}` : '';
+}
+
+function readProjectFlowCalendarQueue(){
+  const entries = readLocalJson(getProjectFlowCalendarQueueKey(), []);
+  return Array.isArray(entries) ? entries : [];
+}
+
+function writeProjectFlowCalendarQueue(entries){
+  const key = getProjectFlowCalendarQueueKey();
+  if (!key) return;
+  if (entries.length) writeLocalJson(key, entries);
+  else removeLocalItem(key);
+}
+
+function queueProjectFlowCalendarChange(projectId, taskId, action = 'upsert', task = null){
+  if (!getCurrentUserEmail()) return;
+  const id = `${projectId}:${taskId}`;
+  const entries = readProjectFlowCalendarQueue().filter(entry=>entry.id !== id);
+  if (action !== 'delete' || task?.calendarEventId || projectFlowCalendarActiveEntry?.id === id){
+    entries.push({ id, projectId, taskId, action, task, revision: createProjectFlowId() });
+  }
+  writeProjectFlowCalendarQueue(entries);
+  if (projectFlowCalendarFlushPromise) projectFlowCalendarChangedDuringFlush = true;
+}
+
+async function waitForProjectFlowProjectSync(){
+  if (projectSyncState.timerId){
+    clearTimeout(projectSyncState.timerId);
+    projectSyncState.timerId = null;
+    void flushProjectSync();
+  }
+  const deadline = Date.now() + 10000;
+  while (projectSyncState.inFlight || projectSyncState.pending || projectSyncState.timerId){
+    if (Date.now() >= deadline) return false;
+    await new Promise(resolve=>window.setTimeout(resolve, 50));
+  }
+  return true;
+}
+
+let projectFlowCalendarFlushPromise = null;
+let projectFlowCalendarActiveEntry = null;
+let projectFlowCalendarChangedDuringFlush = false;
+function flushProjectFlowCalendarQueue(){
+  if (projectFlowCalendarFlushPromise) return projectFlowCalendarFlushPromise;
+  if (!authState.loggedIn || !readProjectFlowCalendarQueue().length) return Promise.resolve();
+  projectFlowCalendarChangedDuringFlush = false;
+  projectFlowCalendarFlushPromise = (async ()=>{
+    if (!await waitForProjectFlowProjectSync()) return;
+    for (const entry of readProjectFlowCalendarQueue()){
+      if (!authState.loggedIn || !getCurrentUserEmail()) return;
+      const project = getProjectById(entry.projectId);
+      let success = false;
+      projectFlowCalendarActiveEntry = entry;
+      if (entry.action === 'delete'){
+        if (project){
+          try{
+            success = await deleteProjectFlowMilestoneCalendarEvent(project, entry.task);
+          }catch(err){
+            console.warn('Kunne ikke slette prosjektflytoppgave fra kalender', err);
+            setProjectFlowStatus(err?.message || 'Kalenderavtalen kunne ikke slettes.', 'error');
+          }
+        }
+      } else if (project && getProjectFlowMilestones(entry.projectId).some(task=>task.id === entry.taskId)){
+        success = await syncProjectFlowMilestoneCalendar(entry.projectId, entry.taskId);
+      } else {
+        success = true;
+      }
+      projectFlowCalendarActiveEntry = null;
+      if (!success) continue;
+      const entries = readProjectFlowCalendarQueue();
+      const changedEntry = entries.find(current=>current.id === entry.id && current.revision !== entry.revision);
+      if (changedEntry?.action === 'delete' && !changedEntry.task?.calendarEventId && success.eventId){
+        changedEntry.task = {
+          ...changedEntry.task,
+          calendarEventId: success.eventId,
+          calendarOwnerEmail: success.ownerEmail
+        };
+      }
+      writeProjectFlowCalendarQueue(entries.filter(current=>current.id !== entry.id || current.revision !== entry.revision));
+    }
+    await waitForProjectFlowProjectSync();
+  })().finally(()=>{
+    projectFlowCalendarActiveEntry = null;
+    projectFlowCalendarFlushPromise = null;
+    if (projectFlowCalendarChangedDuringFlush && !projectFlowState.pageActive){
+      void flushProjectFlowCalendarQueue();
+    }
+  });
+  return projectFlowCalendarFlushPromise;
+}
+
 function syncProjectFlowMilestoneCalendarSoon(projectId, milestoneId){
-  window.setTimeout(()=>void syncProjectFlowMilestoneCalendar(projectId, milestoneId), 0);
+  queueProjectFlowCalendarChange(projectId, milestoneId);
 }
 
 function propagateProjectFlowDrivenTaskOffsets(projectId, taskId, moveDeltaDays = 0, durationDeltaDays = 0, visited = new Set()){
@@ -9525,17 +9644,19 @@ function handleProjectFlowMilestoneSave(evt){
     const deltas = getProjectFlowDateChangeDeltas(existing, next.startDate, next.endDate);
     propagateProjectFlowDrivenTaskOffsets(project.id, id, deltas.moveDelta, deltas.durationDelta);
   }
-  closeProjectFlowMilestoneForm();
-  renderProjectFlowView({ preserveScroll: true });
+  const viewport = projectFlowState.pendingViewport || captureProjectFlowViewport($('projectFlowTimeline'));
+  closeProjectFlowMilestoneForm({ preserveViewport: true });
+  renderProjectFlowView({ preserveScroll: true, viewport });
   setProjectFlowStatus('Oppgave lagret.', 'ok');
   syncProjectFlowMilestoneCalendarSoon(project.id, id);
 }
 
 function toggleProjectFlowMilestone(projectId, milestoneId, completed){
+  projectFlowState.pendingViewport = captureProjectFlowViewport($('projectFlowTimeline'));
   const milestones = getProjectFlowMilestones(projectId);
   const updated = milestones.map(item=>item.id === milestoneId ? { ...item, completed: Boolean(completed), updatedAt: new Date().toISOString() } : item);
   setProjectFlowMilestones(projectId, updated);
-  renderProjectFlowView({ preserveScroll: true });
+  renderProjectFlowView({ preserveScroll: true, viewport: projectFlowState.pendingViewport });
   syncProjectFlowMilestoneCalendarSoon(projectId, milestoneId);
 }
 
@@ -9544,12 +9665,12 @@ function deleteProjectFlowMilestone(projectId, milestoneId){
   const milestone = milestones.find(item=>item.id === milestoneId);
   if (!milestone) return;
   if (!window.confirm(`Slette oppgaven "${getProjectFlowPhaseLabel(milestone.phaseId)}"?`)) return;
+  projectFlowState.pendingViewport = captureProjectFlowViewport($('projectFlowTimeline'));
   clearProjectFlowReciprocalDependency(milestoneId, 'drivenBy', getProjectFlowRelationTaskId(milestone, 'drivenBy'));
   clearProjectFlowReciprocalDependency(milestoneId, 'drives', getProjectFlowRelationTaskId(milestone, 'drives'));
-  void deleteProjectFlowMilestoneCalendarEvent(getProjectById(projectId), milestone)
-    .catch(err=>setProjectFlowStatus(err?.message || 'Oppgaven ble slettet, men kalenderavtalen kunne ikke slettes.', 'error'));
+  queueProjectFlowCalendarChange(projectId, milestoneId, 'delete', milestone);
   setProjectFlowMilestones(projectId, milestones.filter(item=>item.id !== milestoneId));
-  renderProjectFlowView({ preserveScroll: true });
+  renderProjectFlowView({ preserveScroll: true, viewport: projectFlowState.pendingViewport });
   setProjectFlowStatus('Oppgave slettet.', 'ok');
 }
 
@@ -9557,24 +9678,53 @@ function deleteProjectFlowMilestoneFromForm(){
   const projectId = String(projectFlowState.editingProjectId || '').trim();
   const milestoneId = String(projectFlowState.editingMilestoneId || '').trim();
   if (!projectId || !milestoneId) return;
-  closeProjectFlowMilestoneForm();
+  closeProjectFlowMilestoneForm({ preserveViewport: true });
   deleteProjectFlowMilestone(projectId, milestoneId);
+}
+
+function captureProjectFlowViewport(root){
+  const scroller = root?.querySelector?.('.project-flow-scroller');
+  if (!scroller) return null;
+  return {
+    left: scroller.scrollLeft || 0,
+    top: scroller.scrollTop || 0,
+    windowY: typeof window !== 'undefined' ? window.scrollY : 0,
+    rangeStart: String(projectFlowState.renderedRangeStart || ''),
+    rangeEnd: String(projectFlowState.renderedRangeEnd || ''),
+    dayWidth: Number(projectFlowState.renderedDayWidth) || getProjectFlowDayWidth()
+  };
+}
+
+function restoreProjectFlowViewport(scroller, topScrollbar, snapshot, rangeStart){
+  if (!scroller || !snapshot) return;
+  const oldRangeStart = parseProjectFlowDate(snapshot.rangeStart);
+  const oldDayWidth = Number(snapshot.dayWidth) || 0;
+  const newDayWidth = Number(projectFlowState.renderedDayWidth) || getProjectFlowDayWidth();
+  let nextLeft = Number(snapshot.left) || 0;
+  if (oldRangeStart && oldDayWidth > 0 && newDayWidth > 0){
+    const rangeShift = getProjectFlowDayDiff(rangeStart, oldRangeStart);
+    nextLeft = rangeShift * newDayWidth
+      + (Math.abs(oldDayWidth - newDayWidth) < 0.001 ? nextLeft : nextLeft * (newDayWidth / oldDayWidth));
+  }
+  const maxLeft = Math.max(0, scroller.scrollWidth - scroller.clientWidth);
+  const maxTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+  const left = Math.max(0, Math.min(maxLeft, nextLeft));
+  const top = Math.max(0, Math.min(maxTop, Number(snapshot.top) || 0));
+  scroller.scrollLeft = left;
+  scroller.scrollTop = top;
+  if (topScrollbar) topScrollbar.scrollLeft = left;
+  if (typeof window !== 'undefined' && typeof window.scrollTo === 'function'){
+    window.scrollTo({ top: Number(snapshot.windowY) || 0, left: window.scrollX || 0, behavior: 'auto' });
+  }
 }
 
 function renderProjectFlowView(options = {}){
   const root = $('projectFlowTimeline');
   if (!root) return;
-  const previousScroller = root.querySelector?.('.project-flow-scroller');
-  const previousTopScrollbar = root.querySelector?.('.project-flow-top-scrollbar');
   const preserveScroll = Boolean(options.preserveScroll);
-  const previousScroll = preserveScroll
-    ? {
-      left: previousScroller?.scrollLeft || 0,
-      top: previousScroller?.scrollTop || 0,
-      topLeft: previousTopScrollbar?.scrollLeft || 0,
-      windowY: typeof window !== 'undefined' ? window.scrollY : 0
-    }
-    : null;
+  const requestedViewport = preserveScroll ? (options.viewport || projectFlowState.pendingViewport) : null;
+  const previousScroll = requestedViewport || (preserveScroll ? captureProjectFlowViewport(root) : null);
+  projectFlowState.pendingViewport = null;
   loadProjectFlowState();
   updateProjectFlowProjectSelect();
   populateProjectFlowPhaseSelect();
@@ -9601,7 +9751,15 @@ function renderProjectFlowView(options = {}){
       projectNumber: project.projectNumber || ''
     }));
   });
-  const { start, end } = getProjectFlowRange(milestones);
+  let { start, end } = getProjectFlowRange(milestones);
+  if (previousScroll){
+    const previousStart = parseProjectFlowDate(previousScroll.rangeStart);
+    const previousEnd = parseProjectFlowDate(previousScroll.rangeEnd);
+    if (previousStart && previousStart < start) start = previousStart;
+    if (previousEnd && previousEnd > end) end = previousEnd;
+  }
+  projectFlowState.renderedRangeStart = formatProjectFlowDate(start);
+  projectFlowState.renderedRangeEnd = formatProjectFlowDate(end);
   const dates = buildProjectFlowDates(start, end);
   const todayKey = getProjectFlowDateKey(new Date());
   const sortedMilestones = [...milestones].sort((a, b)=>{
@@ -9887,19 +10045,14 @@ function renderProjectFlowView(options = {}){
   scroller.appendChild(linkOverlay);
   syncProjectFlowTopScrollbar(scroller, topScrollbar);
   root.append(title, topScrollbar, scroller);
-  requestAnimationFrame(()=>{
-    const dayWidth = getProjectFlowDayWidth();
-    grid.style.setProperty('--project-flow-day-width', `${dayWidth}px`);
-    topScrollbarInner.style.setProperty('--project-flow-day-width', `${dayWidth}px`);
-  });
+  const dayWidth = getProjectFlowDayWidth();
+  grid.style.setProperty('--project-flow-day-width', `${dayWidth}px`);
+  topScrollbarInner.style.setProperty('--project-flow-day-width', `${dayWidth}px`);
+  projectFlowState.renderedDayWidth = dayWidth;
   if (previousScroll){
+    restoreProjectFlowViewport(scroller, topScrollbar, previousScroll, start);
     requestAnimationFrame(()=>{
-      scroller.scrollLeft = previousScroll.left;
-      scroller.scrollTop = previousScroll.top;
-      topScrollbar.scrollLeft = previousScroll.topLeft || previousScroll.left;
-      if (typeof window !== 'undefined' && typeof window.scrollTo === 'function'){
-        window.scrollTo({ top: previousScroll.windowY, left: window.scrollX || 0, behavior: 'auto' });
-      }
+      restoreProjectFlowViewport(scroller, topScrollbar, previousScroll, start);
     });
   } else {
     scrollProjectFlowToCurrentWeek(scroller, start, topScrollbar);
@@ -9913,10 +10066,11 @@ function renderProjectFlowView(options = {}){
   }
 }
 
-function renderProjectDashboard(){
+function renderProjectDashboard(options = {}){
   renderProjectsPage({
     authState,
     projectState,
+    searchOnly: options.searchOnly === true,
     callbacks: {
       canEditProject: canEditProjectRecord,
       ensureProjectFolderStatusesLoaded,
@@ -9924,7 +10078,6 @@ function renderProjectDashboard(){
       projectMatchesSearch,
       renderMainDashboard,
       renderOffersList,
-      renderProjectFlowView,
       updateProjectArchiveUi
     },
     rowHelpers: {
@@ -11238,12 +11391,16 @@ async function initProjectDashboard(){
   sortProjects();
   updateProjectHistories();
   await syncProjectsForCurrentUser();
+  loadProjectFlowState();
+  void flushProjectFlowCalendarQueue();
   if (hasDashboardUI()){
     showDashboardView({ clearSelection: true });
     applyDashboardQueryContext();
   }
   if (dashboardState.activePage === 'project-flow-beta'){
     renderProjectFlowBetaView();
+  } else if (dashboardState.activePage === 'project-flow'){
+    renderProjectFlowView();
   }
   updateProjectMetaDisplay();
 }
@@ -12577,11 +12734,28 @@ if (addProjectFlowMilestoneBtn){
 
 const refreshProjectFlowBtn = $('refreshProjectFlowBtn');
 if (refreshProjectFlowBtn){
-  refreshProjectFlowBtn.addEventListener('click', ()=>{
+  refreshProjectFlowBtn.addEventListener('click', async ()=>{
     projectFlowState.dashboardStatusFilter = '';
-    void refreshProjectFlowView();
+    await flushProjectFlowCalendarQueue();
+    await refreshProjectFlowView();
   });
 }
+
+let projectFlowHiddenFlushTimer = null;
+window.addEventListener('pagehide', ()=>{
+  if (projectFlowHiddenFlushTimer) window.clearTimeout(projectFlowHiddenFlushTimer);
+  projectFlowHiddenFlushTimer = null;
+});
+document.addEventListener('visibilitychange', ()=>{
+  if (projectFlowHiddenFlushTimer) window.clearTimeout(projectFlowHiddenFlushTimer);
+  projectFlowHiddenFlushTimer = null;
+  if (document.visibilityState === 'hidden'){
+    projectFlowHiddenFlushTimer = window.setTimeout(()=>{
+      projectFlowHiddenFlushTimer = null;
+      void flushProjectFlowCalendarQueue();
+    }, 500);
+  }
+});
 
 const dashboardProjectStatusSummary = $('dashboardProjectStatusSummary');
 if (dashboardProjectStatusSummary){
@@ -12949,7 +13123,7 @@ if (projectFlowTimelineEl){
       const projectId = editTarget.getAttribute('data-project-id') || '';
       const milestoneId = editTarget.getAttribute('data-project-flow-edit') || '';
       const milestone = getProjectFlowMilestones(projectId).find(item=>item.id === milestoneId);
-      if (milestone) openProjectFlowMilestoneForm(milestone);
+      if (milestone) openProjectFlowMilestoneForm(milestone, { projectId });
       return;
     }
     const dateCell = evt.target instanceof Element ? evt.target.closest('[data-project-flow-date-cell]') : null;

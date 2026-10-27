@@ -1013,7 +1013,7 @@ function renderDashboardRecommendedActionList(root, actions, options = {}){
   if (!source.length){
     const empty = document.createElement('div');
     empty.className = 'dashboard-status-project-empty';
-    empty.textContent = options.emptyText || 'Ingen anbefalte handlinger akkurat nÃƒÂ¥.';
+    empty.textContent = options.emptyText || 'Ingen anbefalte handlinger akkurat n\u00e5.';
     root.appendChild(empty);
     return;
   }
@@ -1068,7 +1068,7 @@ export function renderDashboardRecommendedActionsWidget(actions = []){
   if (!source.length){
     const empty = document.createElement('div');
     empty.className = 'dashboard-status-project-empty';
-    empty.textContent = 'Ingen anbefalte handlinger akkurat nÃ¥.';
+    empty.textContent = 'Ingen anbefalte handlinger akkurat n\u00e5.';
     root.appendChild(empty);
     return;
   }
@@ -1104,7 +1104,7 @@ export function renderDashboardRecommendedActionsModal(actions = [], searchTerm 
   });
   renderDashboardRecommendedActionList(root, source, {
     modal: true,
-    emptyText: query ? 'Ingen anbefalte handlinger samsvarer med søket.' : 'Ingen anbefalte handlinger akkurat nÃƒÂ¥.'
+    emptyText: query ? 'Ingen anbefalte handlinger samsvarer med søket.' : 'Ingen anbefalte handlinger akkurat n\u00e5.'
   });
 }
 
@@ -1118,7 +1118,7 @@ export function renderDashboardEmailProjectSuggestionsWidget(suggestions = []){
   if (!source.length){
     const empty = document.createElement('div');
     empty.className = 'dashboard-status-project-empty';
-    empty.textContent = 'Ingen e-posttrÃ¥der foreslÃ¥tt.';
+    empty.textContent = 'Ingen e-posttr\u00e5der foresl\u00e5tt.';
     root.appendChild(empty);
     return;
   }

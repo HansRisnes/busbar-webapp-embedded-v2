@@ -90,6 +90,7 @@ export const PROJECT_SORT_STORAGE_KEY = 'busbar.project.sort.v1';
 export const LINE_SORT_STORAGE_KEY = 'busbar.line.sort.v1';
 export const OFFER_SORT_STORAGE_KEY = 'busbar.offer.sort.v1';
 export const PROJECT_FLOW_STORAGE_KEY = 'busbar.project.flow.v1';
+export const PROJECT_FLOW_CALENDAR_QUEUE_STORAGE_KEY = 'busbar.project.flow.calendar.pending.v1';
 export const PROJECT_FLOW_ALL_PROJECTS = '__all__';
 export const PROJECT_SORT_OPTIONS = Object.freeze(['date_newest', 'date_oldest', 'alpha_asc', 'alpha_desc']);
 export const LINE_SORT_OPTIONS = Object.freeze(['date_newest', 'date_oldest', 'alpha_asc', 'alpha_desc']);
