@@ -2,7 +2,7 @@ export const RAW_CSV_PATHS = [
   'data/busbar-webapp-embedded-v2.csv',
   'data/busbar-webapp-embedded-v2.1.csv',
   'data/busbar-webapp-embedded-v2.2.csv',
-  'data/XAP_busbar_prisliste_ekstrakt_5W_clean.csv'
+  'data/XAP_busbar_prisliste_ekstrakt.csv'
 ];
 
 export const XAP_SERIES = 'XAP-B';
@@ -11,8 +11,7 @@ export const COMPARISON_ELIGIBLE_SERIES = Object.freeze(['XCM','XCP-S']);
 export const ENABLE_XAP_COMPARISON = false;
 export const LOCKED_LEDERE_BY_SERIES = Object.freeze({
   XCM: '3F+N+PE',
-  [XAP_SERIES]: '3F+N+PE',
-  [EPOXY_IP68_SERIES]: '3F+N'
+  [XAP_SERIES]: '3F+N+PE'
 });
 export const CRT_FEED_ALLOWED_SERIES = Object.freeze(['XCP-S', XAP_SERIES]);
 export const seriesLockedLedereValue = series => LOCKED_LEDERE_BY_SERIES[series] || '';

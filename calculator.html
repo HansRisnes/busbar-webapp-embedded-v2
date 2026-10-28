@@ -89,9 +89,9 @@ input[type="number"]::-webkit-inner-spin-button{
     </div>
     <div class="market-bar" id="marketTicker" aria-live="polite">
       <div class="market-item">
-        <span class="market-label">LME aluminium</span>
-        <span class="market-value" id="marketAlPrice">--</span>
-        <span class="market-note" id="marketAlMeta">USD/t · ALI=F</span>
+        <span class="market-label">Aluminiumpris (indikativ)</span>
+        <button type="button" class="market-value market-al-price" id="marketAlPrice" disabled>--</button>
+        <span class="market-note" id="marketAlMeta">USD/t</span>
       </div>
       <div class="market-item">
         <div class="market-fx-grid">
@@ -99,8 +99,8 @@ input[type="number"]::-webkit-inner-spin-button{
           <span class="market-label">1 uke</span>
           <span class="market-label">1 MND</span>
           <span class="market-value" id="marketUsdNok">--</span>
-          <span class="market-change-value" id="marketUsdWeek">--</span>
-          <span class="market-change-value" id="marketUsdMonth">--</span>
+          <span class="market-change-value" id="marketUsdWeek"><span class="market-change-rate">--</span><span class="market-change-percent">--</span></span>
+          <span class="market-change-value" id="marketUsdMonth"><span class="market-change-rate">--</span><span class="market-change-percent">--</span></span>
         </div>
         <span class="market-note" id="marketUsdMeta">Henter...</span>
       </div>
@@ -110,8 +110,8 @@ input[type="number"]::-webkit-inner-spin-button{
           <span class="market-label">1 uke</span>
           <span class="market-label">1 MND</span>
           <span class="market-value" id="marketEurNok">--</span>
-          <span class="market-change-value" id="marketEurWeek">--</span>
-          <span class="market-change-value" id="marketEurMonth">--</span>
+          <span class="market-change-value" id="marketEurWeek"><span class="market-change-rate">--</span><span class="market-change-percent">--</span></span>
+          <span class="market-change-value" id="marketEurMonth"><span class="market-change-rate">--</span><span class="market-change-percent">--</span></span>
         </div>
         <span class="market-note" id="marketEurMeta">Henter...</span>
       </div>
@@ -193,8 +193,9 @@ input[type="number"]::-webkit-inner-spin-button{
           <select id="series">
             <option value="">Velg…</option>
               <option value="XCM">Metallkapslet IP55 (160-1000A)</option>
-            <option value="XCP-S">Metallkapslet IP55 (1250-5000A)</option>
-            <option value="RCP-IP68">Epoxy IP68 (1250A-5000A)</option>
+              <option value="XCP-S">Metallkapslet IP55 (630-5000A)</option>
+              <option value="XAP-B">XAP-B IP55 (400-5000A)</option>
+            <option value="RCP-IP68">Epoxy IP68 (630-5000A)</option>
             
           </select>
         </label>
@@ -334,7 +335,7 @@ input[type="number"]::-webkit-inner-spin-button{
             <div class="montasje-grid">
               <div class="montasje-rates">
                 <label class="montasje-rate">Timessats (NOK)<br>
-                  <input id="montasjeHourlyRate" type="number" inputmode="decimal" step="0.01" min="0" value="700">
+                  <input id="montasjeHourlyRate" type="number" inputmode="decimal" step="0.01" min="0" value="890">
                 </label>
                 <label class="oppheng-rate">Opphengsmateriell (NOK/stk)<br>
                   <input id="opphengRate" type="number" inputmode="decimal" step="0.01" min="0" placeholder="0">
@@ -369,7 +370,7 @@ input[type="number"]::-webkit-inner-spin-button{
             <div class="montasje-grid">
               <div class="montasje-rates engineering-rates">
                 <label class="montasje-rate">Timessats (NOK)<br>
-                  <input id="engineeringHourlyRate" type="number" inputmode="decimal" step="0.01" min="0" value="929.9">
+                  <input id="engineeringHourlyRate" type="number" inputmode="decimal" step="0.01" min="0" value="1200">
                 </label>
                 <label class="rate-toggle">
                   <input id="engineeringRateToggle" type="checkbox">
@@ -443,7 +444,10 @@ input[type="number"]::-webkit-inner-spin-button{
       <!-- Rad 3: montasje, ingeniør og oppheng i egen firkant (full bredde) -->
       <div class="totals-montasje">
         <div class="totals-line">
-          <div class="total-item"><strong>Montasje:</strong> <span id="montasje"></span></div>
+          <div class="total-item">
+            <div><strong>Montasje:</strong> <span id="montasje"></span></div>
+            <div class="montasje-startup-cost">Oppstartkost: <span id="montasjeStartupCost"></span> NOK</div>
+          </div>
           <div class="total-item margin-item">
             <button id="montasjeDgConfigBtn" type="button" class="btn alt margin-config-btn">Endre</button>
             <strong id="montasjeDgLabel">DG 20%:</strong>

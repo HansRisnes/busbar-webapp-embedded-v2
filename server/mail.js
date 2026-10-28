@@ -6,6 +6,7 @@ const { promisify } = require('util');
 const express = require('express');
 const nodemailer = require('nodemailer');
 const AdmZip = require('adm-zip');
+const { getXmlElementRanges, removeMontasjeConditionsPage } = require('./offer-template-conditions');
 const { ClientSecretCredential } = require('@azure/identity');
 const scryptAsync = promisify(crypto.scrypt);
 
@@ -54,9 +55,6 @@ const OFFER_PRICE_SOURCE_FILES = [
   path.resolve(PRICE_DATA_DIR, 'busbar-webapp-embedded-v2.2.csv')
 ];
 const MARKET_HTTP_TIMEOUT_MS = Number(process.env.MARKET_HTTP_TIMEOUT_MS || 7000);
-const MARKET_LME_URL =
-  process.env.MARKET_LME_URL ||
-  'https://query1.finance.yahoo.com/v7/finance/quote?symbols=ALI%3DF';
 const MARKET_USER_AGENT =
   process.env.MARKET_USER_AGENT || 'BusbarPricing/1.0 (+https://busbar.no)';
 const NORGES_BANK_USD_NOK_URL =
@@ -101,6 +99,7 @@ const marketScheduleState = {
 };
 
 let marketCache = { payload: null };
+let marketDataMutationLock = Promise.resolve();
 let offerNumberLock = Promise.resolve();
 let projectArchiveLock = Promise.resolve();
 let userAuthLock = Promise.resolve();
@@ -1902,19 +1901,24 @@ async function loadFireBarrierPriceIndex() {
       continue;
     }
 
-    const rows = raw.split(/\r?\n/).filter(Boolean);
+    const rows = raw.split(/\r\n|\r|\n/).filter(Boolean);
     if (rows.length < 2) continue;
     const header = parseCsvLine(rows[0]).map(cell=>safeString(cell).toLowerCase());
     const descIdx = header.indexOf('desc_text');
     const priceIdx = header.indexOf('price');
     if (descIdx < 0 || priceIdx < 0) continue;
 
+    let currentXcpAmp = NaN;
     for (let i = 1; i < rows.length; i += 1) {
       const columns = parseCsvLine(rows[i]);
       const desc = columns[descIdx] || '';
+      const xcpAmp = desc.match(/^XCP-S\s+Al\s+(\d{3,4})A\b/i);
+      if (xcpAmp) currentXcpAmp = Number(xcpAmp[1]);
       if (!/fire\s*barri(?:er|e)\b|brann/i.test(desc)) continue;
 
-      const amp = extractAmpFromFireBarrierDesc(desc);
+      const amp = /\bB120\b/i.test(desc) && Number.isFinite(currentXcpAmp)
+        ? currentXcpAmp
+        : extractAmpFromFireBarrierDesc(desc);
       if (!Number.isFinite(amp)) continue;
 
       const price = toFiniteNumber(columns[priceIdx]);
@@ -2067,6 +2071,7 @@ function aggregateProjectOfferTotals(project) {
     freight: 0,
     totalExMontasje: 0,
     montasje: 0,
+    montasjeStartupCost: 0,
     montasjeHours: 0,
     montasjeMargin: 0,
     totalInclMontasje: 0,
@@ -2100,6 +2105,7 @@ function aggregateProjectOfferTotals(project) {
     add('freight', lineTotals.freight);
     add('totalExMontasje', lineTotals.totalExMontasje);
     add('montasje', lineTotals?.montasje?.cost);
+    add('montasjeStartupCost', lineTotals.montasjeStartupCost);
     add('montasjeHours', lineTotals?.montasje?.totalHours);
     add('montasjeMargin', lineTotals.montasjeMargin);
     add('totalInclMontasje', lineTotals.totalInclMontasje);
@@ -2536,21 +2542,17 @@ function formatMaterialOfferUnitPrice(unitCost, input = {}, lineTotals = {}) {
   return Number.isFinite(price) ? formatNoCurrencyWithKr(price) : '';
 }
 
-function resolveMeterMaterialUnitCost(line, input = {}, lineTotals = {}) {
+function resolveMeterMaterialUnitCost(line, input = {}) {
   const meterQty = toFiniteNumber(input?.meter);
   if (!Number.isFinite(meterQty) || meterQty <= 0) return NaN;
 
   const bom = Array.isArray(line?.bom) ? line.bom : [];
-  const material = bom.reduce((sum, entry)=>{
-    if (isSeparateTapOffBoxBomLine(entry) || safeString(entry?.specialElementGroupId)) return sum;
+  const straightMaterial = bom.reduce((sum, entry)=>{
+    const type = safeString(entry?.type || entry?.element_type || entry?.elementType).toLowerCase();
+    if (!/^(?:straight_|xcm_(?:feeder|dist)_)/.test(type)) return sum;
     return sum + resolveBomLineSum(entry);
   }, 0);
-  if (material > 0) return round2(material / meterQty);
-
-  const storedMaterial = toFiniteNumber(lineTotals?.material);
-  return Number.isFinite(storedMaterial) && storedMaterial > 0
-    ? round2(storedMaterial / meterQty)
-    : NaN;
+  return straightMaterial > 0 ? straightMaterial / meterQty : NaN;
 }
 
 const UNIT_PRICE_PLACEHOLDER_GROUPS = [
@@ -2620,7 +2622,7 @@ function buildUnitPricePlaceholders(line, input, lineTotals, fireBarrierPriceInd
   const tapOffQty = resolveTapOffItemsFromLine(line, input).reduce((sum, item)=>sum + (toFiniteNumber(item?.qty) || 0), 0);
   const values = {
     meter: hasPositiveQuantity(meterQty)
-      ? formatMaterialOfferUnitPrice(resolveMeterMaterialUnitCost(line, input, lineTotals), input, lineTotals)
+      ? formatMaterialOfferUnitPrice(resolveMeterMaterialUnitCost(line, input), input, lineTotals)
       : '',
     vinkelVertikal: hasPositiveQuantity(verticalAngleQty)
       ? formatMaterialOfferUnitPrice(rawUnit('vinkelVertikal') || rawUnit('vinkel') || resolveBomUnitByType(line, 'elbow_vertical_90'), input, lineTotals)
@@ -3146,7 +3148,7 @@ async function buildOfferLinePlaceholderValues(project) {
       offer_total_nok: formatNoCurrencyWithKr(resolveLineOfferTemplateTotal(line)),
       tmo: formatNoCurrency(lineTotals.totalInclMontasje),
       tin: formatNoCurrency(lineTotals.totalInclEngineering),
-      mtl: showMontasje ? 'Montasje' : '',
+      mtl: showMontasje ? 'Budsjettpris montasje, se forbehold' : '',
       mtp: showMontasje ? montasjePrice : '',
       ttm: showMontasje ? montasjeHoursLabel : '',
       itl: showEngineering ? 'Ingenior' : '',
@@ -3323,27 +3325,6 @@ function xmlContainsPlaceholder(xml, key) {
   return new RegExp(`${open}${body}${close}`, 'i').test(source);
 }
 
-function getXmlElementRanges(xml, tagName) {
-  const source = String(xml || '');
-  const escapedTag = escapeRegex(tagName);
-  const tagPattern = new RegExp(`<\\/?${escapedTag}\\b[^>]*>`, 'g');
-  const ranges = [];
-  const stack = [];
-  let match;
-  while ((match = tagPattern.exec(source)) !== null) {
-    const token = match[0];
-    if (token.startsWith(`</`)) {
-      const start = stack.pop();
-      if (start !== undefined && stack.length === 0) {
-        ranges.push({ start, end: tagPattern.lastIndex });
-      }
-    } else if (!token.endsWith('/>')) {
-      stack.push(match.index);
-    }
-  }
-  return ranges;
-}
-
 function rangeInsideAny(range, outerRanges) {
   return outerRanges.some(outer=>range.start >= outer.start && range.end <= outer.end);
 }
@@ -3513,6 +3494,9 @@ async function generateOfferDocx(project, offerNumber, offerDate, revision = 0, 
     ...buildOfferPlaceholderValues(project, offerNumber, offerDate, revision, userProfile),
     ...buildAggregateUnitPricePlaceholders(linePlaceholderSets)
   };
+  const includesMontasje = offerLines.some(line=>
+    resolveLineSelectedAddonConfig(line, line?.totals).includeMontasje
+  );
   const zip = new AdmZip(offerTemplateFile);
   const entries = zip.getEntries().filter(entry=>
     !entry.isDirectory &&
@@ -3525,7 +3509,10 @@ async function generateOfferDocx(project, offerNumber, offerDate, revision = 0, 
     const withExpandedLineBlocks = expandLineRepeatBlocks(xml, linePlaceholderSets);
     const withExpandedFireBlocks = expandFireRepeatBlocks(withExpandedLineBlocks, firePlaceholderSets);
     const withExpandedOpphengBlocks = expandOpphengRepeatBlocks(withExpandedFireBlocks, opphengPlaceholderSets);
-    const withoutUnusedPlaceholders = removeUnusedOfferPlaceholderContainers(withExpandedOpphengBlocks, placeholders);
+    const withMontasjeConditions = entry.entryName === 'word/document.xml' && !includesMontasje
+      ? removeMontasjeConditionsPage(withExpandedOpphengBlocks)
+      : withExpandedOpphengBlocks;
+    const withoutUnusedPlaceholders = removeUnusedOfferPlaceholderContainers(withMontasjeConditions, placeholders);
     const replaced = replacePlaceholdersInXml(withoutUnusedPlaceholders, placeholders);
     if (replaced !== xml) {
       zip.updateFile(entry.entryName, Buffer.from(replaced, 'utf8'));
@@ -3706,24 +3693,6 @@ async function fetchFxRatesFromNorgesBank() {
   };
 }
 
-async function fetchLmeQuote() {
-  const res = await fetchWithTimeout(MARKET_LME_URL, { accept: 'application/json' });
-  if (!res.ok) {
-    throw new Error(`LME price-endepunkt svarte ${res.status}`);
-  }
-  const data = await res.json();
-  const quote = data?.quoteResponse?.result?.[0] || {};
-  const price = Number(quote.regularMarketPrice);
-  return {
-    price: Number.isFinite(price) ? price : null,
-    currency: quote.currency || 'USD',
-    symbol: quote.symbol || 'ALI=F',
-    source: 'Yahoo Finance',
-    notation: `${quote.currency || 'USD'}/t`,
-    unit: 't'
-  };
-}
-
 function normalizeFxPoint(rawPoint, pair, fallbackSource) {
   if (isObject(rawPoint)) {
     const rate = parseRate(rawPoint.rate ?? rawPoint.value ?? rawPoint.last);
@@ -3797,8 +3766,15 @@ function normalizeMarketPayload(rawPayload) {
     normalizeIsoTimestamp(rawPayload.fetchedAt) ||
     new Date().toISOString();
 
+  const previousAluminium = isObject(rawPayload.aluminium) ? rawPayload.aluminium : {};
+  const aluminium = /^yahoo finance\b/i.test(String(previousAluminium.source || ''))
+    ? {}
+    : { ...previousAluminium };
+  delete aluminium.lastCheckedAt;
+  delete aluminium.lastError;
+
   return {
-    aluminium: isObject(rawPayload.aluminium) ? rawPayload.aluminium : {},
+    aluminium,
     fx: normalizeFxSnapshot(rawPayload.fx),
     updatedAt
   };
@@ -3827,7 +3803,19 @@ function isMarketDataStaleForToday(now = new Date()) {
   const todayKey = toDateKeyInTimezone(now, MARKET_TIMEZONE);
   const lastKey = toDateKeyInTimezone(lastSuccessIso, MARKET_TIMEZONE);
   if (!todayKey || !lastKey) return true;
-  return todayKey !== lastKey;
+  if (todayKey === lastKey) return false;
+  const localHour = Number(new Intl.DateTimeFormat('en-GB', {
+    timeZone: MARKET_TIMEZONE,
+    hour: '2-digit',
+    hourCycle: 'h23'
+  }).format(now));
+  return localHour >= MARKET_DAILY_REFRESH_HOUR;
+}
+
+function queueMarketDataMutation(action) {
+  const pending = marketDataMutationLock.then(action);
+  marketDataMutationLock = pending.catch(()=>{});
+  return pending;
 }
 
 function buildScheduleMeta() {
@@ -3868,7 +3856,7 @@ async function readMarketPayloadFromFile(filePath) {
   }
 }
 
-async function writeMarketPayloadToFile(filePath, payload) {
+async function writeMarketPayloadToFile(filePath, payload, failOnError = false) {
   try {
     await fs.mkdir(path.dirname(filePath), { recursive: true });
     const persisted = {
@@ -3880,39 +3868,49 @@ async function writeMarketPayloadToFile(filePath, payload) {
     await fs.writeFile(filePath, JSON.stringify(persisted, null, 2), 'utf8');
   } catch (err) {
     console.warn(`[market-data] Kunne ikke lagre datafil (${filePath}): ${err.message}`);
+    if (failOnError) throw err;
   }
 }
 
 function computeNextDailyRefresh(from = new Date()) {
   const next = new Date(from);
-  next.setHours(MARKET_DAILY_REFRESH_HOUR, 0, 0, 0);
-  if (next.getTime() <= from.getTime()) {
-    next.setDate(next.getDate() + 1);
+  next.setUTCSeconds(0, 0);
+  next.setUTCMinutes(next.getUTCMinutes() + 1);
+  const formatter = new Intl.DateTimeFormat('en-GB', {
+    timeZone: MARKET_TIMEZONE,
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23'
+  });
+  for (let minute = 0; minute < 48 * 60; minute++) {
+    if (formatter.format(next) === MARKET_DAILY_REFRESH_LABEL) return next;
+    next.setUTCMinutes(next.getUTCMinutes() + 1);
   }
-  return next;
+  throw new Error('Kunne ikke planlegge neste valutaoppdatering');
 }
 
 async function refreshMarketDataNow(reason = 'manual') {
+  return queueMarketDataMutation(()=>refreshMarketDataUnlocked(reason));
+}
+
+async function refreshMarketDataUnlocked(reason) {
   const base = marketCache.payload || (await readMarketPayloadFromFile(MARKET_DATA_FILE)) || {
     aluminium: {},
     fx: normalizeFxSnapshot({}),
     updatedAt: new Date().toISOString()
   };
 
-  const [fxResult, lmeResult] = await Promise.allSettled([
-    fetchFxRatesFromNorgesBank(),
-    fetchLmeQuote()
-  ]);
-
-  if (fxResult.status !== 'fulfilled') {
+  let fx;
+  try {
+    fx = await fetchFxRatesFromNorgesBank();
+  } catch (cause) {
     const wrapped = new Error(`Kunne ikke hente valutakurser fra Norges Bank (${reason})`);
-    wrapped.cause = fxResult.reason;
+    wrapped.cause = cause;
     throw wrapped;
   }
-
   const nextPayload = normalizeMarketPayload({
-    aluminium: lmeResult.status === 'fulfilled' ? lmeResult.value : base.aluminium,
-    fx: fxResult.value,
+    aluminium: base.aluminium,
+    fx,
     updatedAt: new Date().toISOString()
   });
 
@@ -3926,6 +3924,30 @@ async function refreshMarketDataNow(reason = 'manual') {
 
   await writeMarketPayloadToFile(MARKET_DATA_FILE, nextPayload);
   return nextPayload;
+}
+
+async function updateManualAluminiumPrice(price) {
+  await ensureMarketDataLoaded();
+  return queueMarketDataMutation(async ()=>{
+    const base = marketCache.payload;
+    const fxUpdatedAt = Date.parse(base.updatedAt);
+    const updatedAt = new Date(Math.max(Date.now(), fxUpdatedAt + 1)).toISOString();
+    const nextPayload = normalizeMarketPayload({
+      ...base,
+      aluminium: {
+        price,
+        currency: 'USD',
+        symbol: 'MANUAL',
+        source: 'Manuell',
+        notation: 'USD/t',
+        unit: 't',
+        updatedAt
+      }
+    });
+    await writeMarketPayloadToFile(MARKET_DATA_FILE, nextPayload, true);
+    marketCache.payload = nextPayload;
+    return withSchedule(nextPayload);
+  });
 }
 
 async function runScheduledMarketRefresh(reason) {
@@ -4011,6 +4033,7 @@ async function ensureMarketDataLoaded() {
     if (fromFileUpdatedAt) {
       marketScheduleState.lastRunAt = fromFileUpdatedAt;
       marketScheduleState.lastSuccessAt = fromFileUpdatedAt;
+      marketScheduleState.lastError = null;
       marketScheduleState.status = 'ok';
     }
     return marketCache.payload;
@@ -4021,7 +4044,8 @@ async function ensureMarketDataLoaded() {
 
 async function initializeMarketDataAutomation() {
   await ensureMarketDataLoaded();
-  const startupSucceeded = await runScheduledMarketRefresh('startup');
+  const startupSucceeded = !isMarketDataStaleForToday(new Date())
+    || await runScheduledMarketRefresh('startup');
   if (startupSucceeded) {
     scheduleDailyMarketRefresh();
   } else {
@@ -4489,6 +4513,19 @@ app.post('/api/user-projects/sync', requireUserAuth, async (req, res) => {
   } catch (err) {
     console.error('Synk av brukerprosjekter feilet', err);
     return res.status(err?.statusCode || 500).json({ error: err?.message || 'Kunne ikke synkronisere prosjekter' });
+  }
+});
+
+app.put('/api/market-data/aluminium', requireUserAuth, requireMicrosoftOwnerAuth, async (req, res) => {
+  const price = Number(req.body?.price);
+  if (!Number.isFinite(price) || price <= 0 || price > 100000) {
+    return res.status(400).json({ error: 'Oppgi en gyldig aluminiumpris i USD per tonn' });
+  }
+  try {
+    res.json(await updateManualAluminiumPrice(Math.round(price * 100) / 100));
+  } catch (err) {
+    console.error('[market-data] Kunne ikke lagre manuell aluminiumpris', err);
+    res.status(500).json({ error: 'Kunne ikke lagre aluminiumprisen' });
   }
 });
 

@@ -52,6 +52,11 @@ import {
   shouldCompareXap
 } from './src/client/config.js';
 import {
+  adjustXapUsdPrice,
+  getCurrentAluminiumPrice,
+  isXapIndexedType
+} from './src/client/xap-pricing.js';
+import {
   fmtFxNO,
   fmtIntNO,
   fmtMarketPercentNO,
@@ -178,6 +183,7 @@ import {
 } from './src/client/project-flow.js';
 
 let usdToNokRate = USD_TO_NOK_RATE;
+let xapAluminiumPrice = null;
 const marketDataState = { snapshot: null };
 const marketTickerState = { timerId: null };
 let lastCalc = null; // delsummer for live frakt-oppdatering
@@ -342,7 +348,7 @@ const projectFlowState = {
 
 // --- CSV ---
 function parseCSVAuto(text){
-  const lines = text.replace(/\r/g,'').split('\n').filter(x=>x.length);
+  const lines = text.split(/\r\n|\r|\n/).filter(x=>x.length);
   if (!lines.length) return [];
   const sep = (lines[0].split(';').length > lines[0].split(',').length) ? ';' : ',';
   const parseLine = (line)=>{
@@ -424,7 +430,7 @@ function buildStaticAssetUrl(relativePath){
   }
 }
 
-const MIN_MONTERING_TOTAL = 30000;
+const MONTERING_STARTUP_COST = 20000;
 let currentMarginRate = DEFAULT_MATERIAL_MARGIN_RATE;
 let currentMontasjeMarginRate = DEFAULT_MARGIN_RATE;
 let currentEngineeringMarginRate = DEFAULT_MARGIN_RATE;
@@ -925,17 +931,12 @@ function calculateDgPricing(baseCost, dgRate, maxRate = MAX_MARGIN_RATE){
 
 function calculateMontasjePricing(baseCost, dgRate){
   const regularPricing = calculateDgPricing(baseCost, dgRate, MAX_AUTO_MONTERING_MARGIN_RATE);
-  if (regularPricing.totalWithDg >= MIN_MONTERING_TOTAL || regularPricing.base <= 0){
-    return regularPricing;
-  }
-
-  const targetRatePercent = Math.ceil(((1 - (regularPricing.base / MIN_MONTERING_TOTAL)) * 100) - 1e-9);
-  const boundedRatePercent = Math.max(0, Math.min(Math.round(MAX_AUTO_MONTERING_MARGIN_RATE * 100), targetRatePercent));
-  const minPricing = calculateDgPricing(regularPricing.base, boundedRatePercent / 100, MAX_AUTO_MONTERING_MARGIN_RATE);
-
-  return minPricing.totalWithDg > regularPricing.totalWithDg
-    ? minPricing
-    : regularPricing;
+  const startupCost = regularPricing.base > 0 ? MONTERING_STARTUP_COST : 0;
+  return {
+    ...regularPricing,
+    startupCost,
+    totalWithDg: round2(regularPricing.totalWithDg + startupCost)
+  };
 }
 
 function calculateTotalsFromMaterial({
@@ -976,6 +977,7 @@ function calculateTotalsFromMaterial({
     margin,
     montasjeMarginRate: montasjePricing.dgRate,
     montasjeMargin: montasjePricing.dg,
+    montasjeStartupCost: montasjePricing.startupCost,
     montasjeTotalWithDg: montasjePricing.totalWithDg,
     engineeringMarginRate: engineeringPricing.dgRate,
     engineeringMargin: engineeringPricing.dg,
@@ -1017,6 +1019,7 @@ function recalcLastTotalsFromCurrentRates(){
   setText('freight', recalculated.freight);
   setText('totalExMontasje', recalculated.totalExMontasje);
   setText('montasjeMargin', recalculated.montasjeMargin);
+  setText('montasjeStartupCost', recalculated.montasjeStartupCost);
   setText('engineeringMargin', recalculated.engineeringMargin);
   setText('opphengMargin', recalculated.opphengMargin);
   setText('totalInclMontasje', recalculated.totalInclMontasje);
@@ -1030,6 +1033,7 @@ function recalcLastTotalsFromCurrentRates(){
     margin: recalculated.margin,
     montasjeMarginRate: recalculated.montasjeMarginRate,
     montasjeMargin: recalculated.montasjeMargin,
+    montasjeStartupCost: recalculated.montasjeStartupCost,
     engineeringMarginRate: recalculated.engineeringMarginRate,
     engineeringMargin: recalculated.engineeringMargin,
     opphengMarginRate: recalculated.opphengMarginRate,
@@ -1067,6 +1071,7 @@ function recalcLastTotalsFromCurrentRates(){
     lastEmailPayload.totals.margin = recalculated.margin;
     lastEmailPayload.totals.montasjeMarginRate = recalculated.montasjeMarginRate;
     lastEmailPayload.totals.montasjeMargin = recalculated.montasjeMargin;
+    lastEmailPayload.totals.montasjeStartupCost = recalculated.montasjeStartupCost;
     lastEmailPayload.totals.engineeringMarginRate = recalculated.engineeringMarginRate;
     lastEmailPayload.totals.engineeringMargin = recalculated.engineeringMargin;
     lastEmailPayload.totals.opphengMarginRate = recalculated.opphengMarginRate;
@@ -1347,6 +1352,87 @@ function setMarketChangeValue(elementId, change){
   el.classList.toggle('is-flat', !Number.isFinite(percent) || direction === 'flat');
 }
 
+const LME_ALUMINIUM_PAGE = 'https://www.lme.com/metals/non-ferrous/lme-aluminium#Overview';
+
+function updateAluminiumButtonState(snapshot){
+  const button = $('marketAlPrice');
+  if (!button) return;
+  const stale = Boolean(snapshot)
+    && getCurrentAluminiumPrice(pickMarketAluminium(snapshot), snapshot.updatedAt) === null;
+  button.classList.toggle('is-stale', stale);
+  button.disabled = !stale || !canEditGlobalCustomerData();
+  button.title = stale
+    ? (button.disabled ? 'Kun Owners kan oppdatere aluminiumprisen' : 'Oppdater aluminiumpris')
+    : 'Aluminiumpris oppdatert';
+}
+
+function ensureAluminiumPriceForm(){
+  let form = $('marketAluminiumForm');
+  if (form) return form;
+  form = document.createElement('form');
+  form.id = 'marketAluminiumForm';
+  form.className = 'market-aluminium-form';
+  form.hidden = true;
+  form.innerHTML = `
+    <label for="marketAluminiumInput">Aluminiumpris (USD/t)
+      <input id="marketAluminiumInput" type="number" min="0.01" max="100000" step="0.01" inputmode="decimal" required>
+    </label>
+    <a href="${LME_ALUMINIUM_PAGE}" target="_blank" rel="noopener noreferrer">LME aluminium</a>
+    <p class="form-error" role="alert" hidden></p>
+    <div class="actions">
+      <button type="submit" class="btn">Lagre</button>
+      <button type="button" class="btn alt" data-action="cancel">Avbryt</button>
+    </div>
+  `;
+  document.body.appendChild(form);
+  form.querySelector('[data-action="cancel"]').addEventListener('click', ()=>closeFormModal(form.id));
+  form.addEventListener('submit', async evt=>{
+    evt.preventDefault();
+    const price = Number($('marketAluminiumInput')?.value);
+    const error = form.querySelector('.form-error');
+    const save = form.querySelector('[type="submit"]');
+    error.hidden = true;
+    if (!Number.isFinite(price) || price <= 0 || price > 100000){
+      error.textContent = 'Oppgi en gyldig pris i USD per tonn.';
+      error.hidden = false;
+      return;
+    }
+    save.disabled = true;
+    try{
+      const response = await fetch(buildApiUrl('/api/market-data/aluminium'), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ price })
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || 'Kunne ikke lagre aluminiumprisen');
+      applyMarketSnapshot(payload);
+      closeFormModal(form.id);
+    }catch(err){
+      error.textContent = err?.message || 'Kunne ikke lagre aluminiumprisen';
+      error.hidden = false;
+    }finally{
+      save.disabled = false;
+    }
+  });
+  return form;
+}
+
+function openAluminiumPriceEditor(){
+  if ($('marketAlPrice')?.disabled) return;
+  window.open(LME_ALUMINIUM_PAGE, '_blank', 'noopener,noreferrer');
+  const form = ensureAluminiumPriceForm();
+  const previous = Number(pickMarketAluminium(marketDataState.snapshot).price);
+  const input = $('marketAluminiumInput');
+  input.value = Number.isFinite(previous) && previous > 0 ? String(previous) : '';
+  const error = form.querySelector('.form-error');
+  error.textContent = '';
+  error.hidden = true;
+  form.hidden = false;
+  openFormModal(form.id, 'Oppdater aluminiumpris');
+  input.focus();
+}
+
 function applyMarketSnapshot(snapshot){
   if (!snapshot) return;
   marketDataState.snapshot = snapshot;
@@ -1359,6 +1445,7 @@ function applyMarketSnapshot(snapshot){
   if (alEl){
     alEl.textContent = Number.isFinite(alPrice) ? fmtNO.format(alPrice) : '--';
   }
+  updateAluminiumButtonState(snapshot);
   const alMetaEl = $('marketAlMeta');
   if (alMetaEl){
     const pieces = [];
@@ -1369,11 +1456,10 @@ function applyMarketSnapshot(snapshot){
       const unit = aluminium.unit || 't';
       pieces.push(`${currency}/${unit}`);
     }
-    if (aluminium.symbol){
-      pieces.push(aluminium.symbol);
-    } else if (aluminium.source){
-      pieces.push(aluminium.source);
-    }
+    if (aluminium.source) pieces.push(aluminium.source);
+    if (aluminium.symbol && aluminium.symbol !== 'MANUAL') pieces.push(aluminium.symbol);
+    if (aluminium.quotedAt) pieces.push(String(aluminium.quotedAt).slice(0, 10));
+    if (aluminium.updatedAt) pieces.push(formatMarketTimestamp(aluminium.updatedAt));
     alMetaEl.textContent = pieces.filter(Boolean).join(' · ');
   }
 
@@ -1417,7 +1503,7 @@ function applyMarketSnapshot(snapshot){
   } else {
     setMarketStatus(MARKET_STATUS_DEFAULT, false);
   }
-  updateUsdRateFromMarket(snapshot);
+  updateCatalogPricesFromMarket(snapshot);
 }
 
 async function fetchMarketSnapshot(){
@@ -1457,6 +1543,7 @@ async function refreshMarketData(){
 
 function initMarketDataTicker(){
   if (!$('marketTicker')) return;
+  $('marketAlPrice')?.addEventListener('click', openAluminiumPriceEditor);
   refreshMarketData();
   if (marketTickerState.timerId){
     clearInterval(marketTickerState.timerId);
@@ -1587,6 +1674,7 @@ function updateAuthUI(){
   const dashboardAdminNav = $('dashboardAdminNav');
   const dashboardShell = $('dashboardShell');
   const canOpenAdmin = canEditGlobalCustomerData();
+  updateAluminiumButtonState(marketDataState.snapshot);
 
   document.body.classList.toggle('is-auth-locked', !authState.loggedIn);
   if (loginBtn) loginBtn.hidden = authState.loggedIn;
@@ -5587,6 +5675,10 @@ function applySelectedAddonCheckboxes(line){
   return config;
 }
 
+function displayConductorLabel(series, ledere){
+  return series === EPOXY_IP68_SERIES && ledere === '3F' ? '3F+N+PE' : (ledere || '');
+}
+
 function formatLineSummary(line){
   if (!line) return '';
   const input = line.inputs || {};
@@ -5606,7 +5698,7 @@ function formatLineSummary(line){
   if (input.series) parts.push(input.series);
   const amp = Number(input.ampere ?? input.amp ?? line.ampere);
   if (Number.isFinite(amp)) parts.push(`${fmtIntNO.format(amp)}A`);
-  if (input.ledere) parts.push(input.ledere);
+  if (input.ledere) parts.push(displayConductorLabel(input.series, input.ledere));
   const meter = Number(input.meter);
   if (Number.isFinite(meter)) parts.push(`${fmtIntNO.format(meter)} meter`);
   const v90h = Number(input.v90h ?? input.v90_h);
@@ -6017,6 +6109,7 @@ function applyProjectMarginRate(projectId, nextRate){
     totals.totalExMontasje = recalculated.totalExMontasje;
     totals.montasjeMarginRate = recalculated.montasjeMarginRate;
     totals.montasjeMargin = recalculated.montasjeMargin;
+    totals.montasjeStartupCost = recalculated.montasjeStartupCost;
     totals.totalInclMontasje = recalculated.totalInclMontasje;
     totals.engineeringMarginRate = recalculated.engineeringMarginRate;
     totals.engineeringMargin = recalculated.engineeringMargin;
@@ -6121,6 +6214,7 @@ function recalculateLineTotalsFromCostValues(line, values){
   totals.montasje = { ...(totals.montasje || {}), cost: values.montasje };
   totals.montasjeMarginRate = recalculated.montasjeMarginRate;
   totals.montasjeMargin = recalculated.montasjeMargin;
+  totals.montasjeStartupCost = recalculated.montasjeStartupCost;
   totals.totalInclMontasje = recalculated.totalInclMontasje;
   totals.engineering = { ...(totals.engineering || {}), cost: values.engineering };
   totals.engineeringMarginRate = recalculated.engineeringMarginRate;
@@ -11583,7 +11677,7 @@ function applyInputsToCalculator(input){
   }
   const ledereEl = $('ledere');
   if (ledereEl && !seriesLocksLedere(input.series || '')){
-    ledereEl.value = input.ledere || '';
+    ledereEl.value = displayConductorLabel(input.series, input.ledere);
   }
   const startEl = $('startEl');
   if (startEl) startEl.value = input.startEl || '';
@@ -11721,6 +11815,7 @@ function applySavedTotalsToUI(line){
   setText('totalExMontasje', totals.totalExMontasje);
   const montasjePricing = calculateMontasjePricing(totals.montasje?.cost, savedMontasjeMarginRate);
   const fallbackTotalInclMontasje = round2(Number(montasjePricing.totalWithDg || 0));
+  setText('montasjeStartupCost', totals.montasjeStartupCost ?? 0);
   setText('totalInclMontasje', totals.totalInclMontasje ?? fallbackTotalInclMontasje);
   const engineeringPricing = calculateDgPricing(totals.engineering?.cost, savedEngineeringMarginRate);
   const fallbackTotalInclEngineering = round2(Number(engineeringPricing.totalWithDg || 0));
@@ -13566,8 +13661,8 @@ const H = {
   et2:   ['element_type_2','Element type 2','element type 2','H']
 };
 
-const DEFAULT_HOURLY_RATE = 700;
-const DEFAULT_ENGINEERING_HOURLY_RATE = 929.9;
+const DEFAULT_HOURLY_RATE = 890;
+const DEFAULT_ENGINEERING_HOURLY_RATE = 1200;
 const ENGINEERING_HOURS_PER_METER = 0.30;
 const ENGINEERING_HOURS_PER_TEN_ANGLES = 0.30;
 const OPPHENG_RATE_TABLE = Object.freeze([
@@ -13590,6 +13685,9 @@ const EPOXY_MONTASJE_TIME_TABLE = Object.freeze([
 const EXCLUDED_AMP_MIN = 160;
 const EXCLUDED_AMP_MAX = 470;
 const EPOXY_MONOBLOC_FACTOR_BY_AMP = Object.freeze({
+  630: 0.5,
+  800: 0.5,
+  1000: 0.5,
   1250: 0.5,
   1600: 0.5,
   2000: 0.7,
@@ -14047,8 +14145,8 @@ function detectType(descRaw){
   if (/monobloc/.test(d) && /joint/.test(d)) return 'monobloc_joint_4c';
   if (/junction\s*kit\s*part\s*1/.test(d)) return 'junction_kit_part_1';
   if (/junction\s*kit\s*part\s*2/.test(d)) return 'junction_kit_part_2';
-  if (/edge[^a-z0-9]*molds[^a-z0-9]*kit/.test(d)) return 'edge_molds_kit';
-  if (/vert[^a-z0-9]*molds[^a-z0-9]*kit/.test(d)) return 'vert_molds_kit';
+  if (/\b(?:edge|edg)[^a-z0-9]*molds[^a-z0-9]*kit/.test(d)) return 'edge_molds_kit';
+  if (/\b(?:vert|ver)[^a-z0-9]*molds[^a-z0-9]*kit/.test(d)) return 'vert_molds_kit';
   if (/end\s*cover/.test(d))        return 'end_cover';
   if (/end\s*feed\s*unit/.test(d))  return 'end_feed_unit';
   if (/expansion/.test(d))          return 'expansion_unit';
@@ -14119,7 +14217,7 @@ function parseXAPPriceUSD(raw){
   if (raw===undefined || raw===null) return 0;
   const txt = String(raw).trim();
   if (!txt || txt==='-' || txt==='$-') return 0;
-  const cleaned = txt.replace(/\$/g,'').replace(/\s/g,'').replace(',','.');
+  const cleaned = txt.replace(/\$/g,'').replace(/\s/g,'').replace(/,/g,'');
   const num = Number(cleaned);
   return Number.isFinite(num) ? round2(num) : 0;
 }
@@ -14166,7 +14264,7 @@ function parseEpoxyMonoblocAmp(desc){
 
 function adaptXAPRow(row){
   const desc = String(row?.Beskrivelse || '').trim();
-  if (!desc) return [];
+  if (!/,\s*4W\s*-/i.test(desc)) return [];
   const parts = desc.split(' - ');
   const typeLabelRaw = parts.length > 1 ? parts.slice(1).join(' - ').trim() : '';
   const normalizedLabel = typeLabelRaw.replace(/\s+/g,' ').trim();
@@ -14175,7 +14273,8 @@ function adaptXAPRow(row){
   const type = XAP_TYPE_MAP[normalizedLabel] || '';
   const ampere = parseXAPAmp(row, desc);
   const unit_price_usd = parseXAPPriceUSD(row?.Pris_USD);
-  const unit_price = convertUsdToNok(unit_price_usd);
+  const adjustedUsd = adjustXapUsdPrice(unit_price_usd, type, xapAluminiumPrice);
+  const unit_price = Number.isFinite(adjustedUsd) ? convertUsdToNok(adjustedUsd) : NaN;
   const base = {
     code: desc,
     type,
@@ -14183,6 +14282,7 @@ function adaptXAPRow(row){
     ampere,
     unit_price,
     unit_price_usd,
+    xapLmeIndexed: isXapIndexedType(type),
     _desc: desc,
     ledere: '3F+N+PE',
     ledermateriell: normalizeXAPMaterial(row?.Leder || '')
@@ -14192,6 +14292,17 @@ function adaptXAPRow(row){
     entries.push({ ...base, type: 'straight_3m_dist' });
   } else if (type === 'straight_500_1000'){
     entries.push({ ...base, type: 'straight_500_1000_dist' });
+    const twoMeterUsd = round2(unit_price_usd * 2);
+    const adjustedTwoMeterUsd = adjustXapUsdPrice(twoMeterUsd, 'straight_1501_2000', xapAluminiumPrice);
+    const twoMeter = {
+      ...base,
+      code: desc.replace('Straight length, 1 meter', 'Straight length, 2 meters'),
+      type: 'straight_1501_2000',
+      unit_price_usd: twoMeterUsd,
+      unit_price: Number.isFinite(adjustedTwoMeterUsd) ? convertUsdToNok(adjustedTwoMeterUsd) : NaN,
+      xapLmeIndexed: true
+    };
+    entries.push(twoMeter, { ...twoMeter, type: 'straight_1501_2000_dist' });
   }
   return entries;
 }
@@ -14207,6 +14318,7 @@ function extractAmpGeneric(row){
 }
 function deriveAmp(row){
   if (Number.isFinite(row.ampere)) return Number(row.ampere);
+  if (row._ampereExplicit) return NaN;
   const s = String((row._desc||'')+' '+(row.code||'')).toUpperCase();
   let m = s.match(/(\d{2,4})\s*A\b/); if (m) return Number(m[1]);
   m = s.match(/\b(\d{2,4})\b/);       if (m) return Number(m[1]);
@@ -14217,6 +14329,8 @@ function deriveAmp(row){
 function adaptRawToCatalog(rawRows){
   const list = [];
   let currentEpoxyAmp = NaN;
+  let currentEpoxyLedere = '';
+  let currentXcpAmp = NaN;
   rawRows.forEach(r=>{
     if (isXAPRow(r)){
       const adapted = adaptXAPRow(r);
@@ -14226,6 +14340,7 @@ function adaptRawToCatalog(rawRows){
     const code = pick(r, H.code);
     const price = toNum(pick(r, H.price));
     const desc  = pick(r, H.desc);
+    if (!code || !desc) return;
     const series= detectSeries(r);
     let type    = detectType(desc);
 
@@ -14253,15 +14368,29 @@ function adaptRawToCatalog(rawRows){
     }
 
     let amp = Number.isFinite(tagAmp) ? tagAmp : extractAmpGeneric(r);
-    if (series === EPOXY_IP68_SERIES){
-      const explicitAmp = extractEpoxyAmpFromDesc(desc);
-      if (Number.isFinite(explicitAmp) && EPOXY_MAIN_ELEMENT_TYPES.has(type)){
-        currentEpoxyAmp = explicitAmp;
+    if (series === 'XCP-S'){
+      if (Number.isFinite(amp) && EPOXY_MAIN_ELEMENT_TYPES.has(type)) currentXcpAmp = amp;
+      if (type.startsWith('fire_barrier_kit') && /\bB120\b/i.test(desc) && Number.isFinite(currentXcpAmp)){
+        amp = currentXcpAmp;
       }
-      if (type === 'monobloc_joint_4c'){
+    }
+    const hasCatalogVariant = Object.prototype.hasOwnProperty.call(r, 'ledere');
+    if (series === EPOXY_IP68_SERIES){
+      const catalogAmp = String(r.ampere || '').trim();
+      const explicitAmp = hasCatalogVariant
+        ? (/^\d{3,4}$/.test(catalogAmp) ? Number(catalogAmp) : NaN)
+        : extractEpoxyAmpFromDesc(desc);
+      if (hasCatalogVariant){
+        amp = explicitAmp;
+      } else if (Number.isFinite(explicitAmp) && EPOXY_MAIN_ELEMENT_TYPES.has(type)){
+        currentEpoxyAmp = explicitAmp;
+        if (/^(6028|6039)/.test(code)) currentEpoxyLedere = '3F+N';
+        else if (/^(6024|6036)/.test(code)) currentEpoxyLedere = '3F+N+PE';
+      }
+      if (!hasCatalogVariant && type === 'monobloc_joint_4c'){
         const monoblocAmp = parseEpoxyMonoblocAmp(desc);
         amp = Number.isFinite(currentEpoxyAmp) ? currentEpoxyAmp : (Number.isFinite(monoblocAmp) ? monoblocAmp : amp);
-      } else if (
+      } else if (!hasCatalogVariant && (
         type === 'junction_kit_part_1'
         || type === 'junction_kit_part_2'
         || type === 'edge_molds_kit'
@@ -14269,15 +14398,28 @@ function adaptRawToCatalog(rawRows){
         || type === 'fire_barrier_kit'
         || type === 'fire_barrier_kit_external'
         || type === 'fire_barrier_kit_internal'
-      ){
+      )){
         if (Number.isFinite(currentEpoxyAmp)) amp = currentEpoxyAmp;
         else if (Number.isFinite(explicitAmp)) amp = explicitAmp;
-      } else if (Number.isFinite(explicitAmp)){
+      } else if (!hasCatalogVariant && Number.isFinite(explicitAmp)){
         amp = explicitAmp;
       }
+      // This 800A item is mislabeled 630A in the supplied CSV.
+      if (code === '60240151R') amp = 800;
     }
 
-    list.push({ code, type, series, ampere: amp, unit_price: price, _desc: desc, _et2: et2H });
+    const epoxyAccessoryLedere = series === EPOXY_IP68_SERIES && !hasCatalogVariant && (
+      type === 'monobloc_joint_4c' || type === 'edge_molds_kit'
+      || type === 'vert_molds_kit' || type === 'junction_kit_part_1'
+      || type === 'junction_kit_part_2'
+    ) ? (/\bRCP\s*4C\b/i.test(desc) ? '3F+N'
+       : /\bRCP\s*5C\b/i.test(desc) ? '3F+N+PE'
+       : currentEpoxyLedere) : '';
+    const ledere = String(r.ledere || '').trim()
+      || epoxyAccessoryLedere
+      || (series === EPOXY_IP68_SERIES && /^(6028|6039)/.test(code) ? '3F+N' : '')
+      || (series === EPOXY_IP68_SERIES && /^(6024|6036)/.test(code) ? '3F+N+PE' : '');
+    list.push({ code, type, series, ampere: amp, ledere, unit_price: price, _desc: desc, _et2: et2H, _ampereExplicit: hasCatalogVariant });
   });
   return list;
 }
@@ -14287,7 +14429,7 @@ function matchesLedere(row, ledere){
   if (!ledere) return true;
   if (row.ledere) return row.ledere === ledere;
   if (row.series === 'XCM') return true;
-  if (row.series === EPOXY_IP68_SERIES) return true;
+  if (row.series === EPOXY_IP68_SERIES) return false;
   const c = String(row.code||'').toUpperCase();
   const implied = c.includes('-3W') ? '3F+PE' : '3F+N+PE';
   return ledere === implied || !c;
@@ -14301,8 +14443,12 @@ function hasConductorVariants(rows){
 function byTypeAmpSeries(rows, type, amp, series){ return rows.find(r=>r.type===type && r.series===series && Number(deriveAmp(r))===Number(amp)); }
 function byTypeAmpSeriesL(rows, type, amp, series, ledere){
   const exactAmp = rows.filter(r=>r.type===type && r.series===series && Number(deriveAmp(r))===Number(amp));
+  if (series === XAP_SERIES){
+    return exactAmp.find(r=>matchesLedere(r, ledere) && Number(r.unit_price_usd) > 0) || null;
+  }
   const exactMatch = exactAmp.find(r=>matchesLedere(r, ledere));
   if (exactMatch) return exactMatch;
+  if (series === EPOXY_IP68_SERIES) return null;
   if (hasConductorVariants(exactAmp)) return null;
   if (exactAmp.length) return exactAmp[0];
 
@@ -14332,10 +14478,11 @@ function getFireBarrier(rows, amp, series){
       return { code: `${fb2500.code} x2`, unit: round2(fb2500.unit * 2) };
     }
   }
-  const direct = rows.find(r=>r.type==='fire_barrier_kit' && r.series===series && Number(deriveAmp(r))===amp);
+  const priced = rows.filter(r=>Number(r.unit_price)>0);
+  const direct = priced.find(r=>r.type==='fire_barrier_kit' && r.series===series && Number(deriveAmp(r))===amp);
   if (direct) return { code: direct.code, unit: toNum(direct.unit_price) };
-  const ext = rows.find(r=>r.type==='fire_barrier_kit_external' && r.series===series && Number(deriveAmp(r))===amp);
-  const int = rows.find(r=>r.type==='fire_barrier_kit_internal' && r.series===series && Number(deriveAmp(r))===amp);
+  const ext = priced.find(r=>r.type==='fire_barrier_kit_external' && r.series===series && Number(deriveAmp(r))===amp);
+  const int = priced.find(r=>r.type==='fire_barrier_kit_internal' && r.series===series && Number(deriveAmp(r))===amp);
   if (!ext && !int) return null;
   const unit = (ext?toNum(ext.unit_price):0) + (int?toNum(int.unit_price):0);
   const code = [ext?.code, int?.code].filter(Boolean).join('+') || 'FIRE-BARRIER';
@@ -14407,6 +14554,9 @@ function planSegments(m){
 // lines
 function makeLine(row, series, amp, ledere, qty){
   const unit = toNum(row.unit_price);
+  if (series === XAP_SERIES && (!(Number(row.unit_price_usd) > 0) || !(unit > 0))){
+    throw new Error(`Mangler pris for XAP-B ${row.code} (${amp} A).`);
+  }
   if (!Number.isFinite(unit)) throw new Error('Ugyldig pris: '+row.code);
   return { code: row.code, type: row.type, series, ampere: Number(deriveAmp(row))||amp||'', ledere, antall: qty, enhet: unit, sum: round2(unit*qty) };
 }
@@ -14458,8 +14608,18 @@ function lengthTypes(series, dist){
 
 // Greedy plan (3,2,1) + fallback-regler
 function planWithFallback(m, avail){
+  const meters = Number(m);
+  if (meters > 0 && meters <= 10){
+    const total = Math.ceil(meters);
+    const n2 = avail.L2 ? Math.floor(total / 2) : 0;
+    const n1 = total - 2 * n2;
+    if (n1 && !avail.L1){
+      throw new Error('Kan ikke finne lengdekombinasjon med elementer på maks 2 meter.');
+    }
+    return { n3: 0, n2, n1 };
+  }
   // grunnplan
-  let rem = Math.ceil(Number(m));
+  let rem = Math.ceil(meters);
   let n3=0,n2=0,n1=0;
   while(rem>3){ n3++; rem-=3; }
   if (rem>2) n3++; else if (rem>1) n2++; else if (rem>0) n1++;
@@ -14517,10 +14677,16 @@ function needAnyAmp(rows, type, amp, series){
       || rows.find(r => r.type===type && r.series===series); // ingen amp i CSV
 }
 function needAnyAmpL(rows, type, amp, series, ledere){
+  if (series === EPOXY_IP68_SERIES) return byTypeAmpSeriesL(rows, type, amp, series, ledere);
+  if (series === XAP_SERIES) return byTypeAmpSeriesL(rows, type, amp, series, ledere);
   const sameTypeSeries = rows.filter(r=>r.type===type && r.series===series);
   return byTypeAmpSeriesL(rows, type, amp, series, ledere)
       || sameTypeSeries.find(r => matchesLedere(r, ledere))
       || (!hasConductorVariants(sameTypeSeries) ? sameTypeSeries[0] : null);
+}
+
+function missingXapPrice(type, amp){
+  return `Mangler pris for XAP-B ${type} (${amp} A).`;
 }
 
 function epoxyMonoblocFactor(amp){
@@ -14528,10 +14694,10 @@ function epoxyMonoblocFactor(amp){
   return Number.isFinite(factor) ? factor : NaN;
 }
 
-function findEpoxyRow(rows, type, amp, series){
-  return byTypeAmpSeries(rows, type, amp, series)
-      || rows.find(r=>r.type===type && r.series===series && Number(deriveAmp(r))===Number(amp))
-      || rows.find(r=>r.type===type && r.series===series)
+function findEpoxyRow(rows, type, amp, series, ledere){
+  const eligible = rows.filter(r=>r.type===type && r.series===series && (!r.ledere || r.ledere===ledere));
+  return eligible.find(r=>Number(r.ampere)===Number(amp))
+      || eligible.find(r=>!Number.isFinite(r.ampere))
       || null;
 }
 
@@ -14545,19 +14711,21 @@ function addEpoxyIp68AutoBomLines(cat, input, bom, pf){
 
   const push = (row, qty)=>bom.push(makeLine(row, input.series, input.ampere, input.ledere, qty));
 
-  const monoblocRow = findEpoxyRow(cat.rows, 'monobloc_joint_4c', input.ampere, input.series);
-  if (!monoblocRow) throw new Error('Mangler 4C monobloc joint for valgt ampere.');
+  const monoblocRow = findEpoxyRow(cat.rows, 'monobloc_joint_4c', input.ampere, input.series, input.ledere);
+  if (!monoblocRow){
+    throw new Error(`Prislisten mangler monobloc-skjøt for ${input.ledere === '3F+N+PE' ? '5C' : '4C'} ${input.ampere}A. Beregning er ikke mulig.`);
+  }
   push(monoblocRow, monoblocCount);
 
   const edgeMoldsCount = straightCount + horizontalAngles;
   if (edgeMoldsCount > 0){
-    const edgeRow = findEpoxyRow(cat.rows, 'edge_molds_kit', input.ampere, input.series);
+    const edgeRow = findEpoxyRow(cat.rows, 'edge_molds_kit', input.ampere, input.series, input.ledere);
     if (!edgeRow) throw new Error('Mangler EDGE MOLDS KIT for valgt ampere.');
     push(edgeRow, edgeMoldsCount);
   }
 
   if (verticalAngles > 0){
-    const vertRow = findEpoxyRow(cat.rows, 'vert_molds_kit', input.ampere, input.series);
+    const vertRow = findEpoxyRow(cat.rows, 'vert_molds_kit', input.ampere, input.series, input.ledere);
     if (!vertRow) throw new Error('Mangler VERT MOLDS KIT for valgt ampere.');
     push(vertRow, verticalAngles);
   }
@@ -14567,44 +14735,51 @@ function addEpoxyIp68AutoBomLines(cat, input, bom, pf){
   const junctionQty = Math.ceil(monoblocCount * factor);
   if (junctionQty <= 0) return;
 
-  const junctionPart1 = findEpoxyRow(cat.rows, 'junction_kit_part_1', input.ampere, input.series);
+  const junctionPart1 = findEpoxyRow(cat.rows, 'junction_kit_part_1', input.ampere, input.series, input.ledere);
   if (!junctionPart1) throw new Error('Mangler Junction KIT part 1 for valgt ampere.');
   push(junctionPart1, junctionQty);
 
-  const junctionPart2 = findEpoxyRow(cat.rows, 'junction_kit_part_2', input.ampere, input.series);
+  const junctionPart2 = findEpoxyRow(cat.rows, 'junction_kit_part_2', input.ampere, input.series, input.ledere);
   if (!junctionPart2) throw new Error('Mangler Junction KIT part 2 for valgt ampere.');
   push(junctionPart2, junctionQty);
 }
 
 function price(cat, input){
+  if (input.series === XAP_SERIES && !Number.isFinite(xapAluminiumPrice)){
+    throw new Error('Mangler oppdatert aluminiumspris for XAP-B. Oppdater prisen i valutaheaderen.');
+  }
   const bom=[];
-  const push = (r,q)=>bom.push(makeLine(r, input.series, input.ampere, input.ledere, q));
+  let xapJointQty = 0;
+  const push = (r,q)=>{
+    bom.push(makeLine(r, input.series, input.ampere, input.ledere, q));
+    if (input.series === XAP_SERIES) xapJointQty += q;
+  };
   const need = (type)=> byTypeAmpSeries(cat.rows, type, input.ampere, input.series);
 
   // Startelement
 if (input.startEl === 'board_feed'){
   const bf = needAnyAmpL(cat.rows, 'board_feed', input.ampere, input.series, input.ledere);
-  if (!bf) throw new Error(`Mangler board_feed for ${input.series}.`);
+  if (!bf) throw new Error(input.series === XAP_SERIES ? missingXapPrice('tavleelement', input.ampere) : `Mangler board_feed for ${input.series}.`);
   push(bf,1);
 } else if (input.startEl === 'end_feed_unit'){
   const ef = needAnyAmpL(cat.rows, 'end_feed_unit', input.ampere, input.series, input.ledere);
-  if (!ef) throw new Error(`Mangler end_feed_unit for ${input.series}.`);
+  if (!ef) throw new Error(input.series === XAP_SERIES ? missingXapPrice('endetilførselsboks', input.ampere) : `Mangler end_feed_unit for ${input.series}.`);
   push(ef,1);
 }
 
 // Sluttelement
 if (input.sluttEl === 'board_feed'){
   const bf = needAnyAmpL(cat.rows, 'board_feed', input.ampere, input.series, input.ledere);
-  if (!bf) throw new Error(`Mangler board_feed for ${input.series}.`);
+  if (!bf) throw new Error(input.series === XAP_SERIES ? missingXapPrice('tavleelement', input.ampere) : `Mangler board_feed for ${input.series}.`);
   push(bf,1);
 } else if (input.sluttEl === 'crt_board_feed'){
   if (!seriesSupportsCrtFeed(input.series)) throw new Error('Trafoelement er ikke tilgjengelig for valgt system.');
   const crt = needAnyAmpL(cat.rows, 'crt_board_feed', input.ampere, input.series, input.ledere);
-  if (!crt) throw new Error(`Mangler crt_board_feed for ${input.series}.`);
+  if (!crt) throw new Error(input.series === XAP_SERIES ? missingXapPrice('trafoelement', input.ampere) : `Mangler crt_board_feed for ${input.series}.`);
   push(crt,1);
 } else if (input.sluttEl === 'end_cover'){
   const ec = needAnyAmpL(cat.rows, 'end_cover', input.ampere, input.series, input.ledere);
-  if (!ec) throw new Error(`Mangler end_cover for ${input.series}.`);
+  if (!ec) throw new Error(input.series === XAP_SERIES ? missingXapPrice('endelokk', input.ampere) : `Mangler end_cover for ${input.series}.`);
   push(ec,1);
 }
 
@@ -14620,28 +14795,40 @@ const pf = planWithFallback(input.meter, avail);
 // legg til linjer etter plan
 if (pf.n3){
   const r = findLengthVariant(cat.rows, input.series, input.ampere, input.ledere, tmap.L3);
-  if(!r) throw new Error(`Mangler ${primaryTypeLabel(tmap.L3)}.`);
+  if(!r) throw new Error(input.series === XAP_SERIES ? missingXapPrice('lengdeelement', input.ampere) : `Mangler ${primaryTypeLabel(tmap.L3)}.`);
   push(r, pf.n3);
 }
 if (pf.n2){
   const r = findLengthVariant(cat.rows, input.series, input.ampere, input.ledere, tmap.L2);
-  if(!r) throw new Error(`Mangler ${primaryTypeLabel(tmap.L2)}.`);
+  if(!r) throw new Error(input.series === XAP_SERIES ? missingXapPrice('lengdeelement', input.ampere) : `Mangler ${primaryTypeLabel(tmap.L2)}.`);
   push(r, pf.n2);
 }
 if (pf.n1){
   const r = findLengthVariant(cat.rows, input.series, input.ampere, input.ledere, tmap.L1);
-  if(!r) throw new Error(`Mangler ${primaryTypeLabel(tmap.L1)}.`);
+  if(!r) throw new Error(input.series === XAP_SERIES ? missingXapPrice('lengdeelement', input.ampere) : `Mangler ${primaryTypeLabel(tmap.L1)}.`);
   push(r, pf.n1);
 }
 
+if (input.series === XAP_SERIES && input.dist){
+  const outletQty = pf.n3 * 5 + pf.n2 * 3 + pf.n1 * 2;
+  if (outletQty){
+    const outlet = byTypeAmpSeriesL(cat.rows, 'outlet_section', input.ampere, input.series, input.ledere);
+    if (!outlet) throw new Error(missingXapPrice('avtappingspunkt', input.ampere));
+    bom.push(makeLine(outlet, input.series, input.ampere, input.ledere, outletQty));
+  }
+}
+
   // Vinkler
-  if (input.v90_h){ const r=byTypeAmpSeriesL(cat.rows,'elbow_horizontal_90',input.ampere,input.series,input.ledere); if(!r) throw new Error('Mangler elbow_horizontal_90.'); push(r,input.v90_h); }
-  if (input.v90_v){ const r=byTypeAmpSeriesL(cat.rows,'elbow_vertical_90'  ,input.ampere,input.series,input.ledere); if(!r) throw new Error('Mangler elbow_vertical_90.');   push(r,input.v90_v); }
+  if (input.v90_h){ const r=byTypeAmpSeriesL(cat.rows,'elbow_horizontal_90',input.ampere,input.series,input.ledere); if(!r) throw new Error(input.series === XAP_SERIES ? missingXapPrice('horisontal vinkel', input.ampere) : 'Mangler elbow_horizontal_90.'); push(r,input.v90_h); }
+  if (input.v90_v){ const r=byTypeAmpSeriesL(cat.rows,'elbow_vertical_90'  ,input.ampere,input.series,input.ledere); if(!r) throw new Error(input.series === XAP_SERIES ? missingXapPrice('vertikal vinkel', input.ampere) : 'Mangler elbow_vertical_90.'); push(r,input.v90_v); }
   addEpoxyIp68AutoBomLines(cat, input, bom, pf);
 
   // Avtappingsbokser
   const boxItems = normalizeBoxItems(input.boxItems, input.boxSel, input.boxQty, input.boxInnmatSum);
   if (boxItems.length){
+    if (input.series === XAP_SERIES){
+      throw new Error('Mangler pris for avtappingsbokser til XAP-B.');
+    }
     boxItems.forEach(item=>{
       const [kind, ampStr] = String(item.boxSel || '').split('|');
       if (kind==='bolt_on_box' && input.series==='XCM') throw new Error('Bolt-on box kan ikke brukes på XCM.');
@@ -14692,15 +14879,21 @@ if (pf.n1){
   // Brann
   if (input.fbQty>0){
     const fb = getFireBarrier(cat.rows, input.ampere, input.series);
-    if (!fb) throw new Error('Mangler fire barrier kit.');
+    if (!fb) throw new Error(input.series === XAP_SERIES ? missingXapPrice('brannelement', input.ampere) : 'Mangler fire barrier kit.');
     bom.push(makeCustomLine(fb.code, 'fire_barrier_kit', input.series, input.ampere, input.ledere, fb.unit, input.fbQty));
   }
 
   // Ekspansjon
   if (input.meter > 30 && input.expansionYes){
     const exp = byTypeAmpSeriesL(cat.rows,'expansion_unit',input.ampere,input.series,input.ledere);
-    if (!exp) throw new Error(`Mangler expansion_unit for ${input.series} ${input.ampere}.`);
+    if (!exp) throw new Error(input.series === XAP_SERIES ? missingXapPrice('ekspansjonselement', input.ampere) : `Mangler expansion_unit for ${input.series} ${input.ampere}.`);
     push(exp,1);
+  }
+
+  if (input.series === XAP_SERIES && xapJointQty){
+    const joint = byTypeAmpSeriesL(cat.rows, 'joint', input.ampere, input.series, input.ledere);
+    if (!joint) throw new Error(missingXapPrice('joint', input.ampere));
+    bom.push(makeLine(joint, input.series, input.ampere, input.ledere, xapJointQty));
   }
 
   const tapOffBoxTotal = sumSeparateTapOffBoxTotal(bom);
@@ -14756,6 +14949,7 @@ if (pf.n1){
     freight: totals.freight,
     montasjeMarginRate: totals.montasjeMarginRate,
     montasjeMargin: totals.montasjeMargin,
+    montasjeStartupCost: totals.montasjeStartupCost,
     montasje,
     engineeringMarginRate: totals.engineeringMarginRate,
     engineeringMargin: totals.engineeringMargin,
@@ -14779,7 +14973,7 @@ function renderBomTable(tableId, bomList){
     const unitVal = Number(b.enhet);
     const sumVal = Number(b.sum);
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${b.code}</td><td>${b.type}</td><td>${b.series}</td><td>${b.ampere}</td><td>${b.lederes||b.ledere||''}</td><td>${b.antall}</td><td>${Number.isFinite(unitVal)?unitVal.toFixed(2):''}</td><td>${Number.isFinite(sumVal)?sumVal.toFixed(2):''}</td>`;
+    tr.innerHTML = `<td>${b.code}</td><td>${b.type}</td><td>${b.series}</td><td>${b.ampere}</td><td>${displayConductorLabel(b.series, b.lederes||b.ledere)}</td><td>${b.antall}</td><td>${Number.isFinite(unitVal)?unitVal.toFixed(2):''}</td><td>${Number.isFinite(sumVal)?sumVal.toFixed(2):''}</td>`;
     tbody.appendChild(tr);
   });
 }
@@ -14787,6 +14981,7 @@ function renderBomTable(tableId, bomList){
 function computeXapComparison(baseInput){
   const xapRows = catalog.filter(r=>r.series===XAP_SERIES);
   if (!xapRows.length) return { error: 'XAP-B-data mangler.' };
+  if (!Number.isFinite(xapAluminiumPrice)) return { error: 'Mangler oppdatert aluminiumspris for XAP-B.' };
   const cmpInput = { ...baseInput, series: XAP_SERIES, ledere: '3F+N+PE' };
   const xapCat = { rows: xapRows, catalog };
   try{
@@ -14853,6 +15048,7 @@ function refreshCalculatedBoxItems(){
     subtotal: out.subtotal,
     freight: out.freight,
     totalExMontasje: out.totalExMontasje,
+    montasjeStartupCost: out.montasjeStartupCost,
     totalInclMontasje: out.totalInclMontasje,
     totalInclEngineering: out.totalInclEngineering,
     totalInclOppheng: out.totalInclOppheng,
@@ -14872,6 +15068,7 @@ function refreshCalculatedBoxItems(){
     ['totalExMontasje', out.totalExMontasje],
     ['montasje', out.montasje?.cost],
     ['montasjeMargin', out.montasjeMargin],
+    ['montasjeStartupCost', out.montasjeStartupCost],
     ['totalInclMontasje', out.totalInclMontasje],
     ['engineering', out.engineering?.cost],
     ['engineeringMargin', out.engineeringMargin],
@@ -14898,6 +15095,7 @@ function refreshCalculatedBoxItems(){
       freight: out.freight,
       total: out.total,
       totalExMontasje: out.totalExMontasje,
+      montasjeStartupCost: out.montasjeStartupCost,
       totalInclMontasje: out.totalInclMontasje,
       totalInclEngineering: out.totalInclEngineering,
       totalInclOppheng: out.totalInclOppheng,
@@ -14936,7 +15134,10 @@ function applyUsdRateToCatalog(){
   if (!Array.isArray(catalog)) return;
   catalog.forEach(item=>{
     if (Number.isFinite(item.unit_price_usd)){
-      item.unit_price = convertUsdToNok(item.unit_price_usd);
+      const adjustedUsd = item.series === XAP_SERIES
+        ? adjustXapUsdPrice(item.unit_price_usd, item.type, xapAluminiumPrice)
+        : item.unit_price_usd;
+      item.unit_price = Number.isFinite(adjustedUsd) ? convertUsdToNok(adjustedUsd) : NaN;
     }
   });
 }
@@ -14950,7 +15151,7 @@ function rebuildAmpLookup(){
     if (item.type && /box$/i.test(item.type)) return;
     const ampValue = Number(deriveAmp(item));
     if (!Number.isFinite(ampValue)) return;
-    if (ampValue >= EXCLUDED_AMP_MIN && ampValue <= EXCLUDED_AMP_MAX) return;
+    if (item.series !== XAP_SERIES && ampValue >= EXCLUDED_AMP_MIN && ampValue <= EXCLUDED_AMP_MAX) return;
     const key = String(item.series);
     if (!grouped.has(key)){
       grouped.set(key, new Set());
@@ -14963,12 +15164,14 @@ function rebuildAmpLookup(){
   });
 }
 
-function updateUsdRateFromMarket(snapshot){
+function updateCatalogPricesFromMarket(snapshot){
   const fx = pickFxData(snapshot);
   const next = Number(fx?.usd?.rate);
-  if (!Number.isFinite(next) || next <= 0) return;
-  if (Math.abs(next - usdToNokRate) < 0.0005) return;
-  usdToNokRate = next;
+  const nextAluminiumPrice = getCurrentAluminiumPrice(pickMarketAluminium(snapshot), snapshot?.updatedAt);
+  const fxChanged = Number.isFinite(next) && next > 0 && Math.abs(next - usdToNokRate) >= 0.0005;
+  if (!fxChanged && nextAluminiumPrice === xapAluminiumPrice) return;
+  if (fxChanged) usdToNokRate = next;
+  xapAluminiumPrice = nextAluminiumPrice;
   applyUsdRateToCatalog();
   markDirty();
 }
@@ -15188,6 +15391,11 @@ window.addEventListener('DOMContentLoaded', async ()=>{
         const series = $('series')?.value || '';
         if (series === EPOXY_IP68_SERIES) return;
         if (($('dist')?.value || '') !== 'Ja') return;
+        if (series === XAP_SERIES){
+          const st = $('status');
+          if (st) st.textContent = 'Mangler pris for avtappingsbokser til XAP-B.';
+          return;
+        }
         const boxSelValue = String($('boxSel')?.value || '').trim();
         const boxQtyRaw = Number($('boxQty')?.value || 0);
         const boxQtyValue = Number.isFinite(boxQtyRaw) ? Math.max(0, Math.round(boxQtyRaw)) : 0;
@@ -15418,17 +15626,18 @@ function refreshUIBySeries(){
   const ledereEl = $('ledere');
   if (ledereEl){
     Array.from(ledereEl.options).forEach(opt=>{
-      if (opt.value === '3F+N' || opt.textContent.trim() === '3F+N'){
-        opt.hidden = series === 'XCP-S';
-        opt.disabled = series === 'XCP-S';
-      }
+      const value = opt.value || opt.textContent.trim();
+      const unavailable = (series === 'XCP-S' && value === '3F+N')
+        || (isEpoxySeries && value === '3F+PE');
+      opt.hidden = unavailable;
+      opt.disabled = unavailable;
     });
     if (seriesLocksLedere(series)){
       ledereEl.value = seriesLockedLedereValue(series);
       ledereEl.disabled = true;
     } else {
       ledereEl.disabled = false;
-      if (series === 'XCP-S' && ledereEl.value === '3F+N'){
+      if (ledereEl.selectedOptions[0]?.disabled){
         ledereEl.value = '';
       }
       if (!ledereEl.value) ledereEl.value = '';
@@ -15664,6 +15873,8 @@ if (calcBtn){
     $('freight').textContent  = fmtNO.format(out.freight);
     const montasjeEl = document.getElementById('montasje');
     if (montasjeEl) montasjeEl.textContent = fmtNO.format(out.montasje.cost);
+    const montasjeStartupEl = document.getElementById('montasjeStartupCost');
+    if (montasjeStartupEl) montasjeStartupEl.textContent = fmtNO.format(out.montasjeStartupCost);
     const montasjeMarginVal = round2(out.montasjeMargin ?? 0);
     const montasjeMarginEl = document.getElementById('montasjeMargin');
     if (montasjeMarginEl) montasjeMarginEl.textContent = fmtNO.format(montasjeMarginVal);
@@ -15688,7 +15899,7 @@ if (calcBtn){
     if (opphengDetailEl) opphengDetailEl.textContent = opphengDetailText;
     const totalExEl = document.getElementById('totalExMontasje');
     if (totalExEl) totalExEl.textContent = fmtNO.format(out.totalExMontasje);
-    const totalInclMontasjeVal = round2(out.totalInclMontasje ?? calculateDgPricing(out.montasje.cost, out.montasjeMarginRate).totalWithDg);
+    const totalInclMontasjeVal = round2(out.totalInclMontasje ?? calculateMontasjePricing(out.montasje.cost, out.montasjeMarginRate).totalWithDg);
     const totalInclMontasjeEl = document.getElementById('totalInclMontasje');
     if (totalInclMontasjeEl) totalInclMontasjeEl.textContent = fmtNO.format(totalInclMontasjeVal);
     const totalInclEngineeringVal = round2(out.totalInclEngineering ?? calculateDgPricing(out.engineering.cost, out.engineeringMarginRate).totalWithDg);
@@ -15708,6 +15919,7 @@ if (calcBtn){
       margin: out.margin,
       montasjeMarginRate: out.montasjeMarginRate,
       montasjeMargin: montasjeMarginVal,
+      montasjeStartupCost: out.montasjeStartupCost,
       engineeringMarginRate: out.engineeringMarginRate,
       engineeringMargin: engineeringMarginVal,
       opphengMarginRate: out.opphengMarginRate,
@@ -15753,6 +15965,7 @@ if (calcBtn){
         margin: out.margin,
         montasjeMarginRate: out.montasjeMarginRate,
         montasjeMargin: montasjeMarginVal,
+        montasjeStartupCost: out.montasjeStartupCost,
         engineeringMarginRate: out.engineeringMarginRate,
         engineeringMargin: engineeringMarginVal,
         opphengMarginRate: out.opphengMarginRate,
@@ -15812,6 +16025,16 @@ if (calcBtn){
       };
     }
   }catch(err){
+    if ($('series')?.value === XAP_SERIES){
+      lastCalc = null;
+      lastCalcInput = null;
+      isDirty = true;
+      const saveBtn = $('saveLineBtn');
+      if (saveBtn) saveBtn.disabled = true;
+      const results = $('results');
+      if (results) results.hidden = true;
+      renderBomTable('bomTbl', []);
+    }
     $('status').textContent = String(err.message||err);
     lastEmailPayload = null;
     updateXapComparisonUI(null);

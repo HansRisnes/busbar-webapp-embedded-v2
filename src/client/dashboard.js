@@ -189,6 +189,8 @@ function getDashboardLineIncludedCost(line, resolveLineSkinMaterialCost){
   if (config.includeMontasje){
     const montasjeCost = Number(totals.montasje?.cost);
     if (Number.isFinite(montasjeCost)) cost += montasjeCost;
+    const startupCost = Number(totals.montasjeStartupCost);
+    if (Number.isFinite(startupCost)) cost += startupCost;
   }
   if (config.includeEngineering){
     const engineeringCost = Number(totals.engineering?.cost);
@@ -224,7 +226,8 @@ export function getDashboardTotals(projects, resolvers = {}){
   const opphengTotal = sumDashboardIncludedLineValue(lines, 'includeOppheng', line=>line?.totals?.totalInclOppheng ?? line?.totals?.total);
   const opphengCost = sumDashboardIncludedLineValue(lines, 'includeOppheng', line=>line?.totals?.oppheng?.cost);
   const opphengMargin = sumDashboardIncludedLineValue(lines, 'includeOppheng', line=>line?.totals?.opphengMargin);
-  const montasjeCost = sumDashboardIncludedLineValue(lines, 'includeMontasje', line=>line?.totals?.montasje?.cost);
+  const montasjeCost = sumDashboardIncludedLineValue(lines, 'includeMontasje', line=>
+    (Number(line?.totals?.montasje?.cost) || 0) + (Number(line?.totals?.montasjeStartupCost) || 0));
   const lineTotal = sumDashboardLineValue(lines, line=>resolveLineDisplayTotal(line));
   const lineIncludedCost = sumDashboardLineValue(lines, line=>getDashboardLineIncludedCost(line, resolveLineSkinMaterialCost));
   const finishedBusbarTotal = sumDashboardLineValue(finishedLines, line=>line?.totals?.totalExMontasje);
@@ -234,7 +237,8 @@ export function getDashboardTotals(projects, resolvers = {}){
   const finishedMontasjeTotal = sumDashboardIncludedLineValue(finishedLines, 'includeMontasje', line=>line?.totals?.totalInclMontasje);
   const finishedOpphengTotal = sumDashboardIncludedLineValue(finishedLines, 'includeOppheng', line=>line?.totals?.totalInclOppheng ?? line?.totals?.total);
   const finishedOpphengCost = sumDashboardIncludedLineValue(finishedLines, 'includeOppheng', line=>line?.totals?.oppheng?.cost);
-  const finishedMontasjeCost = sumDashboardIncludedLineValue(finishedLines, 'includeMontasje', line=>line?.totals?.montasje?.cost);
+  const finishedMontasjeCost = sumDashboardIncludedLineValue(finishedLines, 'includeMontasje', line=>
+    (Number(line?.totals?.montasje?.cost) || 0) + (Number(line?.totals?.montasjeStartupCost) || 0));
   const finishedLineTotal = sumDashboardLineValue(finishedLines, line=>resolveLineDisplayTotal(line));
   const finishedAllProfit = round2(
     Math.max(0, finishedBusbarTotal - finishedMaterialCost)
