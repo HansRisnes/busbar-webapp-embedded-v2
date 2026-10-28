@@ -72,6 +72,18 @@ test('manual aluminium price is persisted and owner-only', async t=>{
     await delay(250);
   }
   assert.ok(ready, `Market API did not start: ${log}`);
+  const preflight = await fetch(`${url}/aluminium`, {
+    method: 'OPTIONS',
+    headers: {
+      Origin: 'https://webapp.busbar.no',
+      'Access-Control-Request-Method': 'PUT',
+      'Access-Control-Request-Headers': 'authorization,content-type'
+    }
+  });
+  assert.equal(preflight.status, 204);
+  assert.equal(preflight.headers.get('access-control-allow-origin'), 'https://webapp.busbar.no');
+  assert.match(preflight.headers.get('access-control-allow-methods') || '', /(?:^|,)PUT(?:,|$)/);
+  assert.match(preflight.headers.get('access-control-allow-headers') || '', /Authorization/i);
   const schedule = (await (await fetch(url)).json()).schedule;
   const nextRunLocal = new Intl.DateTimeFormat('en-GB', {
     timeZone: 'Europe/Oslo', hour: '2-digit', minute: '2-digit', hourCycle: 'h23'

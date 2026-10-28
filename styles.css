@@ -2067,6 +2067,14 @@ header p{margin:0 0 16px 0;color:var(--muted)}
   display:grid;
   gap:6px;
 }
+.market-aluminium-form input[type="number"]{
+  appearance:textfield;
+}
+.market-aluminium-form input[type="number"]::-webkit-inner-spin-button,
+.market-aluminium-form input[type="number"]::-webkit-outer-spin-button{
+  -webkit-appearance:none;
+  margin:0;
+}
 .market-aluminium-form .actions{
   justify-content:flex-start;
 }
