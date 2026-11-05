@@ -163,6 +163,16 @@ test('dashboard widgets keep their intended order at desktop and mobile widths',
     if (process.env.SAVE_DASHBOARD_SCREENSHOTS === '1'){
       await page.screenshot({ path: join(tmpdir(), `busbar-dashboard-layout-${width}.png`), fullPage: true });
     }
+    if (width === 1600){
+      const leadsNav = page.locator('[data-dashboard-nav="leads"]');
+      await leadsNav.click();
+      assert.equal(new URL(page.url()).searchParams.get('view'), 'leads');
+      assert.equal(await page.locator('#leadsView').isVisible(), true);
+      assert.equal(await page.locator('#offersView').isVisible(), false);
+      await page.reload();
+      assert.equal(await page.locator('#leadsView').isVisible(), true);
+      assert.ok(await leadsNav.evaluate(el=>el.classList.contains('is-active')));
+    }
     await page.close();
   }
 });

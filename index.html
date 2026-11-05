@@ -35,8 +35,10 @@
     <symbol id="icon-projects" viewBox="0 0 24 24"><path d="M3 6.5A2.5 2.5 0 0 1 5.5 4H10l2 2h6.5A2.5 2.5 0 0 1 21 8.5v9A2.5 2.5 0 0 1 18.5 20h-13A2.5 2.5 0 0 1 3 17.5v-11Z"/></symbol>
     <symbol id="icon-calculator" viewBox="0 0 24 24"><path d="M7 2h10a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2Zm1 4v4h8V6H8Zm0 7v2h2v-2H8Zm4 0v2h2v-2h-2Zm4 0v2h2v-2h-2Zm-8 4v2h2v-2H8Zm4 0v2h2v-2h-2Zm4 0v2h2v-2h-2Z"/></symbol>
     <symbol id="icon-calendar" viewBox="0 0 24 24"><path d="M7 2h2v3h6V2h2v3h2a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2V2Zm12 8H5v9h14v-9Z"/></symbol>
+    <symbol id="icon-bell" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9ZM10 21h4"/></symbol>
     <symbol id="icon-customers" viewBox="0 0 24 24"><path d="M8 12a4 4 0 1 1 0-8 4 4 0 0 1 0 8Zm8.5 1a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7ZM2 20a6 6 0 0 1 12 0H2Zm11.5 0a7.5 7.5 0 0 0-1.2-4.1A5 5 0 0 1 22 18.5V20h-8.5Z"/></symbol>
     <symbol id="icon-offers" viewBox="0 0 24 24"><path d="M6 2h9l5 5v15H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2Zm8 1.5V8h4.5L14 3.5ZM8 12h8v2H8v-2Zm0 4h8v2H8v-2Z"/></symbol>
+    <symbol id="icon-leads" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r="5" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r="1.5"/></symbol>
     <symbol id="icon-project-flow" viewBox="0 0 24 24"><path d="M5 4h14v2H5V4Zm2 4h2v3h6V8h2v3h2v6h-2v3h-2v-3H9v3H7v-3H5v-6h2V8Zm2 5v2h6v-2H9Z"/></symbol>
     <symbol id="icon-email" viewBox="0 0 24 24"><path d="M4 5h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Zm8 7.2L4.7 7H4v.7l8 5.7 8-5.7V7h-.7L12 12.2Z"/></symbol>
     <symbol id="icon-company-card" viewBox="0 0 24 24"><path d="M4 5h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Zm2 4v2h6V9H6Zm0 4v2h4v-2H6Zm9-3h3v2h-3v-2Zm-1 4h5v2h-5v-2Z"/></symbol>
@@ -106,6 +108,7 @@
           <button type="button" class="sidebar-nav-item" data-dashboard-nav="projects"><svg class="sidebar-nav-icon" aria-hidden="true"><use href="#icon-projects"></use></svg><span class="sidebar-nav-label">Prosjekter</span></button>
           <button type="button" class="sidebar-nav-item" data-dashboard-nav="project-flow"><svg class="sidebar-nav-icon" aria-hidden="true"><use href="#icon-project-flow"></use></svg><span class="sidebar-nav-label">Prosjektflyt</span></button>
           <button type="button" class="sidebar-nav-item" data-dashboard-nav="offers"><svg class="sidebar-nav-icon" aria-hidden="true"><use href="#icon-offers"></use></svg><span class="sidebar-nav-label">Tilbud</span></button>
+          <button type="button" class="sidebar-nav-item" data-dashboard-nav="leads"><svg class="sidebar-nav-icon" aria-hidden="true"><use href="#icon-leads"></use></svg><span class="sidebar-nav-label">Leads</span></button>
           <button type="button" class="sidebar-nav-item" data-dashboard-nav="email"><svg class="sidebar-nav-icon" aria-hidden="true"><use href="#icon-email"></use></svg><span class="sidebar-nav-label">E-post</span></button>
           <button type="button" class="sidebar-nav-item" data-dashboard-nav="calendar"><svg class="sidebar-nav-icon" aria-hidden="true"><use href="#icon-calendar"></use></svg><span class="sidebar-nav-label">Kalender</span></button>
           <button type="button" class="sidebar-nav-item" data-dashboard-nav="customers"><svg class="sidebar-nav-icon" aria-hidden="true"><use href="#icon-customers"></use></svg><span class="sidebar-nav-label">Kontaktpersoner</span></button>
@@ -139,6 +142,7 @@
           <h2>Dashbord</h2>
           <p class="muted-text">N&oslash;kkeltall og snarveier fra programmet samlet p&aring; ett sted.</p>
         </div>
+        <div id="dashboardFlowAlerts" class="dashboard-flow-alert-strip" role="status" aria-live="polite"></div>
         <div class="main-dashboard-grid">
           <article class="main-dashboard-widget dashboard-total-widget is-large">
             <div class="dashboard-widget-header">
@@ -679,6 +683,169 @@
         <div id="offersList" class="offers-list" aria-live="polite"></div>
       </section>
 
+      <section id="leadsView" class="dashboard-page placeholder-page" data-dashboard-page="leads" hidden>
+        <div class="placeholder-header">
+          <h2>Leads</h2>
+        </div>
+        <div class="leads-toolbar section-toolbar">
+          <div class="toolbar-left">
+            <button id="newLeadBtn" type="button" class="btn alt">Ny lead</button>
+            <div class="dashboard-sort-controls dashboard-search-controls">
+              <label for="leadSearchInput">Søk leads</label>
+              <input id="leadSearchInput" type="search" autocomplete="off" placeholder="Bedrift, prosjekt eller kontakt">
+            </div>
+            <div class="dashboard-sort-controls">
+              <label for="leadPhaseFilter">Salgsfase</label>
+              <select id="leadPhaseFilter">
+                <option value="all">Alle</option>
+                <option value="new">Ny</option>
+                <option value="contacted">Kontaktet</option>
+                <option value="qualified">Kvalifisert</option>
+                <option value="offer_sent">Tilbud sendt</option>
+                <option value="won">Vunnet</option>
+                <option value="lost">Tapt</option>
+              </select>
+            </div>
+          </div>
+          <div class="toolbar-right">
+            <span id="leadsStatus" class="graph-status muted-text"></span>
+            <button id="refreshLeadsBtn" type="button" class="btn alt">Oppdater</button>
+          </div>
+        </div>
+        <div id="leadsSummary" class="leads-summary" aria-live="polite"></div>
+        <div id="leadsList" class="leads-list" aria-live="polite"></div>
+        <form id="leadForm" class="lead-form" hidden autocomplete="off">
+          <input id="leadId" type="hidden">
+          <div class="lead-form-grid">
+            <label for="leadCompanyName">Bedriftsnavn *
+              <div class="suggest-wrapper">
+                <input id="leadCompanyName" type="search" maxlength="200" autocomplete="off" required>
+                <ul id="leadCustomerSuggestions" class="suggestions" hidden></ul>
+              </div>
+            </label>
+            <label for="leadProjectNeed">Prosjekt / behov *
+              <input id="leadProjectNeed" type="text" maxlength="500" required>
+            </label>
+            <label for="leadSalesPhase">Salgsfase *
+              <select id="leadSalesPhase" required>
+                <option value="new">Ny</option>
+                <option value="contacted">Kontaktet</option>
+                <option value="qualified">Kvalifisert</option>
+                <option value="offer_sent">Tilbud sendt</option>
+                <option value="won">Vunnet</option>
+                <option value="lost">Tapt</option>
+              </select>
+            </label>
+            <label for="leadContactName">Kontaktperson *
+              <div class="suggest-wrapper">
+                <input id="leadContactName" type="search" maxlength="200" autocomplete="off" required>
+                <ul id="leadContactSuggestions" class="suggestions" hidden></ul>
+              </div>
+            </label>
+            <label for="leadContactEmail">E-post *
+              <input id="leadContactEmail" type="email" maxlength="254" required>
+            </label>
+            <label for="leadContactPhone">Telefon *
+              <input id="leadContactPhone" type="tel" maxlength="80" required>
+            </label>
+            <label for="leadNextActivity">Neste aktivitet *
+              <select id="leadNextActivity" required>
+                <option value="">Velg aktivitet</option>
+                <option value="Oppfølging">Oppfølging</option>
+                <option value="Møte">Møte</option>
+                <option value="Befaring">Befaring</option>
+                <option value="Tilbud">Tilbud</option>
+              </select>
+            </label>
+            <label for="leadFollowUpDate">Oppfølgingsdato *
+              <span class="calendar-date-input-row">
+                <input id="leadFollowUpDate" type="text" inputmode="numeric" autocomplete="off" placeholder="DD/MM/ÅÅÅÅ" required>
+                <button id="leadFollowUpDatePickerBtn" type="button" class="calendar-date-picker-btn" aria-label="Velg oppfølgingsdato">
+                  <svg aria-hidden="true"><use href="#icon-calendar"></use></svg>
+                </button>
+                <div id="leadDatePickerPopover" class="calendar-date-picker-popover" hidden></div>
+              </span>
+            </label>
+            <label for="leadResponsibleEmail">Ansvarlig *
+              <select id="leadResponsibleEmail" required></select>
+            </label>
+          </div>
+          <details class="lead-extra-fields">
+            <summary>Tilleggsinformasjon</summary>
+            <div class="lead-form-grid">
+              <label for="leadEstimatedValue">Estimert verdi (NOK)
+                <select id="leadEstimatedValue">
+                  <option value="">Velg verdi</option>
+                  <option value="50000">50 000</option>
+                  <option value="75000">75 000</option>
+                  <option value="100000">100 000</option>
+                  <option value="200000">200 000</option>
+                  <option value="300000">300 000</option>
+                  <option value="400000">400 000</option>
+                  <option value="500000">500 000</option>
+                  <option value="600000">600 000</option>
+                  <option value="700000">700 000</option>
+                  <option value="800000">800 000</option>
+                  <option value="900000">900 000</option>
+                  <option value="1000000">1 000 000</option>
+                </select>
+              </label>
+              <label for="leadDecisionDate">Forventet beslutningsdato
+                <span class="calendar-date-input-row">
+                  <input id="leadDecisionDate" type="text" inputmode="numeric" autocomplete="off" placeholder="DD/MM/ÅÅÅÅ">
+                  <button id="leadDecisionDatePickerBtn" type="button" class="calendar-date-picker-btn" aria-label="Velg forventet beslutningsdato">
+                    <svg aria-hidden="true"><use href="#icon-calendar"></use></svg>
+                  </button>
+                </span>
+              </label>
+              <label for="leadProbability">Sannsynlighet (%)
+                <select id="leadProbability">
+                  <option value="">Velg sannsynlighet</option>
+                  <option value="0">0 %</option>
+                  <option value="10">10 %</option>
+                  <option value="20">20 %</option>
+                  <option value="30">30 %</option>
+                  <option value="40">40 %</option>
+                  <option value="50">50 %</option>
+                  <option value="60">60 %</option>
+                  <option value="70">70 %</option>
+                  <option value="80">80 %</option>
+                  <option value="90">90 %</option>
+                  <option value="100">100 %</option>
+                </select>
+              </label>
+              <label for="leadProjectPhase">Prosjektfase
+                <div class="suggest-wrapper">
+                  <input id="leadProjectPhase" type="search" maxlength="100" autocomplete="off">
+                  <ul id="leadProjectPhaseSuggestions" class="suggestions" hidden></ul>
+                </div>
+              </label>
+              <label for="leadCustomerType">Kundetype
+                <div class="suggest-wrapper">
+                  <input id="leadCustomerType" type="search" maxlength="100" autocomplete="off">
+                  <ul id="leadCustomerTypeSuggestions" class="suggestions" hidden></ul>
+                </div>
+              </label>
+              <label for="leadSource">Leadkilde
+                <div class="suggest-wrapper">
+                  <input id="leadSource" type="search" maxlength="100" autocomplete="off">
+                  <ul id="leadSourceSuggestions" class="suggestions" hidden></ul>
+                </div>
+              </label>
+              <label class="lead-form-wide" for="leadComments">Kommentarer
+                <textarea id="leadComments" rows="4" maxlength="5000"></textarea>
+              </label>
+            </div>
+          </details>
+          <p id="leadFormError" class="form-error" role="alert" hidden></p>
+          <div class="lead-form-actions">
+            <button id="saveLeadBtn" type="submit" class="btn">Lagre</button>
+            <button id="cancelLeadBtn" type="button" class="btn alt">Avbryt</button>
+            <button id="deleteLeadBtn" type="button" class="btn danger" hidden>Slett</button>
+          </div>
+        </form>
+      </section>
+
       <section id="emailView" class="dashboard-page placeholder-page" data-dashboard-page="email" hidden>
         <div class="placeholder-header">
           <h2>E-post</h2>
@@ -983,6 +1150,17 @@
       <div id="dashboardRecommendedActionsModalList" class="dashboard-recommended-actions-modal-list"></div>
       <div class="actions">
         <button id="dashboardRecommendedActionsClose" type="button" class="btn alt">Lukk</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="dashboardFlowAlertsModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="dashboardFlowAlertsTitle">
+    <div class="modal dashboard-flow-alert-modal">
+      <h3 id="dashboardFlowAlertsTitle">Frister og oppfølginger</h3>
+      <p id="dashboardFlowAlertsSubtitle" class="muted-text"></p>
+      <div id="dashboardFlowAlertsList" class="dashboard-flow-alert-list"></div>
+      <div class="actions">
+        <button id="dashboardFlowAlertsClose" type="button" class="btn alt">Lukk</button>
       </div>
     </div>
   </div>

@@ -129,6 +129,9 @@ import {
   openDashboardFlowStatusModal as openDashboardFlowStatusModalModule,
   openDashboardProjectStatusModal as openDashboardProjectStatusModalModule,
   renderDashboardEmailProjectSuggestionsWidget as renderDashboardEmailProjectSuggestionsWidgetModule,
+  buildDashboardFlowAlerts as buildDashboardFlowAlertsModule,
+  renderDashboardFlowAlerts as renderDashboardFlowAlertsModule,
+  renderDashboardFlowAlertsList as renderDashboardFlowAlertsListModule,
   renderDashboardFlowStatusWidget as renderDashboardFlowStatusWidgetModule,
   renderDashboardProjectStatusWidget as renderDashboardProjectStatusWidgetModule,
   renderDashboardRecommendedActionsWidget as renderDashboardRecommendedActionsWidgetModule,
@@ -138,6 +141,7 @@ import {
   setDashboardPage as setDashboardPageModule,
   updateMarketTickerVisibility as updateMarketTickerVisibilityModule
 } from './src/client/dashboard.js';
+import { initLeadsPage, loadLeadsPage, clearLeadsPage, getLeadsForDashboard, openLeadById } from './src/client/leads.js';
 import {
   compareProjectsForSort as compareProjectsForSortModule,
   getProjectDisplayTitle,
@@ -198,6 +202,7 @@ let authState = {
   canViewAllProjects: false,
   canEditAllProjects: false
 };
+let lastLeadsAuthIdentity = '';
 const LEGACY_PROJECTS_STORAGE_KEY = 'busbar.projects.v1';
 const projectSyncState = {
   timerId: null,
@@ -304,6 +309,7 @@ let microsoftMsalClient = null;
 let microsoftLastAccount = null;
 const outlookCategoryReadyAccounts = new Set();
 const dashboardTodoCompletionTimers = new Map();
+let dashboardFlowAlerts = [];
 const dashboardTodoEditState = {
   projectId: '',
   todoId: ''
@@ -390,6 +396,7 @@ function handleDashboardPageActivated(page, options = {}){
   if (leavingProjectFlow) void flushProjectFlowCalendarQueue();
   const forceRefresh = options.fromNavigation === true;
   if (page === 'dashboard'){
+    void loadLeadsPage();
     window.setTimeout(renderMainDashboard, 0);
   } else if (page === 'projects'){
     if (forceRefresh) void refreshProjectsFromToolbar();
@@ -399,6 +406,8 @@ function handleDashboardPageActivated(page, options = {}){
     loadEmailMessages({ silent: !forceRefresh });
   } else if (page === 'offers'){
     loadOfferStatus({ silent: !forceRefresh });
+  } else if (page === 'leads'){
+    void loadLeadsPage();
   } else if (page === 'project-flow'){
     if (forceRefresh){
       void refreshProjectFlowView();
@@ -420,6 +429,14 @@ function initDashboardShell(){
   initDashboardShellModule(dashboardState, handleDashboardPageActivated);
 }
 
+initLeadsPage({
+  isLoggedIn: () => authState.loggedIn,
+  getAuthHeaders: authHeaders,
+  getCurrentUserEmail,
+  onChanged: () => {
+    if (dashboardState.activePage === 'dashboard') renderDashboardFlowAlertsWidget();
+  }
+});
 initDashboardShell();
 
 function buildStaticAssetUrl(relativePath){
@@ -1726,6 +1743,12 @@ function updateAuthUI(){
   });
   updateEmailMailboxAccessUi();
   renderGlobalCustomerViews();
+  const leadsAuthIdentity = authState.loggedIn ? `${authState.username}:${authState.token}` : '';
+  if (leadsAuthIdentity !== lastLeadsAuthIdentity){
+    lastLeadsAuthIdentity = leadsAuthIdentity;
+    clearLeadsPage();
+    if (leadsAuthIdentity && (dashboardState.activePage === 'leads' || dashboardState.activePage === 'dashboard')) void loadLeadsPage();
+  }
   if (dashboardState.activePage === 'project-flow'){
     const projectFlowRoot = $('projectFlowTimeline');
     if (projectFlowRoot && !projectFlowRoot.children.length){
@@ -7854,6 +7877,19 @@ function renderDashboardFlowStatusWidget(){
   renderDashboardFlowStatusWidgetModule(projectState.projects, getProjectFlowStatusForProject);
 }
 
+function renderDashboardFlowAlertsWidget(){
+  loadProjectFlowState();
+  dashboardFlowAlerts = buildDashboardFlowAlertsModule(
+    projectState.projects.filter(project=>!projectIsArchived(project)),
+    new Date(),
+    getLeadsForDashboard()
+  );
+  renderDashboardFlowAlertsModule(dashboardFlowAlerts);
+  if ($('dashboardFlowAlertsModal')?.style.display === 'flex'){
+    renderDashboardFlowAlertsListModule(dashboardFlowAlerts);
+  }
+}
+
 function getDashboardProjectTitle(project){
   if (!project) return 'Ukjent prosjekt';
   return project.projectNumber
@@ -8601,6 +8637,20 @@ function openProjectFlowForProject(projectId = ''){
   scrollPageToTop();
 }
 
+function openDashboardFlowAlertsModal(){
+  const modal = $('dashboardFlowAlertsModal');
+  if (!modal) return;
+  renderDashboardFlowAlertsWidget();
+  renderDashboardFlowAlertsListModule(dashboardFlowAlerts);
+  modal.style.display = 'flex';
+  $('dashboardFlowAlertsClose')?.focus();
+}
+
+function closeDashboardFlowAlertsModal(){
+  const modal = $('dashboardFlowAlertsModal');
+  if (modal) modal.style.display = 'none';
+}
+
 function openDashboardProjectStatusModal(statusId){
   openDashboardProjectStatusModalModule(projectState.projects, statusId, {
     compareProjectsForSort,
@@ -8638,6 +8688,7 @@ function renderMainDashboard(){
   renderDashboardTotalsWidget();
   renderDashboardProjectStatusWidget();
   renderDashboardFlowStatusWidget();
+  renderDashboardFlowAlertsWidget();
   renderDashboardTodoWidget();
   renderDashboardRecommendedActionsWidget();
   renderDashboardEmailProjectSuggestionsWidget();
@@ -12929,6 +12980,47 @@ if (dashboardFlowStatusSummary){
   });
 }
 
+const dashboardFlowAlertsRoot = $('dashboardFlowAlerts');
+async function openDashboardLeadAlert(leadId){
+  if (!leadId) return;
+  setDashboardPage('leads', { fromNavigation: true });
+  if (!openLeadById(leadId)){
+    await loadLeadsPage();
+    openLeadById(leadId);
+  }
+}
+if (dashboardFlowAlertsRoot){
+  dashboardFlowAlertsRoot.addEventListener('click', evt=>{
+    if (evt.target?.closest?.('[data-dashboard-flow-alerts-open]')){
+      openDashboardFlowAlertsModal();
+      return;
+    }
+    const lead = evt.target?.closest?.('[data-dashboard-flow-alert-lead]');
+    if (lead){
+      void openDashboardLeadAlert(lead.dataset.dashboardFlowAlertLead || '');
+      return;
+    }
+    const alert = evt.target?.closest?.('[data-dashboard-flow-alert-project]');
+    if (alert) openProjectFlowForProject(alert.dataset.dashboardFlowAlertProject || '');
+  });
+}
+
+const dashboardFlowAlertsModal = $('dashboardFlowAlertsModal');
+if (dashboardFlowAlertsModal){
+  dashboardFlowAlertsModal.addEventListener('click', evt=>{
+    if (evt.target === dashboardFlowAlertsModal || evt.target?.closest?.('#dashboardFlowAlertsClose')){
+      closeDashboardFlowAlertsModal();
+      return;
+    }
+    const button = evt.target?.closest?.('[data-dashboard-flow-alert-project]');
+    const lead = evt.target?.closest?.('[data-dashboard-flow-alert-lead]');
+    if (!button && !lead) return;
+    closeDashboardFlowAlertsModal();
+    if (lead) void openDashboardLeadAlert(lead.dataset.dashboardFlowAlertLead || '');
+    else openProjectFlowForProject(button.dataset.dashboardFlowAlertProject || '');
+  });
+}
+
 const dashboardRecommendedActions = $('dashboardRecommendedActions');
 if (dashboardRecommendedActions){
   dashboardRecommendedActions.addEventListener('click', evt=>{
@@ -13640,6 +13732,11 @@ document.addEventListener('keydown', evt=>{
     const dashboardRecommendedActionsModalEl = $('dashboardRecommendedActionsModal');
     if (dashboardRecommendedActionsModalEl && dashboardRecommendedActionsModalEl.style.display === 'flex'){
       closeDashboardRecommendedActionsModal();
+      return;
+    }
+    const dashboardFlowAlertsModalEl = $('dashboardFlowAlertsModal');
+    if (dashboardFlowAlertsModalEl && dashboardFlowAlertsModalEl.style.display === 'flex'){
+      closeDashboardFlowAlertsModal();
       return;
     }
     const registerModalEl = $('registerModal');

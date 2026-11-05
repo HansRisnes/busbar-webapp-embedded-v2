@@ -7,6 +7,7 @@ const express = require('express');
 const nodemailer = require('nodemailer');
 const AdmZip = require('adm-zip');
 const { getXmlElementRanges, removeMontasjeConditionsPage } = require('./offer-template-conditions');
+const { normalizeLeadInput, canViewLead, canEditLead } = require('./leads');
 const { ClientSecretCredential } = require('@azure/identity');
 const scryptAsync = promisify(crypto.scrypt);
 
@@ -42,6 +43,7 @@ const OFFER_REVISIONS_FILE = path.resolve(RUNTIME_DATA_DIR, 'offer-revisions.jso
 const PROJECT_ARCHIVE_FILE = path.resolve(RUNTIME_DATA_DIR, 'project-archive.json');
 const USER_AUTH_FILE = path.resolve(RUNTIME_DATA_DIR, 'user-auth.json');
 const CUSTOMER_DATABASE_FILE = path.resolve(RUNTIME_DATA_DIR, 'customer-database.json');
+const LEADS_FILE = path.resolve(RUNTIME_DATA_DIR, 'leads.json');
 const EMAIL_PROJECT_SUGGESTIONS_FILE = path.resolve(RUNTIME_DATA_DIR, 'email-project-suggestions.json');
 const OFFER_LINE_BLOCK_START_TOKEN = '__BUSBAR_LINE_BLOCK_START__';
 const OFFER_LINE_BLOCK_END_TOKEN = '__BUSBAR_LINE_BLOCK_END__';
@@ -104,6 +106,7 @@ let offerNumberLock = Promise.resolve();
 let projectArchiveLock = Promise.resolve();
 let userAuthLock = Promise.resolve();
 let customerDatabaseLock = Promise.resolve();
+let leadsLock = Promise.resolve();
 let fireBarrierPriceIndexPromise = null;
 let marketRefreshInFlight = null;
 
@@ -221,6 +224,7 @@ const MICROSOFT_AUTH_CLIENT_SECRET = safeString(
 const MICROSOFT_GRAPH_SCOPE = 'https://graph.microsoft.com/.default';
 const CALENDAR_PROJECT_EXTENDED_PROPERTY_ID = 'String {4f28b47f-5e6b-4f87-9fcb-4c1a9c0c9d9f} Name BusbarProjectId';
 const CALENDAR_PROJECT_FLOW_TASK_EXTENDED_PROPERTY_ID = 'String {4f28b47f-5e6b-4f87-9fcb-4c1a9c0c9d9f} Name BusbarProjectFlowTaskId';
+const CALENDAR_LEAD_EXTENDED_PROPERTY_ID = 'String {4f28b47f-5e6b-4f87-9fcb-4c1a9c0c9d9f} Name BusbarLeadId';
 const CALENDAR_EVENT_TYPE_EXTENDED_PROPERTY_ID = 'String {4f28b47f-5e6b-4f87-9fcb-4c1a9c0c9d9f} Name BusbarCalendarEventType';
 const OUTLOOK_PROJECT_CATEGORY_NAME = 'Busbar Prosjekt';
 const MICROSOFT_AUTH_ISSUER = `https://login.microsoftonline.com/${MICROSOFT_AUTH_TENANT_ID}/v2.0`;
@@ -234,6 +238,7 @@ const ADMIN_OWNER_EMAILS = new Set([
 ].map(normalizeEmail).filter(isValidEmail));
 let microsoftJwksCache = { fetchedAt: 0, keys: [] };
 let microsoftOwnerCache = { fetchedAt: 0, ownerIds: new Set() };
+let microsoftOwnerDirectoryCache = { fetchedAt: 0, users: [] };
 let microsoftOwnerSecretWarned = false;
 
 if (!process.env.ADMIN_USERNAME || !process.env.ADMIN_PASSWORD) {
@@ -480,6 +485,12 @@ function withUserAuthLock(task) {
 function withCustomerDatabaseLock(task) {
   const run = customerDatabaseLock.then(() => task());
   customerDatabaseLock = run.catch(() => {});
+  return run;
+}
+
+function withLeadsLock(task) {
+  const run = leadsLock.then(() => task());
+  leadsLock = run.catch(() => {});
   return run;
 }
 
@@ -783,6 +794,34 @@ async function getMicrosoftAuthAppOwnerIds() {
   return ownerIds;
 }
 
+async function getMicrosoftAppOwnerDirectoryUsers() {
+  const now = Date.now();
+  if (microsoftOwnerDirectoryCache.fetchedAt && now - microsoftOwnerDirectoryCache.fetchedAt < MICROSOFT_OWNER_CACHE_TTL_MS) {
+    return microsoftOwnerDirectoryCache.users;
+  }
+  let ownerIds;
+  try {
+    ownerIds = await getMicrosoftAuthAppOwnerIds();
+  } catch (err) {
+    console.warn('[leads] Kunne ikke hente Entra Owners', err?.message || err);
+    return [];
+  }
+  const results = await Promise.all(Array.from(ownerIds).map(async id => {
+    try {
+      const user = await fetchMicrosoftGraphJson(
+        `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(id)}?$select=id,displayName,mail,userPrincipalName`
+      );
+      const email = normalizeEmail(user?.mail || user?.userPrincipalName);
+      return isValidEmail(email) ? { email, name: safeString(user?.displayName) || email, oid: id } : null;
+    } catch (_err) {
+      return null;
+    }
+  }));
+  const users = results.filter(Boolean);
+  microsoftOwnerDirectoryCache = { fetchedAt: now, users };
+  return users;
+}
+
 async function isMicrosoftAppOwner(objectId) {
   const oid = safeString(objectId);
   if (!oid) return false;
@@ -1039,6 +1078,146 @@ async function writeCustomerDatabase(state) {
     ? state.customers.map(normalizeCustomerRecord).filter(Boolean)
     : [];
   await writeJsonFile(CUSTOMER_DATABASE_FILE, { customers });
+}
+
+async function readLeadsStore() {
+  const stored = await readJsonFile(LEADS_FILE, { leads: [] });
+  return Array.isArray(stored?.leads) ? stored.leads.filter(lead => lead && typeof lead.id === 'string') : [];
+}
+
+async function buildLeadAssignableUsers(authStore, auth) {
+  const byEmail = new Map();
+  Object.values(authStore.users).forEach(user => {
+    byEmail.set(user.email, {
+      email: user.email,
+      name: safeString(user.profile?.name) || user.email,
+      oid: safeString(user.microsoft?.oid)
+    });
+  });
+  if (auth.canEditAllProjects) {
+    const directoryOwners = await getMicrosoftAppOwnerDirectoryUsers();
+    directoryOwners.forEach(user => {
+      const existing = byEmail.get(user.email);
+      byEmail.set(user.email, { ...user, name: existing?.name && existing.name !== user.email ? existing.name : user.name });
+    });
+    ADMIN_OWNER_EMAILS.forEach(email => {
+      if (!byEmail.has(email)) byEmail.set(email, { email, name: email, oid: '' });
+    });
+  }
+  if (!byEmail.has(auth.email)) byEmail.set(auth.email, { email: auth.email, name: auth.email, oid: '' });
+  if (!auth.canEditAllProjects) return [byEmail.get(auth.email)];
+
+  const unique = [];
+  for (const user of byEmail.values()) {
+    const samePerson = unique.find(item =>
+      (user.oid && item.oid === user.oid)
+      || (user.name !== user.email && item.name !== item.email
+        && normalizeLookupKey(user.name.replace(/[-\s]/g, '')) === normalizeLookupKey(item.name.replace(/[-\s]/g, ''))
+        && user.email.endsWith('@busbar.no') !== item.email.endsWith('@busbar.no')));
+    if (!samePerson) {
+      unique.push(user);
+    } else if (user.email === auth.email || (samePerson.email !== auth.email && user.email.endsWith('@busbar.no') && !samePerson.email.endsWith('@busbar.no'))) {
+      unique.splice(unique.indexOf(samePerson), 1, user);
+    }
+  }
+  return unique.sort((a, b) => a.name.localeCompare(b.name, 'no'));
+}
+
+async function buildLeadsPayload(auth, leads) {
+  const authStore = await readUserAuthStore();
+  const customerDatabase = await buildMergedCustomerDatabase();
+  const registeredUsers = await buildLeadAssignableUsers(authStore, auth);
+  return {
+    leads: leads.filter(lead => canViewLead(lead, auth)).map(lead => ({
+      ...lead,
+      responsibleName: registeredUsers.find(user => user.email === lead.responsibleEmail)?.name || lead.responsibleEmail,
+      canEdit: canEditLead(lead, auth)
+    })),
+    users: (auth.canEditAllProjects ? registeredUsers : registeredUsers.filter(user => user.email === auth.email))
+      .map(user => ({ email: user.email, name: user.name })),
+    customers: customerDatabase.customers,
+    canAssignOthers: auth.canEditAllProjects === true
+  };
+}
+
+async function registerLeadCustomer(lead) {
+  await withCustomerDatabaseLock(async () => {
+    const database = await readCustomerDatabase();
+    const customerKey = normalizeLookupKey(lead.companyName);
+    let customer = database.customers.find(item => normalizeLookupKey(item.name) === customerKey);
+    if (!customer) {
+      customer = { id: generateRecordId('customer'), name: lead.companyName, address: '', postalPlace: '', segment: '', customerResponsible: '', contacts: [] };
+      database.customers.push(customer);
+    }
+    const contactKey = normalizeLookupKey(lead.contactName);
+    let contact = customer.contacts.find(item => normalizeLookupKey(item.name) === contactKey);
+    if (!contact) {
+      contact = { id: generateRecordId('contact'), name: lead.contactName, email: '', phone: '' };
+      customer.contacts.push(contact);
+    }
+    const nextEmail = contact.email || lead.contactEmail;
+    const nextPhone = contact.phone || lead.contactPhone;
+    if (contact.email === nextEmail && contact.phone === nextPhone) return;
+    contact.email = nextEmail;
+    contact.phone = nextPhone;
+    await writeCustomerDatabase(database);
+  });
+}
+
+function buildLeadCalendarPayload(lead) {
+  const end = new Date(`${lead.followUpDate}T00:00:00Z`);
+  end.setUTCDate(end.getUTCDate() + 1);
+  return {
+    subject: `Lead: ${lead.companyName} - ${lead.nextActivity}`,
+    start: { dateTime: `${lead.followUpDate}T00:00:00`, timeZone: 'Europe/Oslo' },
+    end: { dateTime: `${end.toISOString().slice(0, 10)}T00:00:00`, timeZone: 'Europe/Oslo' },
+    isAllDay: true,
+    showAs: 'busy',
+    body: { contentType: 'text', content: `Lead: ${lead.companyName}\nProsjekt/behov: ${lead.projectNeed}\nNeste aktivitet: ${lead.nextActivity}` },
+    singleValueExtendedProperties: [
+      { id: CALENDAR_EVENT_TYPE_EXTENDED_PROPERTY_ID, value: 'lead' },
+      { id: CALENDAR_LEAD_EXTENDED_PROPERTY_ID, value: lead.id }
+    ]
+  };
+}
+
+async function syncLeadCalendar(lead, previous) {
+  const eventId = safeString(previous?.calendarEventId);
+  const previousOwner = normalizeEmail(previous?.calendarOwnerEmail || previous?.responsibleEmail);
+  const owner = normalizeEmail(lead.responsibleEmail);
+  if (lead.followUpCompleted) {
+    if (eventId) await deleteProjectFlowCalendarEventForOwner(previousOwner, eventId);
+    lead.calendarEventId = '';
+    lead.calendarOwnerEmail = '';
+    lead.calendarSyncError = '';
+    return;
+  }
+  let saved = null;
+  if (eventId && previousOwner === owner) {
+    try {
+      const patched = await requestMicrosoftGraphAppJson(
+        `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(owner)}/events/${encodeURIComponent(eventId)}`,
+        { method: 'PATCH', body: buildLeadCalendarPayload(lead) }
+      );
+      saved = patched || { id: eventId };
+    } catch (err) {
+      if (err?.status !== 404) throw err;
+    }
+  } else if (eventId) {
+    await deleteProjectFlowCalendarEventForOwner(previousOwner, eventId);
+    lead.calendarEventId = '';
+    lead.calendarOwnerEmail = '';
+  }
+  if (!saved) {
+    saved = await requestMicrosoftGraphAppJson(
+      `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(owner)}/events`,
+      { method: 'POST', body: buildLeadCalendarPayload(lead) }
+    );
+  }
+  if (!safeString(saved?.id)) throw new Error('Microsoft Graph returnerte ingen kalender-id');
+  lead.calendarEventId = saved.id;
+  lead.calendarOwnerEmail = owner;
+  lead.calendarSyncError = '';
 }
 
 function normalizeEmailProjectSuggestionState(raw) {
@@ -4874,6 +5053,123 @@ app.post('/api/customer-database/delete', requireUserAuth, requireMicrosoftOwner
     }
     console.error('Sletting i global kundedatabase feilet', err);
     return res.status(500).json({ error: 'Kunne ikke slette fra kundedatabase' });
+  }
+});
+
+app.get('/api/leads', requireUserAuth, async (req, res) => {
+  try {
+    const leads = await withLeadsLock(readLeadsStore);
+    return res.json(await buildLeadsPayload(req.userAuth, leads));
+  } catch (err) {
+    console.error('Henting av leads feilet', err);
+    return res.status(500).json({ error: 'Kunne ikke hente leads' });
+  }
+});
+
+app.post('/api/leads/upsert', requireUserAuth, async (req, res) => {
+  try {
+    const auth = req.userAuth;
+    const actorEmail = normalizeEmail(auth.email);
+    const userStore = await readUserAuthStore();
+    const assignableUsers = await buildLeadAssignableUsers(userStore, auth);
+    const registeredEmails = new Set([...Object.keys(userStore.users), ...assignableUsers.map(user => user.email), actorEmail]);
+    const leads = await withLeadsLock(async () => {
+      const current = await readLeadsStore();
+      const id = safeString(req.body?.id);
+      const existing = id ? current.find(lead => lead.id === id) : null;
+      if (id && !existing) throw Object.assign(new Error('Leaden finnes ikke'), { statusCode: 404 });
+      if (existing && !canEditLead(existing, auth)) {
+        throw Object.assign(new Error('Du kan ikke endre denne leaden'), { statusCode: 403 });
+      }
+      if (existing && safeString(req.body?.updatedAt) !== existing.updatedAt) {
+        throw Object.assign(new Error('Leaden er endret av en annen bruker. Oppdater listen og prøv igjen.'), { statusCode: 409 });
+      }
+      const lead = normalizeLeadInput(req.body, existing, actorEmail, auth.canEditAllProjects === true, registeredEmails);
+      if (!lead.id) lead.id = crypto.randomUUID();
+      await registerLeadCustomer(lead);
+      try {
+        await syncLeadCalendar(lead, existing);
+      } catch (err) {
+        lead.calendarSyncError = err?.message || 'Kalendersynkronisering feilet';
+        console.warn('[leads] Kalendersynkronisering feilet', lead.id, lead.calendarSyncError);
+      }
+      const next = existing ? current.map(item => item.id === id ? lead : item) : [...current, lead];
+      await writeJsonFile(LEADS_FILE, { leads: next });
+      return next;
+    });
+    return res.json(await buildLeadsPayload(auth, leads));
+  } catch (err) {
+    if (err?.statusCode) return res.status(err.statusCode).json({ error: err.message });
+    console.error('Lagring av lead feilet', err);
+    return res.status(500).json({ error: 'Kunne ikke lagre lead' });
+  }
+});
+
+app.post('/api/leads/complete', requireUserAuth, async (req, res) => {
+  try {
+    const auth = req.userAuth;
+    const id = safeString(req.body?.id);
+    if (!id || typeof req.body?.completed !== 'boolean') {
+      return res.status(400).json({ error: 'Mangler lead eller fullført-status' });
+    }
+    const leads = await withLeadsLock(async () => {
+      const current = await readLeadsStore();
+      const existing = current.find(lead => lead.id === id);
+      if (!existing) throw Object.assign(new Error('Leaden finnes ikke'), { statusCode: 404 });
+      if (!canEditLead(existing, auth)) throw Object.assign(new Error('Ingen tilgang til denne leaden'), { statusCode: 403 });
+      if (safeString(req.body?.updatedAt) !== existing.updatedAt) {
+        throw Object.assign(new Error('Leaden er endret av en annen bruker. Oppdater listen og prøv igjen.'), { statusCode: 409 });
+      }
+      const nextLead = {
+        ...existing,
+        followUpCompleted: req.body.completed,
+        updatedAt: new Date(Math.max(Date.now(), (Date.parse(existing.updatedAt || '') || 0) + 1)).toISOString()
+      };
+      try {
+        await syncLeadCalendar(nextLead, existing);
+      } catch (err) {
+        nextLead.calendarSyncError = err?.message || 'Kalendersynkronisering feilet';
+        console.warn('[leads] Kalendersynkronisering feilet', id, nextLead.calendarSyncError);
+      }
+      const next = current.map(lead => lead.id === id ? nextLead : lead);
+      await writeJsonFile(LEADS_FILE, { leads: next });
+      return next;
+    });
+    return res.json(await buildLeadsPayload(auth, leads));
+  } catch (err) {
+    if (err?.statusCode) return res.status(err.statusCode).json({ error: err.message });
+    console.error('Fullføring av lead feilet', err);
+    return res.status(500).json({ error: 'Kunne ikke oppdatere lead' });
+  }
+});
+
+app.post('/api/leads/delete', requireUserAuth, async (req, res) => {
+  try {
+    const auth = req.userAuth;
+    const id = safeString(req.body?.id);
+    if (!id) return res.status(400).json({ error: 'Velg en lead' });
+    const leads = await withLeadsLock(async () => {
+      const current = await readLeadsStore();
+      const existing = current.find(lead => lead.id === id);
+      if (!existing) throw Object.assign(new Error('Leaden finnes ikke'), { statusCode: 404 });
+      if (!canEditLead(existing, auth)) {
+        throw Object.assign(new Error('Du kan ikke slette denne leaden'), { statusCode: 403 });
+      }
+      if (safeString(req.body?.updatedAt) !== existing.updatedAt) {
+        throw Object.assign(new Error('Leaden er endret av en annen bruker. Oppdater listen og prøv igjen.'), { statusCode: 409 });
+      }
+      if (existing.calendarEventId) {
+        await deleteProjectFlowCalendarEventForOwner(existing.calendarOwnerEmail || existing.responsibleEmail, existing.calendarEventId);
+      }
+      const next = current.filter(lead => lead.id !== id);
+      await writeJsonFile(LEADS_FILE, { leads: next });
+      return next;
+    });
+    return res.json(await buildLeadsPayload(auth, leads));
+  } catch (err) {
+    if (err?.statusCode) return res.status(err.statusCode).json({ error: err.message });
+    console.error('Sletting av lead feilet', err);
+    return res.status(500).json({ error: 'Kunne ikke slette lead' });
   }
 });
 

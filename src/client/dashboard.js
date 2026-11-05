@@ -4,6 +4,7 @@ import {
   PROJECT_STATUS_OPTIONS
 } from './config.js';
 import { $ } from './dom.js';
+import { getCalendarDayDiff, parseProjectFlowDate } from './date.js';
 import { fmtIntNO, fmtNO, round2 } from './format.js';
 import { readLocalText, writeLocalText } from './storage.js';
 
@@ -698,6 +699,16 @@ function getDashboardReportProjectTotals(project, resolvers){
   };
 }
 
+function getDashboardReportProjectHours(project){
+  const lines = Array.isArray(project?.lines) ? project.lines : [];
+  return {
+    engineering: sumDashboardLineValue(lines, line=>line?.totals?.engineering?.totalHours),
+    engineeringInOffer: sumDashboardIncludedLineValue(lines, 'includeEngineering', line=>line?.totals?.engineering?.totalHours),
+    montasje: sumDashboardLineValue(lines, line=>line?.totals?.montasje?.totalHours),
+    montasjeInOffer: sumDashboardIncludedLineValue(lines, 'includeMontasje', line=>line?.totals?.montasje?.totalHours)
+  };
+}
+
 function escapeDashboardReportXml(value){
   return String(value ?? '')
     .replace(/&/g, '&amp;')
@@ -819,6 +830,38 @@ export function exportDashboardTotalsReport(state, projects, resolvers = {}){
       projectTotals.cost
     ];
   });
+  const hourProjects = filteredProjects.map(project=>({
+    project,
+    status: getStatusConfig(project),
+    hours: getDashboardReportProjectHours(project)
+  }));
+  const hourColumns = ['engineering', 'engineeringInOffer', 'montasje', 'montasjeInOffer'];
+  const hourSummary = (label, entries)=>[
+    { value: label, style: 'Label' },
+    ...hourColumns.map(column=>({
+      value: round2(entries.reduce((sum, entry)=>sum + entry.hours[column], 0)),
+      type: 'Number',
+      style: 'Hours'
+    }))
+  ];
+  const hourSheetRows = [
+    createDashboardSpreadsheetRow([{ value: 'Timer - prosjektoversikt', style: 'Title' }]),
+    createDashboardSpreadsheetRow([{ value: `Filter: ${yearLabel} / ${monthLabel}`, style: 'Subtitle' }]),
+    createDashboardSpreadsheetRow([{ value: 'Oppsummering', style: 'Section' }]),
+    createDashboardSpreadsheetRow(['Prosjektstatus', 'Ingeniør beregnet', 'Ingeniør i tilbud', 'Montasje beregnet', 'Montasje i tilbud'].map(value=>({ value, style: 'Header' }))),
+    createDashboardSpreadsheetRow(hourSummary('Alle prosjekter', hourProjects)),
+    ...[['unresolved', 'Uavklart'], ['won', 'Vunnet'], ['lost', 'Tapt'], ['finished', 'Ferdig']].map(([id, label])=>
+      createDashboardSpreadsheetRow(hourSummary(label, hourProjects.filter(entry=>entry.status?.id === id)))),
+    createDashboardSpreadsheetRow(hourSummary('Vunnet og ferdig', hourProjects.filter(entry=>['won', 'finished'].includes(entry.status?.id)))),
+    createDashboardSpreadsheetRow([{ value: 'Timer per prosjekt', style: 'Section' }]),
+    createDashboardSpreadsheetRow(['Prosjektnummer', 'Prosjektnavn', 'Status', 'Ingeniør beregnet', 'Ingeniør i tilbud', 'Montasje beregnet', 'Montasje i tilbud'].map(value=>({ value, style: 'Header' }))),
+    ...hourProjects.map(entry=>createDashboardSpreadsheetRow([
+      { value: entry.project?.projectNumber || '-', style: 'Label' },
+      { value: entry.project?.name || 'Uten navn', style: 'Label' },
+      { value: entry.status?.label || '-', style: 'Label' },
+      ...hourColumns.map(column=>({ value: entry.hours[column], type: 'Number', style: 'Hours' }))
+    ]))
+  ].join('');
   const isRevenueProject = project=>['won', 'finished'].includes(getStatusConfig(project)?.id);
   const datofilterProjects = filteredProjects.filter(isRevenueProject);
   const hiaProjects = getDashboardReportYearToDateProjects(projects, state).filter(isRevenueProject);
@@ -883,6 +926,7 @@ export function exportDashboardTotalsReport(state, projects, resolvers = {}){
     <Style ss:ID="FilterValue"><Font ss:FontName="Arial" ss:Bold="1"/><Interior ss:Color="#D9D9D9" ss:Pattern="Solid"/></Style>
     <Style ss:ID="Currency"><NumberFormat ss:Format="&quot;kr&quot; #,##0.00;[Red]-&quot;kr&quot; #,##0.00"/><Alignment ss:Horizontal="Right"/></Style>
     <Style ss:ID="Integer"><NumberFormat ss:Format="0"/><Alignment ss:Horizontal="Right"/></Style>
+    <Style ss:ID="Hours"><NumberFormat ss:Format="0.00"/><Alignment ss:Horizontal="Right"/></Style>
     <Style ss:ID="Percent"><NumberFormat ss:Format="0.00\%"/><Alignment ss:Horizontal="Right"/></Style>
     <Style ss:ID="MissingCurrency"><NumberFormat ss:Format="&quot;kr&quot; #,##0.00;[Red]-&quot;kr&quot; #,##0.00"/><Alignment ss:Horizontal="Right"/><Interior ss:Color="#F4CCCC" ss:Pattern="Solid"/><Font ss:Color="#C00000" ss:Bold="1"/></Style>
     <Style ss:ID="MissingPercent"><NumberFormat ss:Format="0.00\%"/><Alignment ss:Horizontal="Right"/><Interior ss:Color="#F4CCCC" ss:Pattern="Solid"/><Font ss:Color="#C00000" ss:Bold="1"/></Style>
@@ -892,6 +936,9 @@ export function exportDashboardTotalsReport(state, projects, resolvers = {}){
   </Worksheet>
   <Worksheet ss:Name="Datofilter">
     <Table ss:ExpandedColumnCount="6"><Column ss:Width="55"/><Column ss:Width="210"/><Column ss:Width="105"/><Column ss:Width="70"/><Column ss:Width="105"/><Column ss:Width="70"/>${datofilterSheetRows}</Table>
+  </Worksheet>
+  <Worksheet ss:Name="Timer">
+    <Table ss:ExpandedColumnCount="7"><Column ss:Width="115"/><Column ss:Width="190"/><Column ss:Width="100"/><Column ss:Width="125"/><Column ss:Width="125"/><Column ss:Width="125"/><Column ss:Width="125"/>${hourSheetRows}</Table>
   </Worksheet>
 </Workbook>`;
   const period = `${state.totalsYear === 'all' ? 'alle-ar' : state.totalsYear}-${state.totalsMonth === 'all' ? 'alle-maneder' : String(state.totalsMonth).padStart(2, '0')}`;
@@ -980,6 +1027,163 @@ export function renderDashboardFlowStatusWidget(projects, getProjectFlowStatusFo
   });
   list.classList.toggle('is-scrollable', items.length > 4);
   root.appendChild(list);
+}
+
+export function buildDashboardFlowAlerts(projects, now = new Date(), leads = []){
+  if (!(now instanceof Date) || Number.isNaN(now.getTime())) return [];
+  const projectAlerts = (Array.isArray(projects) ? projects : [])
+    .flatMap(project=>(Array.isArray(project?.projectFlowMilestones) ? project.projectFlowMilestones : [])
+      .filter(task=>task && !task.completed)
+      .map(task=>{
+        const dueDate = parseProjectFlowDate(task.endDate || task.date || task.startDate);
+        if (!dueDate) return null;
+        const daysUntil = getCalendarDayDiff(now, dueDate);
+        if (daysUntil > 7) return null;
+        const phase = PROJECT_FLOW_PHASES.find(item=>item.id === task.phaseId);
+        return {
+          projectId: String(project.id || ''),
+          taskId: String(task.id || ''),
+          projectTitle: project.projectNumber
+            ? `${project.projectNumber} - ${project.name || 'Uten navn'}`
+            : project.name || 'Uten navn',
+          phaseLabel: phase?.label || 'Oppgave',
+          dueDate,
+          daysUntil
+        };
+      }).filter(Boolean));
+  const leadAlerts = (Array.isArray(leads) ? leads : [])
+    .filter(lead=>lead && lead.followUpCompleted !== true)
+    .map(lead=>{
+      const dueDate = parseProjectFlowDate(lead.followUpDate);
+      if (!dueDate) return null;
+      const daysUntil = getCalendarDayDiff(now, dueDate);
+      if (daysUntil > 7) return null;
+      return {
+        kind: 'lead',
+        leadId: String(lead.id || ''),
+        projectTitle: String(lead.projectNeed || 'Uten prosjekt/behov'),
+        phaseLabel: String(lead.nextActivity || 'Oppfølging'),
+        dueDate,
+        daysUntil
+      };
+    }).filter(Boolean);
+  return [...projectAlerts, ...leadAlerts]
+    .sort((a, b)=>a.daysUntil - b.daysUntil || a.projectTitle.localeCompare(b.projectTitle, 'no'));
+}
+
+function formatDashboardFlowAlertRelative(daysUntil){
+  const days = Math.abs(daysUntil);
+  if (daysUntil < 0) return `Forfalt for ${days} ${days === 1 ? 'dag' : 'dager'} siden`;
+  if (daysUntil === 0) return 'Frist i dag';
+  return `Frist om ${days} ${days === 1 ? 'dag' : 'dager'}`;
+}
+
+function formatDashboardLeadActivity(item){
+  return `Neste aktivitet: ${item.phaseLabel}`;
+}
+
+export function renderDashboardFlowAlerts(alerts){
+  const root = $('dashboardFlowAlerts');
+  if (!root) return;
+  const items = Array.isArray(alerts) ? alerts : [];
+  const overdue = items.filter(item=>item.daysUntil < 0).length;
+  const upcoming = items.length - overdue;
+  root.classList.toggle('has-upcoming', upcoming > 0);
+  root.classList.toggle('has-overdue', overdue > 0);
+  root.replaceChildren();
+
+  const label = document.createElement('div');
+  label.className = 'dashboard-flow-alert-label';
+  label.innerHTML = '<svg class="dashboard-flow-alert-icon" aria-hidden="true"><use href="#icon-bell"></use></svg><strong>Varsler</strong>';
+  root.appendChild(label);
+
+  const cells = document.createElement('div');
+  cells.className = 'dashboard-flow-alert-cells';
+  if (items.length){
+    items.forEach(item=>{
+      const cell = document.createElement('button');
+      cell.type = 'button';
+      cell.className = `dashboard-flow-alert-cell ${item.daysUntil < 0 ? 'is-overdue' : 'is-upcoming'}`;
+      if (item.kind === 'lead') cell.classList.add('is-lead');
+      if (item.kind === 'lead') cell.dataset.dashboardFlowAlertLead = item.leadId;
+      else {
+        cell.dataset.dashboardFlowAlertProject = item.projectId;
+        cell.dataset.dashboardFlowAlertTask = item.taskId;
+      }
+      const dateText = new Intl.DateTimeFormat('no-NO', { day: '2-digit', month: '2-digit', year: 'numeric' }).format(item.dueDate);
+      const detailText = item.kind === 'lead' ? formatDashboardLeadActivity(item) : item.phaseLabel;
+      cell.title = `${item.projectTitle} · ${detailText} · ${dateText}`;
+      const title = document.createElement('strong');
+      title.textContent = item.projectTitle;
+      const due = document.createElement('span');
+      due.textContent = formatDashboardFlowAlertRelative(item.daysUntil);
+      if (item.kind === 'lead') {
+        const heading = document.createElement('span');
+        heading.className = 'dashboard-flow-alert-lead-heading';
+        const activity = document.createElement('span');
+        activity.className = 'dashboard-flow-alert-activity';
+        activity.textContent = detailText;
+        heading.append(title, activity);
+        cell.append(heading, due);
+      } else {
+        cell.append(title, due);
+      }
+      cells.appendChild(cell);
+    });
+  } else {
+    const empty = document.createElement('span');
+    empty.className = 'dashboard-flow-alert-empty';
+    empty.textContent = 'Ingen passerte eller kommende frister de neste 7 dagene';
+    cells.appendChild(empty);
+  }
+  root.appendChild(cells);
+
+  if (items.length){
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'btn alt btn-small';
+    button.dataset.dashboardFlowAlertsOpen = '';
+    button.textContent = 'Vis alle';
+    root.appendChild(button);
+  }
+}
+
+export function renderDashboardFlowAlertsList(alerts){
+  const root = $('dashboardFlowAlertsList');
+  const subtitle = $('dashboardFlowAlertsSubtitle');
+  if (!root) return;
+  const items = Array.isArray(alerts) ? alerts : [];
+  if (subtitle) subtitle.textContent = `${items.length} ${items.length === 1 ? 'ufullført oppgave' : 'ufullførte oppgaver'} med passert eller kommende frist.`;
+  root.replaceChildren();
+  items.forEach(item=>{
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `dashboard-flow-alert-item ${item.daysUntil < 0 ? 'is-overdue' : 'is-upcoming'}`;
+    if (item.kind === 'lead') button.classList.add('is-lead');
+    if (item.kind === 'lead') button.dataset.dashboardFlowAlertLead = item.leadId;
+    else {
+      button.dataset.dashboardFlowAlertProject = item.projectId;
+      button.dataset.dashboardFlowAlertTask = item.taskId;
+    }
+    const title = document.createElement('strong');
+    title.textContent = item.projectTitle;
+    const phase = document.createElement('span');
+    phase.textContent = item.kind === 'lead' ? formatDashboardLeadActivity(item) : item.phaseLabel;
+    const due = document.createElement('span');
+    due.className = 'dashboard-flow-alert-due';
+    const dateText = new Intl.DateTimeFormat('no-NO', { day: '2-digit', month: '2-digit', year: 'numeric' }).format(item.dueDate);
+    due.textContent = `${formatDashboardFlowAlertRelative(item.daysUntil)} · ${dateText}`;
+    if (item.kind === 'lead') {
+      const heading = document.createElement('span');
+      heading.className = 'dashboard-flow-alert-lead-heading';
+      phase.className = 'dashboard-flow-alert-activity';
+      heading.append(title, phase);
+      button.append(heading, due);
+    } else {
+      button.append(title, phase, due);
+    }
+    root.appendChild(button);
+  });
 }
 
 const DASHBOARD_RECOMMENDED_CATEGORIES = Object.freeze([
