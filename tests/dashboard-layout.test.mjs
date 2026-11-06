@@ -43,7 +43,7 @@ test('dashboard widgets keep their intended order at desktop and mobile widths',
 
   const browser = await chromium.launch({ headless: true });
   t.after(()=>browser.close());
-  for (const width of [1600, 1400, 1381, 1200, 1000, 390]){
+  for (const width of [1600, 1400, 1381, 1200, 1000, 760, 390, 320]){
     const page = await browser.newPage({ viewport: { width, height: 900 } });
     await page.addInitScript(()=>{
       sessionStorage.setItem('busbar.auth.session.v1', JSON.stringify({
@@ -100,7 +100,7 @@ test('dashboard widgets keep their intended order at desktop and mobile widths',
     assert.equal(boxes.actions.left, boxes.total.left, `actions not below totals at ${width}px`);
     assert.ok(boxes.actions.top >= boxes.total.bottom, `actions overlap totals at ${width}px`);
     assert.ok(boxes.suggestions.top >= boxes.total.bottom, `suggestions overlap totals at ${width}px`);
-    assert.ok(Math.abs((boxes.actions.bottom - boxes.actions.top) - (boxes.suggestions.bottom - boxes.suggestions.top)) < 1,
+    if (width > 760) assert.ok(Math.abs((boxes.actions.bottom - boxes.actions.top) - (boxes.suggestions.bottom - boxes.suggestions.top)) < 1,
       `actions and suggestions have different heights at ${width}px`);
     assert.ok(boxes.flow.top >= boxes.status.bottom, `flow overlaps projects at ${width}px`);
     assert.ok(boxes.todo.top >= boxes.flow.bottom, `to-do overlaps flow at ${width}px`);
@@ -140,7 +140,9 @@ test('dashboard widgets keep their intended order at desktop and mobile widths',
       assert.ok(boxes.status.top >= boxes.actions.bottom, `status stack must follow actions at ${width}px`);
     } else {
       assert.ok(boxes.suggestions.top >= boxes.actions.bottom, `suggestions must follow actions at ${width}px`);
-      assert.ok(boxes.status.top >= boxes.suggestions.bottom, `status stack must follow suggestions at ${width}px`);
+      assert.ok(boxes.status.top >= boxes.total.bottom, `projects must follow totals at ${width}px`);
+      assert.ok(boxes.actions.top >= boxes.todo.bottom, `actions must follow to-do at ${width}px`);
+      assert.equal(await page.locator('.dashboard-copilot-widget').isVisible(), false);
     }
     if (width <= 760){
       const mobileContent = await page.evaluate(()=>{
@@ -150,14 +152,18 @@ test('dashboard widgets keep their intended order at desktop and mobile widths',
         };
         return {
           hero: bounds('.dashboard-total-hero-stack'),
-          sections: bounds('.dashboard-total-sections'),
+          sectionsHidden: getComputedStyle(document.querySelector('.dashboard-total-sections')).display === 'none',
           total: bounds('.dashboard-total-widget'),
           todoButton: bounds('.dashboard-todo-widget .dashboard-widget-header .btn'),
           todo: bounds('.dashboard-todo-widget')
         };
       });
-      assert.ok(mobileContent.sections.top >= mobileContent.hero.bottom, 'total sections overlap hero on mobile');
-      assert.ok(mobileContent.total.bottom >= mobileContent.sections.bottom, 'total sections are clipped on mobile');
+      assert.ok(mobileContent.sectionsHidden, 'detailed total sections are hidden on mobile');
+      assert.ok(mobileContent.total.bottom >= mobileContent.hero.bottom, 'headline totals are clipped on mobile');
+      assert.equal(await page.locator('.dashboard-total-hero:visible').count(), 3);
+      assert.equal(await page.locator('.dashboard-total-hero strong:visible').count(), 6);
+      assert.equal(await page.locator('.dashboard-total-hero-percent:visible').count(), 2);
+      assert.equal(await page.locator('#dashboardTotalsExport').isVisible(), false);
       assert.ok(mobileContent.todoButton.bottom <= mobileContent.todo.bottom, 'to-do button is clipped on mobile');
     }
     if (process.env.SAVE_DASHBOARD_SCREENSHOTS === '1'){
@@ -172,6 +178,45 @@ test('dashboard widgets keep their intended order at desktop and mobile widths',
       await page.reload();
       assert.equal(await page.locator('#leadsView').isVisible(), true);
       assert.ok(await leadsNav.evaluate(el=>el.classList.contains('is-active')));
+      await page.locator('[data-dashboard-nav="dashboard"]').click();
+    }
+    if (width <= 760 || width === 1600){
+      await page.evaluate(async()=>{
+        const { renderDashboardEmailProjectSuggestionsWidget } = await import('/src/client/dashboard.js');
+        renderDashboardEmailProjectSuggestionsWidget([{
+          id: 'layout-suggestion', subject: 'Forespørsel om leveranse til nytt prosjekt',
+          from: 'prosjektansvarlig@eksempel.no', contactPerson: 'Kari Hansen',
+          customer: 'Eksempel AS', receivedLabel: '06.11.2026, 10:30',
+          preview: 'Dette er de første linjene fra e-posten.'
+        }]);
+      });
+      const item = page.locator('.dashboard-email-project-suggestion');
+      const preview = item.locator('.dashboard-email-project-suggestion-preview');
+      const sender = item.locator('.dashboard-email-project-suggestion-sender');
+      const date = item.locator('.dashboard-email-project-suggestion-date');
+      assert.equal(await preview.isVisible(), width > 760);
+      assert.equal(await sender.isVisible(), width <= 760);
+      assert.equal(await date.isVisible(), width <= 760);
+      assert.equal(await item.locator('[data-dashboard-create-project-from-email]').getAttribute('data-dashboard-create-project-from-email'), 'layout-suggestion');
+      assert.equal(await item.locator('[data-dashboard-dismiss-email-project]').getAttribute('data-dashboard-dismiss-email-project'), 'layout-suggestion');
+      if (width <= 760){
+        const positions = await item.evaluate(el=>{
+          const box = selector=>{ const r = el.querySelector(selector).getBoundingClientRect(); return { left:r.left, right:r.right, top:r.top, bottom:r.bottom, width:r.width }; };
+          return {
+            title:box('strong'), actions:box('.dashboard-email-project-suggestion-actions'),
+            sender:box('.dashboard-email-project-suggestion-sender'), date:box('.dashboard-email-project-suggestion-date'),
+            innerWidth:el.clientWidth - 20, viewport:innerWidth
+          };
+        });
+        assert.ok(positions.actions.left >= positions.title.right, 'buttons are to the right of subject');
+        assert.equal(positions.actions.top, positions.title.top, 'subject and actions align at the top');
+        assert.ok(positions.sender.top >= Math.max(positions.title.bottom, positions.actions.bottom), 'sender follows the entire header');
+        assert.ok(positions.date.top >= positions.sender.bottom, 'date follows sender');
+        assert.ok(Math.abs(positions.sender.width - positions.innerWidth) < 1, 'sender spans the card width');
+        assert.ok(Math.abs(positions.date.width - positions.innerWidth) < 1, 'date spans the card width');
+        assert.ok(positions.actions.right <= positions.viewport, 'actions fit on screen');
+        if (process.env.SAVE_DASHBOARD_SCREENSHOTS === '1') await page.screenshot({ path: join(tmpdir(), `busbar-dashboard-compact-${width}.png`), fullPage:true });
+      }
     }
     await page.close();
   }

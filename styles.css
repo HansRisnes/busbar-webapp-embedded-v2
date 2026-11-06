@@ -20,6 +20,8 @@
   --no-success:#f87171;   /* feil/negativ status */
   --sidebar-width:240px;
   --sidebar-collapsed-width:72px;
+  --sidebar-motion-duration:.24s;
+  --sidebar-motion-easing:cubic-bezier(.2, .8, .2, 1);
 }
 
 *{box-sizing:border-box}
@@ -35,7 +37,7 @@ body{
   margin:0; padding:24px;
   font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
   background:var(--bg); color:var(--text);
-  transition:padding-left .24s cubic-bezier(.2, .8, .2, 1);
+  transition:padding-left var(--sidebar-motion-duration) var(--sidebar-motion-easing);
 }
 body.is-shell-booting,
 body.is-shell-booting .dashboard-sidebar,
@@ -319,6 +321,7 @@ main.app-views{
   color:var(--muted);
 }
 
+.dashboard-flow-alert-empty-short{ display:none; }
 .dashboard-flow-alert-empty{
   color:var(--muted);
   font-size:0.84rem;
@@ -1530,6 +1533,8 @@ main.app-views{
   flex-direction:column;
   gap:6px;
 }
+.dashboard-email-project-suggestion-sender,
+.dashboard-email-project-suggestion-date{ display:none; }
 
 .dashboard-email-project-suggestion-body strong{
   color:#fff;
@@ -2692,7 +2697,7 @@ button:disabled:hover{filter:none}
   min-height:100vh;
   z-index:40;
   overflow:hidden auto;
-  transition:width .24s cubic-bezier(.2, .8, .2, 1);
+  transition:width var(--sidebar-motion-duration) var(--sidebar-motion-easing);
   display:flex;
   flex-direction:column;
 }
@@ -2784,7 +2789,7 @@ body.is-auth-locked > header{
   height:2px;
   border-radius:2px;
   background:currentColor;
-  transition:transform .24s cubic-bezier(.2, .8, .2, 1), box-shadow .24s cubic-bezier(.2, .8, .2, 1);
+  transition:transform var(--sidebar-motion-duration) var(--sidebar-motion-easing), box-shadow var(--sidebar-motion-duration) var(--sidebar-motion-easing);
 }
 .sidebar-collapse-icon::before{
   transform:rotate(45deg);
@@ -2792,14 +2797,17 @@ body.is-auth-locked > header{
 .sidebar-collapse-icon::after{
   transform:rotate(-45deg);
 }
-.app-shell.is-sidebar-collapsed .sidebar-collapse-icon{
+.app-shell.is-sidebar-collapsed .sidebar-collapse-icon,
+.sidebar-collapse-btn[aria-expanded="false"] .sidebar-collapse-icon{
   transform:none;
 }
-.app-shell.is-sidebar-collapsed .sidebar-collapse-icon::before{
+.app-shell.is-sidebar-collapsed .sidebar-collapse-icon::before,
+.sidebar-collapse-btn[aria-expanded="false"] .sidebar-collapse-icon::before{
   transform:translateY(-6px);
   box-shadow:0 6px 0 currentColor;
 }
-.app-shell.is-sidebar-collapsed .sidebar-collapse-icon::after{
+.app-shell.is-sidebar-collapsed .sidebar-collapse-icon::after,
+.sidebar-collapse-btn[aria-expanded="false"] .sidebar-collapse-icon::after{
   transform:translateY(6px);
 }
 .sidebar-brand{

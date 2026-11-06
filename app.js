@@ -1,4 +1,9 @@
 // v2 + v2.1, XCP-S/XCM, distribusjon/feeder, avtappingsbokser, ekspansjon-modal >30 m
+import { renderProjectFlowList } from './src/client/project-flow-mobile.js';
+
+const mobileViewport = window.matchMedia('(max-width: 760px)');
+let mobileProjectFlowMode = 'list';
+let calendarModeChosen = false;
 
 import {
   ADMIN_NAV_ALLOWED_EMAILS,
@@ -317,7 +322,7 @@ const dashboardTodoEditState = {
   todoId: ''
 };
 const calendarViewState = {
-  mode: 'month',
+  mode: mobileViewport.matches ? 'list' : 'month',
   cursor: new Date(),
   events: [],
   loadedStart: null,
@@ -2179,7 +2184,7 @@ function calendarRangeForState(){
     const start = startOfWeekMonday(calendarViewState.cursor);
     return { start, end: addDays(start, 7) };
   }
-  const start = startOfDay(new Date());
+  const start = startOfDay(calendarViewState.cursor);
   return { start, end: addDays(start, 14) };
 }
 
@@ -2192,7 +2197,10 @@ function formatCalendarPeriodLabel(){
     const end = addDays(start, 6);
     return `${new Intl.DateTimeFormat('no-NO', { day: '2-digit', month: 'short' }).format(start)} - ${new Intl.DateTimeFormat('no-NO', { day: '2-digit', month: 'short', year: 'numeric' }).format(end)}`;
   }
-  return 'Kommende 14 dager';
+  if (sameCalendarDay(calendarViewState.cursor, new Date())) return 'Kommende 14 dager';
+  const start = startOfDay(calendarViewState.cursor);
+  const format = new Intl.DateTimeFormat('no-NO', { day: '2-digit', month: 'short', year: 'numeric' });
+  return `${format.format(start)} – ${format.format(addDays(start, 13))}`;
 }
 
 function setGraphStatus(id, message, state = ''){
@@ -3931,6 +3939,7 @@ if (calendarModeSelect){
   calendarModeSelect.addEventListener('change', ()=>{
     const mode = String(calendarModeSelect.value || 'month');
     if (!['list', 'month', 'week'].includes(mode)) return;
+    calendarModeChosen = true;
     calendarViewState.mode = mode;
     if (mode === 'list') calendarViewState.cursor = new Date();
     calendarViewState.loadedStart = null;
@@ -9939,6 +9948,19 @@ function renderProjectFlowView(options = {}){
   updateProjectFlowProjectSelect();
   populateProjectFlowPhaseSelect();
   root.innerHTML = '';
+  const listMode = mobileViewport.matches && mobileProjectFlowMode === 'list';
+  root.classList.toggle('is-list-view', listMode);
+  for (const id of ['projectFlowExpandAllBtn', 'projectFlowZoomOutBtn', 'projectFlowZoomInBtn', 'projectFlowZoomFitBtn']){
+    const button = $(id);
+    if (button) button.hidden = listMode;
+  }
+  for (const [id, active] of [['projectFlowListBtn', listMode], ['projectFlowTimelineBtn', !listMode]]){
+    const button = $(id);
+    if (button){
+      button.setAttribute('aria-pressed', String(active));
+      button.classList.toggle('is-active', active);
+    }
+  }
   const addBtn = $('addProjectFlowMilestoneBtn');
   const refreshBtn = $('refreshProjectFlowBtn');
   const visibleProjects = getProjectFlowVisibleProjects();
@@ -9961,6 +9983,16 @@ function renderProjectFlowView(options = {}){
       projectNumber: project.projectNumber || ''
     }));
   });
+  if (listMode){
+    renderProjectFlowList(root, visibleProjects, milestones, {
+      phases: PROJECT_FLOW_PHASES,
+      getProjectLabel: getProjectFlowProjectLabel,
+      getTaskLabel: getProjectFlowTaskLabel,
+      getResponsibleLabel: getProjectFlowTaskResponsibleLabel,
+      formatDate: formatProjectFlowInputDate
+    });
+    return;
+  }
   let { start, end } = getProjectFlowRange(milestones);
   if (previousScroll){
     const previousStart = parseProjectFlowDate(previousScroll.rangeStart);
@@ -13231,6 +13263,21 @@ if (projectFlowZoomFitBtn){
 }
 
 let projectFlowResizeTimer = 0;
+for (const [id, mode] of [['projectFlowListBtn', 'list'], ['projectFlowTimelineBtn', 'timeline']]){
+  $(id)?.addEventListener('click', ()=>{
+    mobileProjectFlowMode = mode;
+    renderProjectFlowView();
+  });
+}
+mobileViewport.addEventListener('change', ()=>{
+  if (!calendarModeChosen){
+    calendarViewState.mode = mobileViewport.matches ? 'list' : 'month';
+    calendarViewState.loadedStart = null;
+    calendarViewState.loadedEnd = null;
+    renderCalendarView();
+    if (dashboardState.activePage === 'calendar') void loadCalendarEvents();
+  }
+});
 window.addEventListener('resize', ()=>{
   window.clearTimeout(projectFlowResizeTimer);
   projectFlowResizeTimer = window.setTimeout(()=>{
@@ -13329,6 +13376,8 @@ document.addEventListener('click', evt=>{
 const projectFlowTimelineEl = $('projectFlowTimeline');
 if (projectFlowTimelineEl){
   projectFlowTimelineEl.addEventListener('pointerdown', evt=>{
+    // Touch scrolls the plan; task dates and dependencies are edited in the form.
+    if (mobileViewport.matches || evt.pointerType === 'touch') return;
     const linkHandle = evt.target instanceof Element ? evt.target.closest('[data-project-flow-link]') : null;
     if (linkHandle){
       startProjectFlowLinkDrag(evt, linkHandle);

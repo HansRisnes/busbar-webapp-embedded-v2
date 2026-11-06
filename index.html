@@ -2,7 +2,7 @@
 <html lang="no">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="busbar-api-base" content="https://busbar-webapp-embedded-v2.onrender.com">
   <title>Prosjektstyringsverkt&oslash;y</title>
   <link rel="icon" type="image/png" href="assets/Busbar_lyn_fylt.png">
@@ -29,6 +29,8 @@
     .btn{padding:10px 14px;background:var(--accent);border:1px solid var(--accent);border-radius:10px;color:#fff;cursor:pointer}
     .btn.alt{background:var(--input);border-color:var(--input-border)}
   </style>
+  <link rel="stylesheet" href="mobile.css">
+  <script type="module" src="src/client/mobile.js"></script>
 </head>
 <body class="is-auth-locked is-shell-booting">
   <script>
@@ -356,6 +358,10 @@
               <select id="projectFlowProjectSelect"></select>
             </div>
             <button id="addProjectFlowMilestoneBtn" type="button" class="btn alt">Ny oppgave</button>
+            <div class="project-flow-list-toggle" role="group" aria-label="Visning av prosjektflyt">
+              <button id="projectFlowListBtn" type="button" class="btn alt" aria-pressed="true">Liste</button>
+              <button id="projectFlowTimelineBtn" type="button" class="btn alt" aria-pressed="false">Tidslinje</button>
+            </div>
             <button id="projectFlowExpandAllBtn" type="button" class="btn alt">Utvid alle</button>
             <button id="projectFlowZoomOutBtn" type="button" class="btn alt">Zoom ut</button>
             <button id="projectFlowZoomInBtn" type="button" class="btn alt">Zoom inn</button>

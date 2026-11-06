@@ -100,11 +100,13 @@ test('dashboard and calculator restore the sidebar before the app script loads',
       const sidebarStyle = await page.locator('.dashboard-sidebar').evaluate(el=>({
         width: Math.round(el.getBoundingClientRect().width),
         transition: getComputedStyle(el).transitionDuration,
-        labelOpacity: getComputedStyle(el.querySelector('.sidebar-nav-label')).opacity
+        labelOpacity: getComputedStyle(el.querySelector('.sidebar-nav-label')).opacity,
+        iconTransform: getComputedStyle(el.querySelector('.sidebar-collapse-icon'), '::before').transform
       }));
       assert.equal(sidebarStyle.width, expectedCollapsed ? 72 : 240);
       assert.equal(sidebarStyle.transition, '0s');
       assert.equal(sidebarStyle.labelOpacity, expectedCollapsed ? '0' : '1');
+      assert.equal(sidebarStyle.iconTransform, expectedCollapsed ? 'matrix(1, 0, 0, 1, 0, -6)' : 'matrix(0.707107, 0.707107, -0.707107, 0.707107, 0, 0)');
       if (expectedCollapsed){
         assert.equal(await page.locator('#meter').evaluate(el=>el.parentElement.classList.contains('stepper')), true);
         assert.equal(await page.locator('#dist').inputValue(), 'Nei');

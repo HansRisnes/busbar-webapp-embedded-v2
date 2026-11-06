@@ -1133,7 +1133,8 @@ export function renderDashboardFlowAlerts(alerts){
   } else {
     const empty = document.createElement('span');
     empty.className = 'dashboard-flow-alert-empty';
-    empty.textContent = 'Ingen passerte eller kommende frister de neste 7 dagene';
+    empty.innerHTML = '<span class="dashboard-flow-alert-empty-full">Ingen passerte eller kommende frister de neste 7 dagene</span>'
+      + '<span class="dashboard-flow-alert-empty-short">Ingen varsler.</span>';
     cells.appendChild(empty);
   }
   root.appendChild(cells);
@@ -1340,14 +1341,22 @@ export function renderDashboardEmailProjectSuggestionsWidget(suggestions = []){
     const title = document.createElement('strong');
     title.textContent = suggestion.projectName || suggestion.subject || '(Uten emne)';
     const meta = document.createElement('span');
+    meta.className = 'dashboard-email-project-suggestion-meta';
     const contact = suggestion.contactPerson || 'Ukjent kontakt';
     const email = suggestion.from ? ` (${suggestion.from})` : '';
     const company = suggestion.customer || '-';
     const received = suggestion.receivedLabel || '-';
     meta.textContent = `${contact}${email} | ${company} | ${received}`;
     const preview = document.createElement('p');
+    preview.className = 'dashboard-email-project-suggestion-preview';
     preview.textContent = suggestion.preview || '';
-    body.append(title, meta, preview);
+    const sender = document.createElement('span');
+    sender.className = 'dashboard-email-project-suggestion-sender';
+    sender.textContent = suggestion.from || contact;
+    const date = document.createElement('span');
+    date.className = 'dashboard-email-project-suggestion-date';
+    date.textContent = received;
+    body.append(title, meta, preview, sender, date);
 
     const actions = document.createElement('div');
     actions.className = 'dashboard-email-project-suggestion-actions';
