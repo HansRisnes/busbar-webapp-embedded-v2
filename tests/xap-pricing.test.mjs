@@ -116,6 +116,11 @@ test('calculator applies the current manual quote to XAP busway before NOK conve
   await page.locator('#sluttEl').selectOption('end_cover');
   await page.locator('#lineNumberInput').fill('XAP-TEST');
   await page.locator('#calcBtn').click();
+  await page.locator('#projectForm').waitFor({ state: 'visible' });
+  await page.locator('#projectNameInput').fill('XAP testprosjekt');
+  await page.locator('#projectSubmit').click();
+  await page.locator('#status').getByText('Linje XAP-TEST lagret.', { exact: true }).waitFor();
+  await page.locator('#lineNumberInput').fill('XAP-TEST');
   const row = page.locator('#bomTbl tr', { hasText: 'XAP-B 500A, 4W - Straight length, 1 meter' }).first();
   await page.waitForTimeout(300);
   assert.ok(await row.count(), `XAP calculation failed: ${await page.locator('#status').textContent()} | ${await page.locator('body').innerText().then(text=>text.slice(-500))}`);
@@ -125,7 +130,7 @@ test('calculator applies the current manual quote to XAP busway before NOK conve
   assert.equal(await page.locator('#xapCompareLine').isVisible(), false);
   const bomQty = async label=>{
     const row = page.locator('#bomTbl tbody tr', { hasText: label }).first();
-    assert.ok(await row.count(), `BOM-rad mangler: ${label}`);
+    await row.waitFor({ state: 'visible' });
     return Number((await row.locator('td').nth(5).textContent()).trim());
   };
   assert.equal(await bomQty('XAP-B 500A, 4W - Joint'), 3);
@@ -133,6 +138,8 @@ test('calculator applies the current manual quote to XAP busway before NOK conve
 
   await page.locator('#dist').selectOption('Ja');
   await page.locator('#calcBtn').click();
+  assert.equal(await page.locator('#dist').inputValue(), 'Ja');
+  assert.equal(await page.locator('#status').textContent(), 'OK');
   assert.equal(await bomQty('XAP-B 500A, 4W - Outlet for tap-off boxes'), 2);
   assert.equal(await bomQty('XAP-B 500A, 4W - Joint'), 3);
 

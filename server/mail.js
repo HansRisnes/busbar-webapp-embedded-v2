@@ -4590,11 +4590,15 @@ app.post('/api/user-projects/sync', requireUserAuth, async (req, res) => {
           : [];
         const currentUserProjectIds = new Set(currentUserProjects.map(project => safeString(project?.id)).filter(Boolean));
         const projectOwnerById = new Map();
+        const storedProjectById = new Map();
         Object.entries(archive.users || {}).forEach(([ownerEmailRaw, user]) => {
           const ownerEmail = normalizeEmail(ownerEmailRaw || user?.email);
           (Array.isArray(user?.projects) ? user.projects : []).forEach(project => {
             const projectId = safeString(project?.id);
-            if (projectId && isValidEmail(ownerEmail)) projectOwnerById.set(projectId, ownerEmail);
+            if (projectId && isValidEmail(ownerEmail)) {
+              projectOwnerById.set(projectId, ownerEmail);
+              storedProjectById.set(projectId, project);
+            }
           });
         });
         if (!canEditAllProjects) {
@@ -4613,6 +4617,17 @@ app.post('/api/user-projects/sync', requireUserAuth, async (req, res) => {
             err.statusCode = 403;
             throw err;
           }
+        }
+        const unfinishedInvoiceProject = normalizedProjects.find(project => {
+          if (project.projectStatus !== 'finished'
+            || storedProjectById.get(safeString(project.id))?.projectStatus === 'finished') return false;
+          const invoiceTasks = project.projectFlowMilestones.filter(task => task.phaseId === 'finished');
+          return !invoiceTasks.length || invoiceTasks.some(task => !task.completed);
+        });
+        if (unfinishedInvoiceProject) {
+          const err = new Error('Alle Fakturert-oppgaver må være huket av i prosjektflyten før prosjektet kan settes til Ferdig');
+          err.statusCode = 409;
+          throw err;
         }
 
         const deletedProjectIds = new Set(Array.isArray(archive.deletedProjectIds) ? archive.deletedProjectIds.map(safeString).filter(Boolean) : []);
@@ -5547,6 +5562,18 @@ app.post('/api/generate-offer', requireUserAuth, async (req, res) => {
     const project = (req.body && typeof req.body === 'object') ? req.body.project : null;
     if (!project || typeof project !== 'object') {
       return res.status(400).json({ error: 'Mangler prosjektdata' });
+    }
+    const requiredDetails = [
+      ['Prosjektnavn', project.name],
+      ['Kunde', project.customer],
+      ['Adresse', project.customerAddress || project.address],
+      ['Postnummer og sted', project.customerPostalPlace || project.postalPlace],
+      ['Kontaktperson', project.contactPerson || project.contact],
+      ['Telefon', project.contactPhone || project.phone]
+    ];
+    const missingDetails = requiredDetails.filter(([, value]) => !safeString(value)).map(([label]) => label);
+    if (missingDetails.length) {
+      return res.status(400).json({ error: `Fyll ut ${missingDetails.join(', ')} før tilbud kan genereres` });
     }
     const authStore = await readUserAuthStore();
     const userRecord = authStore.users[req.userAuth.email];

@@ -61,6 +61,13 @@ test('new CSV variants load and retain the matching conductor prices', async t=>
   await page.locator('#startEl').selectOption('board_feed');
   await page.locator('#sluttEl').selectOption('board_feed');
   await page.locator('#lineNumberInput').fill('CSV-TEST');
+  await page.locator('#ledere').selectOption('3F+PE');
+  await page.locator('#calcBtn').click();
+  await page.locator('#projectForm').waitFor({ state: 'visible' });
+  await page.locator('#projectNameInput').fill('Katalog testprosjekt');
+  await page.locator('#projectSubmit').click();
+  await page.locator('#status').getByText('Linje CSV-TEST lagret.', { exact: true }).waitFor();
+  await page.locator('#lineNumberInput').fill('CSV-TEST');
   for (const [ledere, expectedCode] of [
     ['3F+PE', '64281000P-3W'],
     ['3F+N+PE', '64281000P']

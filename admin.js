@@ -327,6 +327,19 @@ function readStoredAdminAuth(){
   }
 }
 
+function updateSidebarAdminAuth(){
+  const stored = readStoredAdminAuth();
+  const user = $('authUser');
+  const login = $('loginBtn');
+  const logout = $('logoutBtn');
+  if (user){
+    user.textContent = stored?.username || '';
+    user.hidden = !stored;
+  }
+  if (login) login.hidden = Boolean(stored);
+  if (logout) logout.hidden = !stored;
+}
+
 function writeStoredAdminAuth(authHeader, username){
   try{
     sessionStorage.setItem(ADMIN_AUTH_SESSION_KEY, JSON.stringify({ authHeader, username }));
@@ -1143,9 +1156,11 @@ async function handleAdminLoginSubmit(){
   try{
     await loadOverview(authHeader);
     writeStoredAdminAuth(authHeader, username);
+    updateSidebarAdminAuth();
     setAuthError('');
   }catch(err){
     clearStoredAdminAuth();
+    updateSidebarAdminAuth();
     setAuthError(err?.message || 'Innlogging feilet.');
   }
 }
@@ -1195,6 +1210,7 @@ async function handleUserDelete(email){
 
 function handleAdminLogout(){
   clearStoredAdminAuth();
+  updateSidebarAdminAuth();
   clearUserForm();
   const dataCard = $('adminDataCard');
   if (dataCard) dataCard.hidden = true;
@@ -1276,6 +1292,15 @@ async function handleCustomerDelete(deleteContactOnly){
 }
 
 function bindUi(){
+  const sidebarLoginBtn = $('loginBtn');
+  if (sidebarLoginBtn){
+    sidebarLoginBtn.addEventListener('click', ()=>{
+      $('adminLoginForm')?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+      $('adminUsername')?.focus();
+    });
+  }
+  const sidebarLogoutBtn = $('logoutBtn');
+  if (sidebarLogoutBtn) sidebarLogoutBtn.addEventListener('click', handleAdminLogout);
   const loginForm = $('adminLoginForm');
   if (loginForm){
     loginForm.addEventListener('submit', evt => {
@@ -1411,6 +1436,8 @@ function bindUi(){
 
 window.addEventListener('DOMContentLoaded', async () => {
   initDashboardSidebar();
+  updateSidebarAdminAuth();
+  window.requestAnimationFrame(()=>document.body.classList.remove('is-shell-booting'));
   updateColumnSortUi();
   bindUi();
   const stored = readStoredAdminAuth();
@@ -1421,6 +1448,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     await loadOverview(stored.authHeader);
   }catch(err){
     clearStoredAdminAuth();
+    updateSidebarAdminAuth();
     setAuthError(err?.message || 'Kunne ikke validere admin-sesjon.');
   }
 });

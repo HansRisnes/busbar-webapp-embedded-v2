@@ -37,6 +37,12 @@ body{
   background:var(--bg); color:var(--text);
   transition:padding-left .24s cubic-bezier(.2, .8, .2, 1);
 }
+body.is-shell-booting,
+body.is-shell-booting .dashboard-sidebar,
+body.is-shell-booting .sidebar-nav-label,
+body.is-shell-booting .sidebar-brand{
+  transition:none;
+}
 
 body:has(.app-shell){
   padding-left:calc(var(--sidebar-width) + 24px);
@@ -2195,6 +2201,7 @@ a.nav-page-btn[aria-disabled="true"]{
   flex-direction:column;
   min-width:120px;
 }
+.project-pill-field[hidden]{display:none;}
 
 .project-pill button{
   margin-left:auto;
@@ -2643,6 +2650,37 @@ button:disabled:hover{filter:none}
 }
 .app-shell .view-toolbar{
   display:none;
+}
+#calculatorView .calculator-card-header{
+  flex-direction:row;
+  align-items:center;
+  justify-content:space-between;
+  gap:16px;
+  flex-wrap:wrap;
+}
+#calculatorView .calculator-card-brand{
+  display:flex;
+  flex-direction:column;
+  align-items:flex-start;
+  gap:8px;
+  min-width:0;
+}
+#calculatorView .calculator-card-header .project-pill{
+  margin-left:auto;
+  justify-content:flex-end;
+  max-width:100%;
+  padding:0;
+  border:0;
+  border-radius:0;
+  background:transparent;
+}
+#calculatorView .calculator-card-header .project-pill-field{
+  min-width:0;
+  max-width:25rem;
+  text-align:right;
+}
+#calculatorView .calculator-card-header .pill-value{
+  overflow-wrap:anywhere;
 }
 .dashboard-sidebar{
   position:fixed;

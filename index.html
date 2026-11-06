@@ -6,6 +6,7 @@
   <meta name="busbar-api-base" content="https://busbar-webapp-embedded-v2.onrender.com">
   <title>Prosjektstyringsverkt&oslash;y</title>
   <link rel="icon" type="image/png" href="assets/Busbar_lyn_fylt.png">
+  <link rel="preload" href="assets/fonts/PlusJakartaSans-VariableFont_wght.ttf" as="font" type="font/ttf" crossorigin>
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="font.css">
   <script src="assets/vendor/msal-browser.min.js"></script>
@@ -29,7 +30,22 @@
     .btn.alt{background:var(--input);border-color:var(--input-border)}
   </style>
 </head>
-<body>
+<body class="is-auth-locked is-shell-booting">
+  <script>
+    try {
+      const session = JSON.parse(sessionStorage.getItem('busbar.auth.session.v1') || 'null');
+      if (session?.loggedIn === true && session.token) {
+        document.body.classList.remove('is-auth-locked');
+        if (session.isAdmin === true) document.body.dataset.initialAdmin = '1';
+        if (typeof session.username === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(session.username.trim())) {
+          document.body.dataset.initialUsername = session.username.trim().toLowerCase();
+        }
+      }
+      if (localStorage.getItem('busbar.dashboard.sidebar.collapsed.v1') === '1') {
+        document.body.dataset.initialSidebarCollapsed = '1';
+      }
+    } catch (_err) {}
+  </script>
   <svg class="app-icon-sprite" aria-hidden="true" focusable="false">
     <symbol id="icon-dashboard" viewBox="0 0 24 24"><path d="M4 13h6V4H4v9Zm10 7h6V4h-6v16ZM4 20h6v-5H4v5Z"/></symbol>
     <symbol id="icon-projects" viewBox="0 0 24 24"><path d="M3 6.5A2.5 2.5 0 0 1 5.5 4H10l2 2h6.5A2.5 2.5 0 0 1 21 8.5v9A2.5 2.5 0 0 1 18.5 20h-13A2.5 2.5 0 0 1 3 17.5v-11Z"/></symbol>
@@ -92,6 +108,11 @@
   </header>
 
   <main class="app-shell" id="dashboardShell">
+    <script>
+      if (document.body.dataset.initialSidebarCollapsed === '1') {
+        document.getElementById('dashboardShell').classList.add('is-sidebar-collapsed');
+      }
+    </script>
     <aside class="dashboard-sidebar" aria-label="Hovedmeny">
       <div class="sidebar-top-row">
         <button type="button" class="sidebar-collapse-btn" id="dashboardSidebarToggle" aria-label="Minimer meny" aria-expanded="true">
@@ -103,7 +124,7 @@
       </div>
       <nav class="sidebar-nav">
         <div class="sidebar-nav-section">
-          <button type="button" class="sidebar-nav-item is-active" data-dashboard-nav="dashboard"><svg class="sidebar-nav-icon" aria-hidden="true"><use href="#icon-dashboard"></use></svg><span class="sidebar-nav-label">Dashbord</span></button>
+          <button type="button" class="sidebar-nav-item" data-dashboard-nav="dashboard"><svg class="sidebar-nav-icon" aria-hidden="true"><use href="#icon-dashboard"></use></svg><span class="sidebar-nav-label">Dashbord</span></button>
           <a class="sidebar-nav-item" href="calculator.html" data-dashboard-link="calculator"><svg class="sidebar-nav-icon" aria-hidden="true"><use href="#icon-calculator"></use></svg><span class="sidebar-nav-label">Prisverkt&oslash;y</span></a>
           <button type="button" class="sidebar-nav-item" data-dashboard-nav="projects"><svg class="sidebar-nav-icon" aria-hidden="true"><use href="#icon-projects"></use></svg><span class="sidebar-nav-label">Prosjekter</span></button>
           <button type="button" class="sidebar-nav-item" data-dashboard-nav="project-flow"><svg class="sidebar-nav-icon" aria-hidden="true"><use href="#icon-project-flow"></use></svg><span class="sidebar-nav-label">Prosjektflyt</span></button>
@@ -118,6 +139,16 @@
           <button type="button" class="sidebar-nav-item" data-dashboard-nav="project-folders"><svg class="sidebar-nav-icon" aria-hidden="true"><use href="#icon-project-folders"></use></svg><span class="sidebar-nav-label">Prosjektmapper</span></button>
           <button type="button" class="sidebar-nav-item" data-dashboard-nav="supplier-folders"><svg class="sidebar-nav-icon" aria-hidden="true"><use href="#icon-supplier-folders"></use></svg><span class="sidebar-nav-label">Leverand&oslash;rmapper</span></button>
         </div>
+        <script>
+          const initialView = new URLSearchParams(window.location.search).get('view') || 'dashboard';
+          const navItems = Array.from(document.querySelectorAll('[data-dashboard-nav]'));
+          const activeNav = navItems.find(item => item.dataset.dashboardNav === initialView) || navItems[0];
+          navItems.forEach(item => {
+            const active = item === activeNav;
+            item.classList.toggle('is-active', active);
+            item.setAttribute('aria-current', active ? 'page' : 'false');
+          });
+        </script>
         <div class="sidebar-nav-section is-bottom">
           <div class="sidebar-separator" aria-hidden="true"></div>
           <div id="authControls" class="sidebar-auth-block">
@@ -127,7 +158,18 @@
               <button id="logoutBtn" class="btn alt sidebar-auth-btn" title="Logg av" hidden><svg class="sidebar-nav-icon" aria-hidden="true"><use href="#icon-logout"></use></svg><span class="sidebar-auth-label">Logg av</span></button>
             </div>
           </div>
+          <script>
+            if (document.body.dataset.initialUsername) {
+              document.getElementById('authUser').textContent = document.body.dataset.initialUsername;
+              document.getElementById('authUser').hidden = false;
+              document.getElementById('loginBtn').hidden = true;
+              document.getElementById('logoutBtn').hidden = false;
+            }
+          </script>
           <a class="sidebar-nav-item" href="admin.html" id="dashboardAdminNav" data-dashboard-admin hidden><svg class="sidebar-nav-icon" aria-hidden="true"><use href="#icon-admin"></use></svg><span class="sidebar-nav-label">Admin</span></a>
+          <script>
+            if (document.body.dataset.initialAdmin === '1') document.getElementById('dashboardAdminNav').hidden = false;
+          </script>
         </div>
       </nav>
     </aside>
@@ -1201,20 +1243,17 @@
 
   <form id="projectForm" class="project-form" onsubmit="return false;" autocomplete="off" hidden>
         <label>Prosjektnavn
-          <div class="suggest-wrapper">
-            <input id="projectNameInput" type="text" autocomplete="off" required>
-            <ul id="projectSuggestions" class="suggestions" hidden></ul>
-          </div>
+          <input id="projectNameInput" type="text" autocomplete="off" required>
         </label>
         <label>Kunde
           <div class="suggest-wrapper">
-            <input id="customerNameInput" type="text" autocomplete="off" required>
+            <input id="customerNameInput" type="text" autocomplete="off">
             <ul id="customerSuggestions" class="suggestions" hidden></ul>
           </div>
         </label>
         <label>Kontaktperson
           <div class="suggest-wrapper">
-            <input id="contactPersonInput" type="text" autocomplete="off" required>
+            <input id="contactPersonInput" type="text" autocomplete="off">
             <ul id="contactSuggestions" class="suggestions" hidden></ul>
           </div>
         </label>
@@ -1227,10 +1266,10 @@
 
   <div id="projectDetailsModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="projectDetailsTitle">
     <div class="modal">
-      <h3 id="projectDetailsTitle">Kundeinformasjon</h3>
+      <h3 id="projectDetailsTitle">Fullfør kundeinformasjon</h3>
       <form class="project-form" onsubmit="return false;" autocomplete="off">
         <label for="projectDetailsCustomer">Kunde
-          <input id="projectDetailsCustomer" type="text" disabled>
+          <input id="projectDetailsCustomer" type="text" autocomplete="organization" required>
         </label>
         <label for="projectDetailsAddress">Adresse
           <input id="projectDetailsAddress" type="text" autocomplete="street-address" required>
@@ -1239,7 +1278,7 @@
           <input id="projectDetailsPostalPlace" type="text" autocomplete="postal-code" required>
         </label>
         <label for="projectDetailsContact">Kontaktperson
-          <input id="projectDetailsContact" type="text" disabled>
+          <input id="projectDetailsContact" type="text" autocomplete="name" required>
         </label>
         <label for="projectDetailsPhone">Telefon
           <input id="projectDetailsPhone" type="tel" autocomplete="tel" required>
@@ -1247,7 +1286,7 @@
         <p id="projectDetailsError" class="login-error project-error" role="alert"></p>
         <div class="actions">
           <button id="projectDetailsCancel" type="button" class="btn alt">Avbryt</button>
-          <button id="projectDetailsSubmit" type="button" class="btn">Lagre</button>
+          <button id="projectDetailsSubmit" type="button" class="btn">Lagre og generer tilbud</button>
         </div>
       </form>
     </div>
@@ -1258,10 +1297,10 @@
       <h3 id="offerDetailsWarningTitle">Mangler detaljer</h3>
       <p class="muted-text">Prosjektet mangler f&oslash;lgende felt:</p>
       <ul id="offerDetailsMissingList" class="missing-details-list"></ul>
-      <p>Kontakt administrator for &aring; legge til detaljer</p>
+      <p>Fyll ut feltene før tilbud kan genereres.</p>
       <div class="actions">
         <button id="offerDetailsCancel" type="button" class="btn alt">Avbryt</button>
-        <button id="offerDetailsContinue" type="button" class="btn">Generer likevel</button>
+        <button id="offerDetailsContinue" type="button" class="btn">Fyll ut</button>
       </div>
     </div>
   </div>

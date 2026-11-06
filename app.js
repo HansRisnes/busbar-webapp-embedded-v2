@@ -119,7 +119,7 @@ import {
   startOfWeekMonday
 } from './src/client/date.js';
 import {
-  goToCalculator,
+  goToCalculator as navigateToCalculator,
   goToDashboard,
   hasCalculatorUI,
   hasDashboardUI,
@@ -204,6 +204,7 @@ let authState = {
 };
 let lastLeadsAuthIdentity = '';
 const LEGACY_PROJECTS_STORAGE_KEY = 'busbar.projects.v1';
+const CALCULATOR_PROJECT_PREVIEW_KEY = 'busbar.calculator.project-preview.v1';
 const projectSyncState = {
   timerId: null,
   inFlight: false,
@@ -248,7 +249,6 @@ const projectState = {
   currentCustomer: '',
   currentContact: '',
   currentLineNumber: '',
-  projectHistory: [],
   customerHistory: [],
   contactHistory: [],
   customerDatabase: [],
@@ -265,10 +265,12 @@ const projectModalState = {
   mode: 'create',
   projectId: null,
   saveLineAfterCreate: false,
+  calculateAndSaveAfterCreate: false,
   pendingDetails: null,
   copySourceProjectId: null,
   sourceEmail: null
 };
+let saveFirstCalculationAfterProjectCreate = false;
 const projectMarginModalState = {
   projectId: null
 };
@@ -285,7 +287,7 @@ const projectFlowBetaState = {
     visualSchedule: {}
 };
 const offerDetailsWarningState = {
-  resolver: null
+  projectId: null
 };
 const offerListState = {
   searchTerm: '',
@@ -437,7 +439,9 @@ initLeadsPage({
     if (dashboardState.activePage === 'dashboard') renderDashboardFlowAlertsWidget();
   }
 });
+loadAuthFromSession();
 initDashboardShell();
+window.requestAnimationFrame(()=>document.body.classList.remove('is-shell-booting'));
 
 function buildStaticAssetUrl(relativePath){
   try{
@@ -4320,6 +4324,32 @@ function getCurrentUserEmail(){
   return email;
 }
 
+function rememberCalculatorProject(project){
+  const email = getCurrentUserEmail();
+  if (!project || !email){
+    removeSessionItem(CALCULATOR_PROJECT_PREVIEW_KEY);
+    return;
+  }
+  writeSessionJson(CALCULATOR_PROJECT_PREVIEW_KEY, {
+    email,
+    id: project.id,
+    projectNumber: project.projectNumber || '',
+    name: project.name || '',
+    customer: project.customer || ''
+  });
+}
+
+function getCalculatorProjectPreview(projectId){
+  if (!projectId) return null;
+  const preview = readSessionJson(CALCULATOR_PROJECT_PREVIEW_KEY, null);
+  return preview?.email === getCurrentUserEmail() && preview?.id === projectId ? preview : null;
+}
+
+function goToCalculator(params = {}){
+  rememberCalculatorProject(params.project ? getProjectById(params.project) : null);
+  navigateToCalculator(params);
+}
+
 function canEditProjectRecord(project){
   if (!authState.loggedIn) return false;
   if (authState.canEditAllProjects === true || authState.isAdmin === true) return true;
@@ -4825,8 +4855,14 @@ async function flushProjectSync(){
   }
   projectSyncState.inFlight = true;
   try{
+    const sentSnapshot = JSON.stringify(projectState.projects);
     const syncedProjects = await pushUserProjectsToServer(email, projectState.projects);
-    projectState.projects = syncedProjects;
+    const changedWhileSyncing = JSON.stringify(projectState.projects) !== sentSnapshot;
+    projectState.projects = (changedWhileSyncing
+      ? mergeProjectsByLatest(syncedProjects, projectState.projects)
+      : syncedProjects)
+      .filter(project=>!projectSyncState.deletedProjectIds.has(project.id));
+    if (changedWhileSyncing) projectSyncState.pending = true;
     sortProjects();
     updateProjectHistories();
     saveProjectsToStorage({ skipRemoteSync: true });
@@ -4892,14 +4928,19 @@ async function syncProjectsForCurrentUser(){
     renderProjectDashboard();
     renderMainDashboard();
     updateProjectMetaDisplay();
+    const sentSnapshot = JSON.stringify(projectState.projects);
     const syncedProjects = await pushUserProjectsToServer(email, projectState.projects);
-    projectState.projects = filterDeletedProjects(syncedProjects);
+    const changedWhileSyncing = JSON.stringify(projectState.projects) !== sentSnapshot;
+    projectState.projects = filterDeletedProjects(changedWhileSyncing
+      ? mergeProjectsByLatest(syncedProjects, projectState.projects)
+      : syncedProjects);
     sortProjects();
     updateProjectHistories();
     saveProjectsToStorage({ skipRemoteSync: true });
     renderProjectDashboard();
     renderMainDashboard();
     updateProjectMetaDisplay();
+    if (changedWhileSyncing) queueProjectSync({ immediate: true });
     projectState.customerDatabase = normalizeGlobalCustomerPayload(await fetchCustomerDatabaseFromServer());
     projectState.globalCustomerDatabaseLoaded = true;
     updateProjectHistories();
@@ -5038,11 +5079,10 @@ function getProjectById(id){
 }
 
 function hasActiveProject(){
-  return Boolean(projectState.currentProjectId && projectState.currentProject && projectState.currentCustomer);
+  return Boolean(projectState.currentProjectId && projectState.currentProject);
 }
 
 function updateProjectHistories(){
-  projectState.projectHistory.length = 0;
   projectState.customerHistory.length = 0;
   projectState.contactHistory.length = 0;
   (Array.isArray(projectState.customerDatabase) ? projectState.customerDatabase : []).forEach(customer=>{
@@ -5052,7 +5092,6 @@ function updateProjectHistories(){
     });
   });
   projectState.projects.forEach(project=>{
-    addToHistory(projectState.projectHistory, project.name);
     addToHistory(projectState.customerHistory, project.customer);
     addToHistory(projectState.contactHistory, project.contactPerson);
   });
@@ -5174,7 +5213,12 @@ function setActiveProject(project){
   projectState.currentProject = nextProject.name;
   projectState.currentCustomer = nextProject.customer;
   projectState.currentContact = nextProject.contactPerson || '';
-  addToHistory(projectState.projectHistory, nextProject.name);
+  if (hasCalculatorUI()){
+    rememberCalculatorProject(nextProject);
+    const url = new URL(window.location.href);
+    url.searchParams.set('project', nextProject.id);
+    window.history.replaceState({}, '', url.toString());
+  }
   addToHistory(projectState.customerHistory, nextProject.customer);
   addToHistory(projectState.contactHistory, nextProject.contactPerson);
   updateProjectMetaDisplay();
@@ -5186,6 +5230,12 @@ function clearActiveProject(){
   projectState.currentProject = '';
   projectState.currentCustomer = '';
   projectState.currentContact = '';
+  if (hasCalculatorUI()){
+    rememberCalculatorProject(null);
+    const url = new URL(window.location.href);
+    url.searchParams.delete('project');
+    window.history.replaceState({}, '', url.toString());
+  }
   updateProjectMetaDisplay();
   updateAuthUI();
 }
@@ -5217,7 +5267,6 @@ function createProject(projectName, customerName, contactPerson, details = {}){
   projectState.projects.push(project);
   sortProjects();
   saveProjectsToStorage();
-  addToHistory(projectState.projectHistory, project.name);
   addToHistory(projectState.customerHistory, project.customer);
   addToHistory(projectState.contactHistory, project.contactPerson);
   renderProjectDashboard();
@@ -5252,7 +5301,6 @@ function copyProject(sourceProjectId, customerName, contactPerson, details = {})
   projectState.projects.push(project);
   sortProjects();
   saveProjectsToStorage();
-  addToHistory(projectState.projectHistory, project.name);
   addToHistory(projectState.customerHistory, project.customer);
   addToHistory(projectState.contactHistory, project.contactPerson);
   renderProjectDashboard();
@@ -5279,7 +5327,6 @@ function updateProject(projectId, updates){
     updateProjectMetaDisplay();
     updateAuthUI();
   }
-  addToHistory(projectState.projectHistory, target.name);
   addToHistory(projectState.customerHistory, target.customer);
   addToHistory(projectState.contactHistory, target.contactPerson);
   return target;
@@ -5350,26 +5397,35 @@ function deleteProjectLine(projectId, lineId){
 
 function updateProjectMetaDisplay(){
   const hasData = hasActiveProject();
+  const pendingProjectId = hasCalculatorUI() ? new URLSearchParams(window.location.search).get('project') : '';
+  const headerProject = getProjectById(projectState.currentProjectId || pendingProjectId);
+  const headerPreview = headerProject ? null : getCalculatorProjectPreview(pendingProjectId);
   const nameNodes = document.querySelectorAll('[data-project-name]');
   const customerNodes = document.querySelectorAll('[data-project-customer]');
   const contactNodes = document.querySelectorAll('[data-project-contact]');
   const metaWrappers = document.querySelectorAll('[data-project-meta]');
-  const editButtons = document.querySelectorAll('[data-project-edit]');
   nameNodes.forEach(el=>{
     el.textContent = projectState.currentProject || '';
   });
+  const activeProjectName = $('activeProjectName');
+  if (activeProjectName){
+    const displayProject = headerProject || headerPreview;
+    activeProjectName.textContent = displayProject
+      ? [displayProject.projectNumber, displayProject.name].filter(Boolean).join(' - ')
+      : (pendingProjectId ? 'Laster prosjekt...' : 'Ingen prosjekt valgt');
+  }
   customerNodes.forEach(el=>{
-    el.textContent = projectState.currentCustomer || '';
+    el.textContent = el.id === 'activeCustomerName'
+      ? (headerProject?.customer || headerPreview?.customer || '')
+      : (projectState.currentCustomer || '');
   });
+  const activeCustomerField = $('activeCustomerName')?.closest('.project-pill-field');
+  if (activeCustomerField) activeCustomerField.hidden = !$('activeCustomerName')?.textContent;
   contactNodes.forEach(el=>{
     el.textContent = projectState.currentContact || '';
   });
   metaWrappers.forEach(el=>{
     el.hidden = !hasData;
-  });
-  editButtons.forEach(btn=>{
-    btn.hidden = !hasData;
-    btn.disabled = !hasData;
   });
 }
 
@@ -5409,15 +5465,14 @@ function updateProjectSubmitState(){
   const submit = $('projectSubmit');
   if (!submit) return;
   const projectVal = (($('projectNameInput')?.value) || '').trim();
-  const customerVal = (($('customerNameInput')?.value) || '').trim();
-  const contactVal = (($('contactPersonInput')?.value) || '').trim();
-  submit.disabled = !(projectVal && customerVal && contactVal);
+  submit.disabled = !projectVal;
 }
 
 function openProjectModal(options = {}){
   projectModalState.mode = options.mode || 'create';
   projectModalState.projectId = options.projectId || null;
   projectModalState.saveLineAfterCreate = Boolean(options.saveLineAfterCreate);
+  projectModalState.calculateAndSaveAfterCreate = Boolean(options.calculateAndSaveAfterCreate);
   projectModalState.copySourceProjectId = options.copySourceProjectId || null;
   projectModalState.sourceEmail = options.sourceEmail || null;
   const form = $('projectForm');
@@ -5435,6 +5490,12 @@ function openProjectModal(options = {}){
     : (projectModalState.mode === 'copy' ? 'Kopier prosjekt' : 'Nytt prosjekt');
   form.hidden = false;
   openFormModal('projectForm', titleText);
+  const submit = $('projectSubmit');
+  if (submit) submit.textContent = projectModalState.mode === 'edit'
+    ? 'Lagre'
+    : (projectModalState.mode === 'copy'
+      ? 'Kopier prosjekt'
+      : (projectModalState.calculateAndSaveAfterCreate ? 'Opprett prosjekt og beregn' : 'Opprett prosjekt'));
   refreshProjectCustomerDataForSuggestions();
   if (projectInput){
     projectInput.disabled = projectModalState.mode === 'copy';
@@ -5489,7 +5550,6 @@ function closeProjectModal(){
   closeFormModal('projectForm');
   const errorEl = $('projectError');
   if (errorEl) errorEl.textContent = '';
-  hideSuggestions($('projectSuggestions'));
   hideSuggestions($('customerSuggestions'));
   hideSuggestions($('contactSuggestions'));
   const projectInput = $('projectNameInput');
@@ -5497,6 +5557,7 @@ function closeProjectModal(){
   projectModalState.mode = 'create';
   projectModalState.projectId = null;
   projectModalState.saveLineAfterCreate = false;
+  projectModalState.calculateAndSaveAfterCreate = false;
   projectModalState.pendingDetails = null;
   projectModalState.copySourceProjectId = null;
   projectModalState.sourceEmail = null;
@@ -6000,10 +6061,12 @@ function openProjectStatusModal(projectId){
     nameEl.textContent = title;
   }
   const currentStatus = getProjectStatusConfig(project).id;
+  const canFinish = currentStatus === 'finished' || hasCompletedInvoiceTask(project);
   modal.querySelectorAll('[data-project-status-option]').forEach(btn=>{
     const active = btn.getAttribute('data-project-status-option') === currentStatus;
     btn.classList.toggle('is-active', active);
     btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+    if (btn.getAttribute('data-project-status-option') === 'finished') btn.disabled = !canFinish;
   });
   modal.style.display = 'flex';
 }
@@ -6022,6 +6085,7 @@ function setProjectStatus(projectId, status){
   if (!project) return;
   const nextStatus = normalizeProjectStatus(status);
   const currentStatus = normalizeProjectStatus(project.projectStatus);
+  if (nextStatus === 'finished' && currentStatus !== 'finished' && !hasCompletedInvoiceTask(project)) return;
   const changedAt = new Date().toISOString();
   project.projectStatus = nextStatus;
   project.projectStatusChangedAt = changedAt;
@@ -6046,6 +6110,11 @@ function setProjectStatus(projectId, status){
   }
   closeProjectStatusModal();
   renderProjectDashboard();
+}
+
+function hasCompletedInvoiceTask(project){
+  const invoiceTasks = getProjectFlowMilestones(project.id).filter(task=>task.phaseId === 'finished');
+  return invoiceTasks.length > 0 && invoiceTasks.every(task=>task.completed);
 }
 
 function submitProjectMarginModal(){
@@ -6765,31 +6834,27 @@ function getMissingOfferDetails(project){
     .map(([label])=>label);
 }
 
-function closeOfferDetailsWarning(shouldGenerate){
+function closeOfferDetailsWarning(){
   const modal = $('offerDetailsWarningModal');
   if (modal) modal.style.display = 'none';
-  const resolver = offerDetailsWarningState.resolver;
-  offerDetailsWarningState.resolver = null;
-  if (resolver) resolver(Boolean(shouldGenerate));
+  offerDetailsWarningState.projectId = null;
 }
 
-function confirmGenerateOfferWithMissingDetails(missingFields){
-  return new Promise(resolve=>{
-    const modal = $('offerDetailsWarningModal');
-    const list = $('offerDetailsMissingList');
-    if (!modal || !list){
-      resolve(window.confirm(`Prosjektet mangler: ${missingFields.join(', ')}.\nKontakt administrator for å legge til detaljer.\n\nGenerere likevel?`));
-      return;
-    }
-    list.innerHTML = '';
-    missingFields.forEach(field=>{
-      const li = document.createElement('li');
-      li.textContent = field;
-      list.appendChild(li);
-    });
-    offerDetailsWarningState.resolver = resolve;
-    modal.style.display = 'flex';
+function showOfferDetailsWarning(projectId, missingFields){
+  const modal = $('offerDetailsWarningModal');
+  const list = $('offerDetailsMissingList');
+  if (!modal || !list){
+    window.alert(`Prosjektet mangler: ${missingFields.join(', ')}.`);
+    return;
+  }
+  list.replaceChildren();
+  missingFields.forEach(field=>{
+    const li = document.createElement('li');
+    li.textContent = field;
+    list.appendChild(li);
   });
+  offerDetailsWarningState.projectId = projectId;
+  modal.style.display = 'flex';
 }
 
 async function requestGenerateProjectOffer(projectId, triggerBtn){
@@ -6801,8 +6866,8 @@ async function requestGenerateProjectOffer(projectId, triggerBtn){
   }
   const missingDetails = getMissingOfferDetails(project);
   if (missingDetails.length){
-    const shouldContinue = await confirmGenerateOfferWithMissingDetails(missingDetails);
-    if (!shouldContinue) return;
+    showOfferDetailsWarning(project.id, missingDetails);
+    return;
   }
 
   const buttonEl = triggerBtn && triggerBtn.tagName === 'BUTTON' ? triggerBtn : null;
@@ -11585,7 +11650,10 @@ function applyCalculatorQueryContext(){
   const newLine = params.get('newLine') === '1';
   if (!projectId) return;
   const project = getProjectById(projectId);
-  if (!project) return;
+  if (!project){
+    clearActiveProject();
+    return;
+  }
 
   setActiveProject(project);
   projectState.expandedProjectId = project.id;
@@ -11601,7 +11669,8 @@ function applyCalculatorQueryContext(){
 
   if (typeof history !== 'undefined' && history.replaceState){
     const cleanUrl = new URL(window.location.href);
-    cleanUrl.search = '';
+    cleanUrl.searchParams.delete('line');
+    cleanUrl.searchParams.delete('newLine');
     history.replaceState({}, '', cleanUrl.toString());
   }
 }
@@ -12072,7 +12141,7 @@ function showCalculatorView(){
   updateProjectMetaDisplay();
 }
 
-function saveCurrentLineToProject(){
+function saveCurrentLineToProject(options = {}){
   if (!hasActiveProject()){
     const statusEl = $('status');
     if (statusEl) statusEl.textContent = 'Opprett nytt prosjekt for \u00E5 lagre linjen.';
@@ -12132,7 +12201,12 @@ function saveCurrentLineToProject(){
   }
   const statusEl = $('status');
   if (statusEl) statusEl.textContent = message;
-  showProjectOverview(project.id);
+  if (options.stayInCalculator){
+    const saveBtn = $('saveLineBtn');
+    if (saveBtn) saveBtn.disabled = true;
+  } else {
+    showProjectOverview(project.id);
+  }
 }
 
 function resetCalculatorForm(options = {}){
@@ -12247,30 +12321,16 @@ function submitProjectModal(){
   const projectName = projectInput ? projectInput.value.trim() : '';
   const customerName = customerInput ? customerInput.value.trim() : '';
   const contactPerson = contactInput ? contactInput.value.trim() : '';
-  if (!projectName || !customerName || !contactPerson){
-    if (errorEl) errorEl.textContent = 'Fyll ut alle feltene.';
+  if (!projectName){
+    if (errorEl) errorEl.textContent = 'Fyll ut prosjektnavn.';
     updateProjectSubmitState();
     return;
   }
   const wasEditMode = projectModalState.mode === 'edit';
   const wasCopyMode = projectModalState.mode === 'copy';
   const shouldSaveLineAfterCreate = !wasEditMode && !wasCopyMode && projectModalState.saveLineAfterCreate;
+  const shouldCalculateAndSaveAfterCreate = !wasEditMode && !wasCopyMode && projectModalState.calculateAndSaveAfterCreate;
   const knownDetails = getKnownProjectDetails(customerName, contactPerson);
-  if (!wasEditMode && (!knownDetails.customerAddress || !knownDetails.contactPhone)){
-    projectModalState.pendingDetails = {
-      projectName,
-      customerName,
-      contactPerson,
-      customerAddress: knownDetails.customerAddress || '',
-      customerPostalPlace: knownDetails.customerPostalPlace || '',
-      contactPhone: knownDetails.contactPhone || '',
-      shouldSaveLineAfterCreate,
-      copySourceProjectId: wasCopyMode ? projectModalState.copySourceProjectId : null,
-      sourceEmail: projectModalState.sourceEmail
-    };
-    openProjectDetailsModal(projectModalState.pendingDetails);
-    return;
-  }
   if (wasEditMode && projectModalState.projectId){
     persistProjectInfo(projectName, customerName, contactPerson, {
       projectId: projectModalState.projectId,
@@ -12292,6 +12352,11 @@ function submitProjectModal(){
     });
   }
   closeProjectModal();
+  if (shouldCalculateAndSaveAfterCreate){
+    saveFirstCalculationAfterProjectCreate = true;
+    $('calcBtn')?.click();
+    return;
+  }
   if (shouldSaveLineAfterCreate){
     saveCurrentLineToProject();
     return;
@@ -12318,7 +12383,9 @@ function openProjectDetailsModal(details){
   if (phoneEl) phoneEl.value = details.contactPhone || '';
   if (errorEl) errorEl.textContent = '';
   modal.style.display = 'flex';
-  if (addressEl && !addressEl.value) addressEl.focus();
+  if (customerEl && !customerEl.value) customerEl.focus();
+  else if (contactEl && !contactEl.value) contactEl.focus();
+  else if (addressEl && !addressEl.value) addressEl.focus();
   else if (postalPlaceEl && !postalPlaceEl.value) postalPlaceEl.focus();
   else if (phoneEl) phoneEl.focus();
 }
@@ -12335,29 +12402,26 @@ function closeProjectDetailsModal(options = {}){
 
 function submitProjectDetailsModal(){
   const pending = projectModalState.pendingDetails;
-  if (!pending) return;
+  if (!pending?.projectId) return;
+  const customer = ($('projectDetailsCustomer')?.value || '').trim();
+  const contact = ($('projectDetailsContact')?.value || '').trim();
   const address = ($('projectDetailsAddress')?.value || '').trim();
   const postalPlace = ($('projectDetailsPostalPlace')?.value || '').trim();
   const phone = ($('projectDetailsPhone')?.value || '').trim();
   const errorEl = $('projectDetailsError');
-  if (!address || !postalPlace || !phone){
-    if (errorEl) errorEl.textContent = 'Fyll ut adresse, postnummer/sted og telefon.';
+  if (!customer || !contact || !address || !postalPlace || !phone){
+    if (errorEl) errorEl.textContent = 'Fyll ut kunde, kontaktperson, adresse, postnummer/sted og telefon.';
     return;
   }
-  persistProjectInfo(pending.projectName, pending.customerName, pending.contactPerson, {
-    copySourceProjectId: pending.copySourceProjectId || null,
+  persistProjectInfo(pending.projectName, customer, contact, {
+    projectId: pending.projectId,
     customerAddress: address,
     customerPostalPlace: postalPlace,
-    contactPhone: phone,
-    sourceEmail: pending.sourceEmail || null
+    contactPhone: phone
   });
   closeProjectDetailsModal();
   closeProjectModal();
-  if (pending.shouldSaveLineAfterCreate){
-    saveCurrentLineToProject();
-    return;
-  }
-  showProjectOverview(projectState.currentProjectId);
+  void requestGenerateProjectOffer(pending.projectId);
 }
 
 function cancelProjectModal(){
@@ -12380,7 +12444,7 @@ const projectDetailsSubmit = $('projectDetailsSubmit');
 if (projectDetailsSubmit){
   projectDetailsSubmit.addEventListener('click', submitProjectDetailsModal);
 }
-['projectDetailsAddress','projectDetailsPostalPlace','projectDetailsPhone'].forEach(id=>{
+['projectDetailsCustomer','projectDetailsContact','projectDetailsAddress','projectDetailsPostalPlace','projectDetailsPhone'].forEach(id=>{
   const input = $(id);
   if (!input) return;
   input.addEventListener('keydown', evt=>{
@@ -12403,17 +12467,31 @@ if (projectDetailsModal){
 }
 const offerDetailsCancel = $('offerDetailsCancel');
 if (offerDetailsCancel){
-  offerDetailsCancel.addEventListener('click', ()=>closeOfferDetailsWarning(false));
+  offerDetailsCancel.addEventListener('click', closeOfferDetailsWarning);
 }
 const offerDetailsContinue = $('offerDetailsContinue');
 if (offerDetailsContinue){
-  offerDetailsContinue.addEventListener('click', ()=>closeOfferDetailsWarning(true));
+  offerDetailsContinue.addEventListener('click', ()=>{
+    const project = getProjectById(offerDetailsWarningState.projectId);
+    closeOfferDetailsWarning();
+    if (!project) return;
+    projectModalState.pendingDetails = {
+      projectId: project.id,
+      projectName: project.name,
+      customerName: project.customer,
+      contactPerson: project.contactPerson,
+      customerAddress: project.customerAddress,
+      customerPostalPlace: project.customerPostalPlace,
+      contactPhone: project.contactPhone
+    };
+    openProjectDetailsModal(projectModalState.pendingDetails);
+  });
 }
 const offerDetailsWarningModal = $('offerDetailsWarningModal');
 if (offerDetailsWarningModal){
   offerDetailsWarningModal.addEventListener('click', evt=>{
     if (evt.target === offerDetailsWarningModal){
-      closeOfferDetailsWarning(false);
+      closeOfferDetailsWarning();
     }
   });
 }
@@ -13655,20 +13733,25 @@ function bindSuggestionBehaviour(inputId, listId, source){
   });
 }
 
-bindSuggestionBehaviour('projectNameInput', 'projectSuggestions', projectState.projectHistory);
+const projectNameInput = $('projectNameInput');
+if (projectNameInput){
+  projectNameInput.addEventListener('input', ()=>{
+    updateProjectSubmitState();
+    const errorEl = $('projectError');
+    if (errorEl) errorEl.textContent = '';
+  });
+  projectNameInput.addEventListener('keydown', evt=>{
+    if (evt.key !== 'Enter') return;
+    evt.preventDefault();
+    const submitBtn = $('projectSubmit');
+    if (submitBtn && !submitBtn.disabled) submitProjectModal();
+  });
+}
 bindSuggestionBehaviour('customerNameInput', 'customerSuggestions', getCustomerSuggestionValues);
 bindSuggestionBehaviour('contactPersonInput', 'contactSuggestions', ()=>{
   const customerName = ($('customerNameInput')?.value || '').trim();
   return getContactSuggestionValues(customerName);
 });
-
-const editProjectBtn = $('editProjectBtn');
-if (editProjectBtn){
-  editProjectBtn.addEventListener('click', ()=>{
-    if (!projectState.currentProjectId) return;
-    openProjectModal({ mode: 'edit', projectId: projectState.currentProjectId });
-  });
-}
 
 document.addEventListener('keydown', evt=>{
   if (evt.key === 'Escape'){
@@ -13716,7 +13799,7 @@ document.addEventListener('keydown', evt=>{
     }
     const offerDetailsWarningModalEl = $('offerDetailsWarningModal');
     if (offerDetailsWarningModalEl && offerDetailsWarningModalEl.style.display === 'flex'){
-      closeOfferDetailsWarning(false);
+      closeOfferDetailsWarning();
       return;
     }
     const projectStatusModalEl = $('projectStatusModal');
@@ -13746,7 +13829,6 @@ document.addEventListener('keydown', evt=>{
   }
 });
 
-loadAuthFromSession();
 updateProjectMetaDisplay();
 updateAuthUI();
 
@@ -15309,10 +15391,10 @@ function updateSpecialElementConfigVisibility(){
 }
 
 window.addEventListener('DOMContentLoaded', async ()=>{
-  initDashboardShell();
-  await initProjectDashboard();
+  const projectDashboardReady = initProjectDashboard();
   initMarketDataTicker();
   if (!hasCalculatorUI()){
+    await projectDashboardReady;
     return;
   }
   try{
@@ -15324,16 +15406,20 @@ window.addEventListener('DOMContentLoaded', async ()=>{
     renderPendingBoxItems();
     pendingSpecialElementItems = [];
     renderPendingSpecialElementItems();
+    enhanceNumberSteppers();
+    refreshUIBySeries();
 
-    const all = [];
-    for (const p of RAW_CSV_PATHS){
+    const importedRows = await Promise.all(RAW_CSV_PATHS.map(async p=>{
       try{
-        const res = await fetch(p,{cache:'no-store'}); if (!res.ok) continue;
+        const res = await fetch(p,{cache:'no-cache'});
+        if (!res.ok) return [];
         const txt = await res.text();
-        all.push(...parseCSVAuto(txt));
-      }catch{}
-    }
-    catalog = adaptRawToCatalog(all);
+        return parseCSVAuto(txt);
+      }catch{
+        return [];
+      }
+    }));
+    catalog = adaptRawToCatalog(importedRows.flat());
     applyUsdRateToCatalog();
     rebuildAmpLookup();
 
@@ -15598,6 +15684,7 @@ window.addEventListener('DOMContentLoaded', async ()=>{
     setCurrentEngineeringMarginRate(DEFAULT_MARGIN_RATE);
     setCurrentOpphengMarginRate(DEFAULT_MARGIN_RATE);
     setCurrentTapOffMarginRate(DEFAULT_MARGIN_RATE);
+    await projectDashboardReady;
     applyCalculatorQueryContext();
 
     const marginConfigBtn = $('marginConfigBtn');
@@ -15650,25 +15737,24 @@ window.addEventListener('DOMContentLoaded', async ()=>{
       input.setAttribute('step','1');
       input.placeholder = input.placeholder || '0';
 
-      const wrap = document.createElement('div');
-      wrap.className = 'stepper';
-
-      const plus = document.createElement('button');
-      plus.type = 'button';
-      plus.className = 'btn-step';
-      plus.textContent = '+';
-
-      const minus = document.createElement('button');
-      minus.type = 'button';
-      minus.className = 'btn-step';
-      minus.textContent = '-';
-
-      const parent = input.parentNode;
-      if (!parent) return;
-      parent.insertBefore(wrap, input);
-      wrap.appendChild(input);
-      wrap.appendChild(plus);
-      wrap.appendChild(minus);
+      const existingWrap = input.parentElement?.classList.contains('stepper') ? input.parentElement : null;
+      const wrap = existingWrap || document.createElement('div');
+      const plus = existingWrap?.querySelector('[data-step="plus"]') || document.createElement('button');
+      const minus = existingWrap?.querySelector('[data-step="minus"]') || document.createElement('button');
+      if (!existingWrap){
+        const parent = input.parentNode;
+        if (!parent) return;
+        wrap.className = 'stepper';
+        parent.insertBefore(wrap, input);
+        wrap.appendChild(input);
+        [plus, minus].forEach((button, index)=>{
+          button.type = 'button';
+          button.className = 'btn-step';
+          button.dataset.step = index === 0 ? 'plus' : 'minus';
+          button.textContent = index === 0 ? '+' : '-';
+          wrap.appendChild(button);
+        });
+      }
 
       const clampInt = ()=>{
         const v = Math.max(0, Math.round(Number(input.value||0)));
@@ -15699,9 +15785,6 @@ window.addEventListener('DOMContentLoaded', async ()=>{
       input.dataset.enhanced = '1';
     });
   }
-
-// Kall denne etter UI er bygd første gang
-enhanceNumberSteppers();
 
     const statusEl = $('status');
     if (statusEl){
@@ -15882,6 +15965,12 @@ if (calcBtn){
     if (statusEl) statusEl.textContent = 'Logg inn for \u00E5 beregne.';
     return;
   }
+  if (!hasActiveProject()){
+    openProjectModal({ mode: 'create', calculateAndSaveAfterCreate: true });
+    return;
+  }
+  const shouldAutoSaveLine = saveFirstCalculationAfterProjectCreate;
+  saveFirstCalculationAfterProjectCreate = false;
   try{
     if (!catalog.length) throw new Error('Ingen varer i katalog.');
 
@@ -16121,6 +16210,7 @@ if (calcBtn){
         }, 2000);
       };
     }
+    if (shouldAutoSaveLine) saveCurrentLineToProject({ stayInCalculator: true });
   }catch(err){
     if ($('series')?.value === XAP_SERIES){
       lastCalc = null;
